@@ -72,7 +72,7 @@ def fallback_queries(form: dict, meta: dict, n: int) -> list[str]:
 
 
 async def generate_queries(client: LLMClient, form: dict, meta: dict, cfg: ResearchConfig) -> list[str]:
-    system = assemble.read_prompt("research/queries.md").replace("{n}", str(cfg.max_queries))
+    system = assemble.render("research/queries.md", n=cfg.max_queries)
     user = "\n\n".join([
         assemble.build_context(form),
         f"[문항] {meta.get('label', '')}. {meta.get('title', '')}",
@@ -176,7 +176,7 @@ def _verify_quotes(facts: list[dict], pages: list[dict]) -> list[dict]:
 async def extract_facts(client: LLMClient, form: dict, meta: dict, pages: list[dict], cfg: ResearchConfig) -> list[dict]:
     if not pages:
         return []
-    system = assemble.read_prompt("research/extract_facts.md").replace("{max_facts}", str(MAX_FACTS))
+    system = assemble.render("research/extract_facts.md", max_facts=MAX_FACTS)
     docs = []
     for i, p in enumerate(pages, 1):
         docs.append(f"<문서 {i}>\n제목: {p.get('title', '')}\nURL: {p['url']}\n날짜: {p.get('date') or '미상'}\n"
@@ -213,7 +213,7 @@ def format_references(facts: list[dict]) -> str:
     """문항 생성 프롬프트에 넣는 [웹 참고자료] 섹션. 비어 있으면 빈 문자열."""
     if not facts:
         return ""
-    lines = ["[웹 참고자료 — 아래 사실만 인용 가능. 인용할 때 '출처: 매체/기관, 연도' 를 문장에 붙일 것. 목록 밖의 수치·통계는 쓰지 않는다]"]
+    lines = [assemble.section_headers().get("references", "[웹 참고자료]")]
     for i, f in enumerate(facts, 1):
         year = (f.get("date") or "")[:4] or "연도 미상"
         pub = f.get("publisher") or f.get("source_title") or "출처 미상"

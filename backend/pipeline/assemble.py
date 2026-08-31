@@ -29,6 +29,20 @@ def _read(relpath: str) -> str:
 read_prompt = _read  # 다른 모듈(intake 등)에서 쓰는 공개 이름
 
 
+def section_headers() -> dict:
+    """prompts/sections.md frontmatter — user 프롬프트 섹션 머리말 문구. 코드에 한국어 문구를 박지 않기 위함."""
+    m = _FRONTMATTER.match(_read("sections.md"))
+    return yaml.safe_load(m.group(1)) if m else {}
+
+
+def render(relpath: str, **vars) -> str:
+    """md 를 읽고 {name} 자리표시자를 채운다. 값에 있는 중괄호는 건드리지 않는다."""
+    text = _read(relpath)
+    for k, v in vars.items():
+        text = text.replace("{" + k + "}", str(v))
+    return text
+
+
 def load_question(question_id: str) -> tuple[dict, str]:
     """questions/<id>.md 를 (frontmatter 메타, 본문)으로 파싱.
 
@@ -89,10 +103,11 @@ def _answer_sections(answers: list[dict]) -> list[str]:
         else:
             facts.append(f"- {label}: {ans}")
     out = []
+    h = section_headers()
     if facts:
-        out.append("[지원자가 확인한 사실 — 그대로 사실로 써도 됨]\n" + "\n".join(facts))
+        out.append(h.get("facts", "[지원자가 확인한 사실]") + "\n" + "\n".join(facts))
     if unknowns:
-        out.append("[지원자가 아직 모른다고 한 것 — 확정된 것처럼 쓰지 말고 '가정'·'계획'으로 표현. 멘토 도움(Q4-2)에서 다룰 것]\n" + "\n".join(unknowns))
+        out.append(h.get("unknowns", "[지원자가 아직 모른다고 한 것]") + "\n" + "\n".join(unknowns))
     return out
 
 
@@ -113,15 +128,9 @@ def build_prompts(form: dict) -> tuple[str, str, dict]:
 
     if int(meta.get("limit", 2000)) <= 100:
         # Q1·Q10 같은 100자 문항: 스타일(장면 묘사·1인칭 서술)을 적용하면 문장 중간에서 잘린다.
-        # 스타일 섹션을 빼고 '한 문장' 규칙을 최우선으로 둔다.
-        style_section = "\n".join([
-            "[짧은 문항 규칙 — 다른 어떤 지시보다 우선]",
-            f"- 한 문장(길어도 두 문장), 줄바꿈 없이 {int(meta['limit'] * 0.6)}~{int(meta['limit'] * 0.9)}자. {meta['limit']}자를 넘기면 안 되므로 여유를 둔다.",
-            "- 서두나 배경 문장을 따로 두지 않는다. 첫 문장이 곧 본문이다.",
-            "- 장면 묘사, 배경 설명, '저는 ~입니다' 같은 자기소개로 시작하지 않는다. 바로 '누구에게 무엇을 어떻게 해주는 무엇'을 말한다.",
-            "- 문장 끝은 '~하는 앱입니다', '~해 주는 서비스입니다'처럼 명사로 맺는다.",
-            f"- 글 스타일({form['style']})은 어휘 톤에만 살짝 반영하고 구조는 바꾸지 않는다.",
-        ])
+        # 스타일 섹션 대신 prompts/short_question.md 의 '한 문장' 규칙을 최우선으로 둔다.
+        limit = int(meta["limit"])
+        style_section = render("short_question.md", min=int(limit * 0.6), max=int(limit * 0.9), limit=limit, style=form["style"])
     else:
         style_section = f"[글 스타일]\n{style_md}"
 
@@ -141,6 +150,6 @@ def build_extend_prompts(form: dict, current: str) -> tuple[str, str, dict]:
     room = min(room - 30, 700) if room > 30 else room
     extend_md = _read("extend.md").replace("{room}", str(room))
     system = "\n\n".join([system, extend_md])
-    user = "\n\n".join([user, f"이미 작성된 글:\n{current}"])
+    user = "\n\n".join([user, f"{section_headers().get('extend_current', '이미 작성된 글:')}\n{current}"])
     meta = {**meta, "room": room}
     return system, user, meta
