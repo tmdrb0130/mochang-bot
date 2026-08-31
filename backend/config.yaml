@@ -20,9 +20,33 @@ llm:
   model: "minimax/minimax-m3:free"
   max_tokens: 4096      # 한국어 1900자 ≈ 3000토큰 내외, 여유 포함
   temperature: 0.7
-  # extra: 요청 본문에 그대로 추가 (서버별 옵션). OpenRouter 추론 모델(nemotron 등)은 thinking 이 max_tokens 를
-  # 다 먹어 본문이 비므로 아래처럼 끄고 쓴다.  Ollama/vLLM 에서는 비워둘 것.
-  # extra:
-  #   reasoning: { enabled: false }
+  # extra: 요청 본문에 그대로 추가되는 서버별 옵션. OpenRouter 에서는 추론(thinking)을 꺼서
+  # nemotron 같은 추론 모델이 thinking 으로 max_tokens 를 다 먹고 본문을 못 내는 문제를 막는다.
+  # (추론 없는 모델은 이 옵션을 무시함.)  Ollama/vLLM 으로 바꾸면 extra 는 비워둘 것.
+  extra:
+    reasoning: { enabled: false }
+
+# UI에서 고를 수 있는 모델 목록. llm.model 이 기본값. 각 항목에 extra 를 두면 그 모델에만 추가 적용.
+models:
+  - id: minimax/minimax-m3:free
+    name: MiniMax M3
+    note: 테스트 통과 — 한국어 자연스럽고 규칙 준수 양호. 문항당 25~40초. 기본값
+  - id: google/gemma-4-31b-it:free
+    name: Gemma 4 31B
+    note: 한국어 강함. 무료 풀 혼잡 시 429 잦음 (폴백으로 넘어감)
+  - id: z-ai/glm-5.2:free
+    name: GLM 5.2
+    note: 무료 풀 혼잡 시 429 잦음
+  - id: nvidia/nemotron-3-super-120b-a12b:free
+    name: Nemotron 3 Super
+    note: 추론 모델(reasoning 꺼서 사용). 반말·제목 출력 등 규칙 준수가 약함
+
+# 선택 모델이 429/다운이면 목록의 다른 모델로 OpenRouter 가 자동 전환 (`models` 파라미터, 최대 3개 → 선택 모델 + 목록 위쪽 2개).
+# 응답의 model 로 실제 모델 확인.
+fallback: true
+
+# 무료 티어 하루 요청 한도 (OpenRouter 문서: 누적 결제 $10 미만 50회/일, 이상 1000회/일, 공통 20회/분. UTC 00:00 리셋)
+# 백엔드가 요청 수를 backend/.usage.json 에 세어 /health 로 알려준다. $10 충전했으면 1000 으로 바꿀 것.
+daily_request_limit: 50
 
 concurrency: 2          # LLM 동시 요청 수 (OpenRouter 무료 티어는 2 권장, 로컬 vLLM 이면 4~8)

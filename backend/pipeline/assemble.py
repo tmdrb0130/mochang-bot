@@ -26,6 +26,9 @@ def _read(relpath: str) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+read_prompt = _read  # 다른 모듈(intake 등)에서 쓰는 공개 이름
+
+
 def load_question(question_id: str) -> tuple[dict, str]:
     """questions/<id>.md 를 (frontmatter 메타, 본문)으로 파싱.
 
@@ -51,7 +54,36 @@ def build_context(form: dict) -> str:
     parts.append(f"팀원 수(본인 제외): {form.get('team', '팀원 없음')}")
     capability = form.get("capability") or "(입력 없음 — 아이디어 설명에서 유추 가능한 범위만 언급하고 지어내지 말 것)"
     parts.append(f"지원자 역량·경력: {capability}")
+    parts.extend(_answer_sections(form.get("answers") or []))
     return "\n\n".join(parts)
+
+
+def _answer_sections(answers: list[dict]) -> list[str]:
+    """인테이크 카드 답변 → 프롬프트 섹션.
+
+    answers 항목: {"slot", "label", "answer": str|list|None, "unknown": bool}
+    - answer 있음  → [지원자가 확인한 사실]  그대로 사실로 써도 됨
+    - unknown=True → [지원자가 모른다고 한 것] 가정임이 드러나게 쓰고, Q4-2(멘토 도움)의 재료로 삼을 것
+    """
+    facts, unknowns = [], []
+    for a in answers:
+        if not isinstance(a, dict):
+            continue
+        label = a.get("label") or a.get("slot") or ""
+        ans = a.get("answer")
+        if isinstance(ans, list):
+            ans = ", ".join(str(x) for x in ans if str(x).strip())
+        ans = (str(ans).strip() if ans is not None else "")
+        if a.get("unknown") or not ans:
+            unknowns.append(f"- {label}")
+        else:
+            facts.append(f"- {label}: {ans}")
+    out = []
+    if facts:
+        out.append("[지원자가 확인한 사실 — 그대로 사실로 써도 됨]\n" + "\n".join(facts))
+    if unknowns:
+        out.append("[지원자가 아직 모른다고 한 것 — 확정된 것처럼 쓰지 말고 '가정'·'계획'으로 표현. 멘토 도움(Q4-2)에서 다룰 것]\n" + "\n".join(unknowns))
+    return out
 
 
 def build_prompts(form: dict) -> tuple[str, str, dict]:
@@ -69,21 +101,27 @@ def build_prompts(form: dict) -> tuple[str, str, dict]:
         question_body,
     ])
 
+    if int(meta.get("limit", 2000)) <= 100:
+        # Q1·Q10 같은 100자 문항: 스타일(장면 묘사·1인칭 서술)을 적용하면 문장 중간에서 잘린다.
+        # 스타일 섹션을 빼고 '한 문장' 규칙을 최우선으로 둔다.
+        style_section = "\n".join([
+            "[짧은 문항 규칙 — 다른 어떤 지시보다 우선]",
+            f"- 한 문장(길어도 두 문장), 줄바꿈 없이 {int(meta['limit'] * 0.6)}~{int(meta['limit'] * 0.9)}자. {meta['limit']}자를 넘기면 안 되므로 여유를 둔다.",
+            "- 서두나 배경 문장을 따로 두지 않는다. 첫 문장이 곧 본문이다.",
+            "- 장면 묘사, 배경 설명, '저는 ~입니다' 같은 자기소개로 시작하지 않는다. 바로 '누구에게 무엇을 어떻게 해주는 무엇'을 말한다.",
+            "- 문장 끝은 '~하는 앱입니다', '~해 주는 서비스입니다'처럼 명사로 맺는다.",
+            f"- 글 스타일({form['style']})은 어휘 톤에만 살짝 반영하고 구조는 바꾸지 않는다.",
+        ])
+    else:
+        style_section = f"[글 스타일]\n{style_md}"
+
     system = "\n\n".join([
         system_md,
         f"[지원 트랙 지침]\n{track_md}",
         question_section,
-        f"[글 스타일]\n{style_md}",
+        style_section,
     ])
     return system, build_context(form), meta
-
-
-# ── Q6 사업 분야 선택지 (modoo.or.kr 도전하기 화면 기준) ──
-TRACK_FIELDS = {
-    "tech": ["IT", "교육", "금융", "운영관리", "네트워킹", "농축/수산업", "라이프스타일", "마케팅/PR", "모빌리티",
-             "미디어/엔터테인먼트", "바이오/의료", "에너지/자원", "유통/물류", "임팩트", "재무", "프롭테크", "하드웨어", "기타"],
-    "local": ["패션", "F&B", "뷰티", "생활"],
-}
 
 
 def build_extend_prompts(form: dict, current: str) -> tuple[str, str, dict]:
@@ -96,10 +134,3 @@ def build_extend_prompts(form: dict, current: str) -> tuple[str, str, dict]:
     user = "\n\n".join([user, f"이미 작성된 글:\n{current}"])
     meta = {**meta, "room": room}
     return system, user, meta
-
-
-def build_recommend_prompts(form: dict) -> tuple[str, str, list[str]]:
-    """Q6 분야 추천: recommend_field.md + 선택지, user 는 지원자 입력."""
-    options = TRACK_FIELDS.get(form["track"], TRACK_FIELDS["tech"])
-    system = _read("recommend_field.md").replace("{options}", ", ".join(options))
-    return system, build_context(form), options

@@ -19,3 +19,6 @@ npm-debug.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# 백엔드 일일 요청 카운터 (로컬 상태)
+backend/.usage.json

@@ -7,12 +7,18 @@ const TRACKS = {
   tech: {
     name: "일반/기술 분야",
     desc: "창의적 아이디어·기술로 불편을 해소하고 새로운 가치를 만드는 아이템",
+    // Q6 사업 분야 선택지 (modoo.or.kr 도전하기 화면과 동일) — 사람이 직접 고른다
+    fields: ["IT", "교육", "금융", "운영관리", "네트워킹", "농축/수산업", "라이프스타일", "마케팅/PR", "모빌리티", "미디어/엔터테인먼트", "바이오/의료", "에너지/자원", "유통/물류", "임팩트", "재무", "프롭테크", "하드웨어", "기타"],
   },
   local: {
     name: "로컬 분야",
     desc: "지역 자원을 기반으로 창의성과 혁신을 결합하는 아이템 (패션·F&B·뷰티·생활)",
+    fields: ["패션", "F&B", "뷰티", "생활"],
   },
 };
+
+// Q10(대중 공개용 자랑)을 비공개로 선택하면 AI 호출 없이 이 문장을 넣는다. 사용자가 고칠 수 있음.
+const Q10_PRIVATE_TEXT = "아이디어 보호를 위해 심사 기간 동안은 공개하지 않겠습니다.";
 
 const STYLES = [
   { id: "story", name: "스토리텔링형", desc: "경험과 장면으로 시작해 공감을 끌어내는 글" },
@@ -48,34 +54,143 @@ async function runLimited(tasks, limit) {
   await Promise.all(workers);
 }
 
+// ───────────────────────── 카드 입력 (인테이크 / 정보 보태기 공용) ─────────────────────────
+// value: { answer: string | string[] | null, unknown: bool } | undefined
+// 모든 카드가 다중 선택. 답은 항상 배열. number 카드는 보기 + "몇 명" 숫자를 함께 받는다.
+function CardOptions({ card, value, onChange, compact = false }) {
+  const [other, setOther] = useState("");
+  const isNumber = card.type === "number";
+  const picked = value?.answer;
+  const pickedList = Array.isArray(picked) ? picked : picked ? [picked] : [];
+  const labels = card.options.map((o) => o.label);
+  // "보기 (12명)" 형태로 저장된 숫자를 다시 꺼낸다
+  const countOf = (list) => { const m = list.map((p) => p.match(/\((\d+)명\)$/)).find(Boolean); return m ? m[1] : ""; };
+  const count = countOf(pickedList);
+  const base = (p) => p.replace(/ \(\d+명\)$/, "");
+
+  const commit = (next) => onChange({ answer: next, unknown: false });
+  const withCount = (list, n) => list.map((p) => (labels.includes(base(p)) && n ? `${base(p)} (${n}명)` : base(p)));
+
+  const toggle = (label) => {
+    const on = pickedList.some((p) => base(p) === label);
+    const nextList = on ? pickedList.filter((p) => base(p) !== label) : [...pickedList, label];
+    commit(isNumber ? withCount(nextList, count) : nextList);
+  };
+
+  const setCount = (n) => commit(withCount(pickedList, n));
+
+  const submitOther = () => {
+    const t = other.trim();
+    if (!t) return;
+    commit([...pickedList, t]);
+    setOther("");
+  };
+
+  const isOn = (label) => pickedList.some((p) => base(p) === label);
+  const btn = compact ? "px-2.5 py-1 text-xs" : "px-3 py-2 text-sm";
+  const hints = card.options.filter((o) => isOn(o.label)).map((o) => o.hint).filter(Boolean);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-2">
+        {card.options.map((o) => (
+          <button key={o.label} onClick={() => toggle(o.label)} title={o.hint}
+            className={`${btn} rounded-lg border text-left ${isOn(o.label) ? "border-indigo-600 bg-indigo-50 text-indigo-900" : "border-slate-200 hover:border-slate-400"}`}>
+            {isOn(o.label) && <span className="mr-1">✓</span>}{o.label}
+          </button>
+        ))}
+        <button onClick={() => onChange({ answer: null, unknown: true })}
+          className={`${btn} rounded-lg border ${value?.unknown ? "border-amber-500 bg-amber-50 text-amber-900" : "border-dashed border-slate-300 text-slate-500 hover:border-slate-400"}`}>
+          모르겠어요
+        </button>
+      </div>
+      {!compact && <p className="text-xs text-slate-400">여러 개 골라도 됩니다.{hints.length > 0 && ` → ${hints.join(" / ")}`}</p>}
+      <div className="flex gap-2 flex-wrap">
+        {isNumber && (
+          <input type="number" min="0" value={count} onChange={(e) => setCount(e.target.value)} placeholder="몇 명?"
+            className={`${compact ? "text-xs py-1" : "text-sm py-2"} px-3 rounded-lg border border-slate-300 w-24`} />
+        )}
+        <input value={other} onChange={(e) => setOther(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitOther()}
+          placeholder="기타 — 직접 한 줄 입력 후 Enter"
+          className={`${compact ? "text-xs py-1" : "text-sm py-2"} px-3 rounded-lg border border-slate-300 flex-1 min-w-[200px]`} />
+      </div>
+      {pickedList.filter((p) => !labels.includes(base(p))).map((p) => (
+        <button key={p} onClick={() => commit(pickedList.filter((x) => x !== p))} title="클릭하면 제거"
+          className="inline-block mr-2 text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 hover:bg-red-50 hover:text-red-700">기타: {p} ×</button>
+      ))}
+    </div>
+  );
+}
+
 // ───────────────────────── 컴포넌트 ─────────────────────────
 export default function ModooWriter() {
   const [step, setStep] = useState(0); // 0 입력, 1 생성·선택, 2 제출용 정리
   const [form, setForm] = useState({
     track: "tech", idea: "", isBusiness: false, currentItem: "", team: "팀원 없음", capability: "",
+    field: "",          // Q6 사업 분야 — 사람이 직접 선택
+    q10Public: true,    // Q10 공개 여부 — 공개면 AI 생성, 비공개면 고정 문장
     styles: ["story"], // 테스트 중엔 기본 1개 (무료 티어 요청 수 절약). 사용자가 더 고를 수 있음.
   });
   const [texts, setTexts] = useState({});   // texts[qid][styleId] = string
   const [status, setStatus] = useState({}); // status[qid][styleId] = 'loading' | 'done' | 'error'
   const [errors, setErrors] = useState({}); // errors[qid][styleId] = message
   const [picked, setPicked] = useState({}); // picked[qid] = styleId
-  const [field, setField] = useState(null); // Q6 추천
   const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState("");
-  const [server, setServer] = useState(null); // { ok, model } | { ok:false, error }
+  // ── 인테이크(정보 보충) ──
+  const [intake, setIntake] = useState(null);      // /intake 결과 { summary, slots, cards, ready }
+  const [intakeBusy, setIntakeBusy] = useState(false);
+  const [answers, setAnswers] = useState({});      // answers[slot] = { answer: string|string[]|null, unknown: bool }
+  const [cardIdx, setCardIdx] = useState(0);
+  const [assistOpen, setAssistOpen] = useState({}); // assistOpen[qid] = bool (초안 화면의 "정보 보태기" 패널)
+  const [server, setServer] = useState(null); // { ok, model, usage } | { ok:false, error }
+  const [models, setModels] = useState([]);   // [{ id, name, note }] — 백엔드 config.yaml 의 목록
+  const [modelUsed, setModelUsed] = useState({}); // modelUsed[qid][styleId] = 실제 응답한 모델 id
 
-  useEffect(() => {
+  const refreshHealth = () =>
     api.health()
       .then((h) => setServer(h))
       .catch((e) => setServer({ ok: false, error: String(e.message || e) }));
+
+  useEffect(() => {
+    refreshHealth();
+    api.models()
+      .then((m) => {
+        setModels(m.models || []);
+        setForm((f) => (f.model ? f : { ...f, model: m.default }));
+      })
+      .catch(() => {});
   }, []);
+
+  const setUsed = (qid, sid, value) =>
+    setModelUsed((p) => ({ ...p, [qid]: { ...(p[qid] || {}), [sid]: value } }));
+
+  // 카드 답변 → 백엔드 형식 [{slot,label,answer,unknown}]. 카드가 있는 슬롯만.
+  const buildAnswers = () =>
+    (intake?.cards || [])
+      .filter((c) => answers[c.slot] && (answers[c.slot].unknown || answers[c.slot].answer))
+      .map((c) => ({ slot: c.slot, label: c.label, answer: answers[c.slot].answer, unknown: !!answers[c.slot].unknown }));
+  const formForApi = () => ({ ...form, answers: buildAnswers() });
+  const answeredCount = Object.values(answers).filter((a) => a && (a.unknown || a.answer)).length;
+  // 문항에 연결된 카드. 모델이 question_ids 를 비워 보냈으면 모든 문항에 보여준다.
+  const cardsForQuestion = (qid) => (intake?.cards || []).filter((c) => !c.question_ids?.length || c.question_ids.includes(qid));
+  const shortModel = (id) => (models.find((m) => m.id === id)?.name) || (id || "").split("/").pop();
 
   const activeQuestions = useMemo(
     () => QUESTIONS.filter((q) => !q.onlyBusiness || form.isBusiness),
     [form.isBusiness]
   );
   const selectedStyles = STYLES.filter((s) => form.styles.includes(s.id));
-  const canStart = form.idea.trim().length >= 30 && form.styles.length > 0 && server?.ok;
+  // 아이디어는 "자격증 공부 도와주는 AI 앱" 같은 짧은 한 줄도 허용. 부족한 정보는 이후 단계에서 AI가 채우거나 물어보는 구조로 간다.
+  const IDEA_MIN = 10;
+  const ideaLen = form.idea.trim().length;
+  const blockers = [
+    ideaLen < IDEA_MIN && `아이디어를 ${IDEA_MIN}자 이상 적어주세요 (지금 ${ideaLen}자)`,
+    form.styles.length === 0 && "글 스타일을 하나 이상 골라주세요",
+    server === null && "백엔드 연결 확인 중…",
+    server && !server.ok && "백엔드에 연결되지 않았어요 (상단 안내 참고)",
+  ].filter(Boolean);
+  const canStart = blockers.length === 0;
 
   const setText = (qid, sid, value) =>
     setTexts((p) => ({ ...p, [qid]: { ...(p[qid] || {}), [sid]: value } }));
@@ -85,35 +200,65 @@ export default function ModooWriter() {
     setErrors((p) => ({ ...p, [qid]: { ...(p[qid] || {}), [sid]: value } }));
 
   async function generateOne(q, style) {
+    if (q.id === "q10" && !form.q10Public) {
+      // 비공개 선택 → AI 호출 없이 고정 문장
+      setText(q.id, style.id, Q10_PRIVATE_TEXT);
+      setUsed(q.id, style.id, "");
+      setStat(q.id, style.id, "done");
+      setPicked((p) => (p[q.id] ? p : { ...p, [q.id]: style.id }));
+      return;
+    }
     setStat(q.id, style.id, "loading");
     try {
-      const res = await api.generate(form, q.id, style.id);
+      const res = await api.generate(formForApi(), q.id, style.id);
       setText(q.id, style.id, res.text.slice(0, q.limit));
+      setUsed(q.id, style.id, res.model);
       setStat(q.id, style.id, "done");
       setPicked((p) => (p[q.id] ? p : { ...p, [q.id]: style.id }));
     } catch (e) {
       setErr(q.id, style.id, String(e.message || e));
       setStat(q.id, style.id, "error");
+    } finally {
+      refreshHealth();
     }
   }
 
-  async function recommendField() {
+  // 1) 아이디어 읽기(인테이크) → 충분하면 바로 생성, 부족하면 카드 단계로
+  async function startIntake() {
+    setIntakeBusy(true);
     try {
-      const res = await api.recommendField(form);
-      setField(res.field ? res : { field: "", reason: res.reason || "자동 추천에 실패했어요. 직접 선택해 주세요." });
+      const r = await api.intake(form);
+      setIntake(r);
+      setAnswers({});
+      setCardIdx(0);
+      if (r.ready || !r.cards?.length) await generateAll();
+      else setStep(1);
     } catch {
-      setField({ field: "", reason: "자동 추천에 실패했어요. 직접 선택해 주세요." });
+      setIntake(null);
+      await generateAll();           // 인테이크가 실패해도 생성은 막지 않는다
+    } finally {
+      setIntakeBusy(false);
+      refreshHealth();
     }
+  }
+
+  const setAnswer = (slot, value) => setAnswers((p) => ({ ...p, [slot]: value }));
+
+  // 카드 한 장 넘기기 — 마지막이면 생성 시작
+  function nextCard() {
+    const total = intake?.cards?.length || 0;
+    if (cardIdx + 1 >= total) generateAll();
+    else setCardIdx(cardIdx + 1);
   }
 
   async function generateAll() {
     setRunning(true);
-    setStep(1);
+    setStep(2);
     const tasks = [];
     for (const q of activeQuestions) for (const s of selectedStyles) tasks.push(() => generateOne(q, s));
-    tasks.push(recommendField);
     await runLimited(tasks, PARALLEL);
     setRunning(false);
+    refreshHealth();
   }
 
   async function extend(q, style) {
@@ -121,12 +266,15 @@ export default function ModooWriter() {
     if (q.limit - current.length < 150) return;
     setStat(q.id, style.id, "loading");
     try {
-      const res = await api.extend(form, q.id, style.id, current);
+      const res = await api.extend(formForApi(), q.id, style.id, current);
       setText(q.id, style.id, res.text.slice(0, q.limit));
+      setUsed(q.id, style.id, res.model);
       setStat(q.id, style.id, "done");
     } catch (e) {
       setErr(q.id, style.id, String(e.message || e));
       setStat(q.id, style.id, "error");
+    } finally {
+      refreshHealth();
     }
   }
 
@@ -149,17 +297,53 @@ export default function ModooWriter() {
             <p className="text-sm text-slate-500 mt-1">아이디어 한 문단이면 됩니다. 문항별 초안을 여러 스타일로 받아서 고르고, 붙여넣기만 하세요.</p>
           </div>
           <nav className="flex gap-1 text-sm">
-            {["아이디어 입력", "초안 고르기", "제출용 정리"].map((n, i) => (
-              <button key={n} onClick={() => i < 2 || doneCount > 0 ? setStep(i) : null}
-                className={`px-3 py-1.5 rounded-full ${step === i ? "bg-indigo-600 text-white" : "text-slate-500 hover:bg-slate-100"}`}>
-                {i + 1}. {n}
-              </button>
-            ))}
+            {["아이디어 입력", "정보 보충", "초안 고르기", "제출용 정리"].map((n, i) => {
+              const started = Object.keys(status).length > 0;
+              const enabled = i === 0 || (i === 1 && intake?.cards?.length > 0) || (i === 2 && started) || (i === 3 && doneCount > 0);
+              return (
+                <button key={n} disabled={!enabled} onClick={() => enabled && setStep(i)}
+                  className={`px-3 py-1.5 rounded-full ${step === i ? "bg-indigo-600 text-white" : enabled ? "text-slate-500 hover:bg-slate-100" : "text-slate-300"}`}>
+                  {i + 1}. {n}
+                </button>
+              );
+            })}
           </nav>
         </div>
-        <div className="max-w-5xl mx-auto px-5 pb-3 text-xs">
+        <div className="max-w-5xl mx-auto px-5 pb-3 text-xs flex items-center gap-4 flex-wrap">
           {server === null && <span className="text-slate-400">백엔드 연결 확인 중…</span>}
-          {server?.ok && <span className="text-slate-400">모델: <span className="font-mono">{server.model}</span></span>}
+          {server?.ok && (
+            <>
+              <label className="flex items-center gap-2 text-slate-600">
+                <span>모델</span>
+                <select value={form.model || ""} onChange={(e) => setForm({ ...form, model: e.target.value })}
+                  className="px-2 py-1 rounded-md border border-slate-300 bg-white text-xs max-w-[220px]">
+                  {models.length === 0 && <option value="">{server.model}</option>}
+                  {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              </label>
+              {models.find((m) => m.id === form.model)?.note && (
+                <span className="text-slate-400 hidden md:inline">{models.find((m) => m.id === form.model).note}</span>
+              )}
+              {server.usage?.limit != null && (() => {
+                const { used, limit, remaining, by_model: byModel = {} } = server.usage;
+                const tone = remaining <= 0 ? "bg-red-50 text-red-700 border-red-200"
+                  : remaining <= 10 ? "bg-amber-50 text-amber-800 border-amber-200"
+                  : "bg-slate-50 text-slate-600 border-slate-200";
+                const breakdown = Object.entries(byModel).map(([id, n]) => `${shortModel(id)} ${n}회`).join(", ");
+                const tip = [
+                  "OpenRouter 무료 한도는 계정(API 키) 단위 — 어떤 무료 모델을 써도 같은 숫자가 줄어듭니다. 모델별 한도는 없습니다.",
+                  breakdown && `오늘 모델별 사용: ${breakdown}`,
+                  `분당 20회 별도. ${server.usage.reset}에 초기화`,
+                ].filter(Boolean).join("\n");
+                return (
+                  <span className={`ml-auto px-2 py-0.5 rounded-md border cursor-help ${tone}`} title={tip}>
+                    오늘 무료 요청 {used}/{limit}회{remaining <= 0 ? " · 한도 도달" : remaining <= 10 ? ` · ${remaining}회 남음` : ""}
+                  </span>
+                );
+              })()}
+              {server.fallback && <span className="text-slate-400" title="선택 모델이 429/다운이면 목록의 다른 모델로 자동 전환">자동 폴백 켜짐</span>}
+            </>
+          )}
           {server && !server.ok && (
             <span className="text-red-600">백엔드({api.API_BASE})에 연결할 수 없어요. 프로젝트 루트에서 <code className="font-mono bg-red-50 px-1">uvicorn backend.main:app --port 8000</code> 을 실행해 주세요.</span>
           )}
@@ -174,7 +358,7 @@ export default function ModooWriter() {
                 <h2 className="font-semibold mb-2">어느 분야로 지원하나요?</h2>
                 <div className="grid grid-cols-2 gap-2">
                   {Object.entries(TRACKS).map(([k, t]) => (
-                    <button key={k} onClick={() => setForm({ ...form, track: k })}
+                    <button key={k} onClick={() => setForm({ ...form, track: k, field: "" })}
                       className={`text-left p-3 rounded-lg border ${form.track === k ? "border-indigo-600 bg-indigo-50" : "border-slate-200 hover:border-slate-400"}`}>
                       <div className="font-medium">{t.name}</div>
                       <div className="text-xs text-slate-500 mt-1 leading-relaxed">{t.desc}</div>
@@ -189,7 +373,11 @@ export default function ModooWriter() {
                 <textarea value={form.idea} onChange={(e) => setForm({ ...form, idea: e.target.value })} rows={8}
                   placeholder="예) 자취하는 20대는 배달 음식이 지겨운데 요리는 부담스럽다. 동네 반찬가게와 연결해 그날 남은 반찬을 저녁 7시 이후 할인 꾸러미로 예약·수령하는 앱을 만들고 싶다. 내가 직접 반찬가게 사장님께 여쭤보니 매일 20~30%가 폐기된다고 했다…"
                   className="w-full p-3 rounded-lg border border-slate-300 focus:border-indigo-600 focus:outline-none text-sm leading-relaxed" />
-                <div className="text-xs text-slate-400 text-right">{form.idea.length}자 {form.idea.trim().length < 30 && "· 30자 이상 적어주세요"}</div>
+                <div className="text-xs text-slate-400 text-right">
+                  {form.idea.length}자
+                  {ideaLen < IDEA_MIN && ` · ${IDEA_MIN}자 이상 적어주세요`}
+                  {ideaLen >= IDEA_MIN && ideaLen < 60 && " · 짧아도 되지만, 누구의 어떤 불편인지 한 줄 더 적으면 초안이 훨씬 구체적이 돼요"}
+                </div>
               </section>
 
               <section>
@@ -216,7 +404,7 @@ export default function ModooWriter() {
                   <textarea value={form.currentItem} onChange={(e) => setForm({ ...form, currentItem: e.target.value })} rows={3}
                     placeholder="현재 운영 중인 사업 (업종, 아이템, 업력)" className="mt-2 w-full p-3 rounded-lg border border-slate-300 text-sm" />
                 )}
-                <p className="text-xs text-slate-500 mt-2">사업자면 Q7-1(기존 사업과의 차이)이 자동으로 추가됩니다. 공고일 기준 사업자등록 여부로 판단되니 정확히 골라주세요.</p>
+                <p className="text-xs text-slate-500 mt-2">공고일 기준 사업자등록 여부. 사업자면 Q7-1이 추가됩니다.</p>
               </section>
 
               <section>
@@ -225,6 +413,28 @@ export default function ModooWriter() {
                   className="w-full p-2 rounded-lg border border-slate-300 text-sm bg-white">
                   {TEAM_OPTIONS.map((t) => <option key={t}>{t}</option>)}
                 </select>
+              </section>
+
+              <section>
+                <h2 className="font-semibold mb-2">사업 분야 (Q6)</h2>
+                <select value={form.field} onChange={(e) => setForm({ ...form, field: e.target.value })}
+                  className="w-full p-2 rounded-lg border border-slate-300 text-sm bg-white">
+                  <option value="">나중에 고르기</option>
+                  {TRACKS[form.track].fields.map((f) => <option key={f} value={f}>{f}</option>)}
+                </select>
+              </section>
+
+              <section>
+                <h2 className="font-semibold mb-1">아이디어 자랑 글 (Q10)</h2>
+                <p className="text-xs text-slate-500 mb-2">홈페이지에 공개되어 '좋아요'를 받는 항목입니다.</p>
+                <div className="flex gap-2">
+                  {[true, false].map((v) => (
+                    <button key={String(v)} onClick={() => setForm({ ...form, q10Public: v })}
+                      className={`flex-1 py-2 rounded-lg border text-sm ${form.q10Public === v ? "border-indigo-600 bg-indigo-50" : "border-slate-200"}`}>
+                      {v ? "공개" : "비공개"}
+                    </button>
+                  ))}
+                </div>
               </section>
 
               <section>
@@ -244,34 +454,84 @@ export default function ModooWriter() {
                     );
                   })}
                 </div>
-                <p className="text-xs text-slate-500 mt-2">스타일 하나당 문항 {activeQuestions.length}개씩 생성됩니다. 문항당 30초 안팎이라 많이 고를수록 오래 걸려요.</p>
               </section>
 
-              <button onClick={generateAll} disabled={!canStart}
+              <button onClick={startIntake} disabled={!canStart || intakeBusy}
                 className="w-full py-3 rounded-lg bg-indigo-600 text-white font-medium disabled:bg-slate-300 disabled:cursor-not-allowed">
-                초안 {activeQuestions.length * selectedStyles.length}개 만들기
+                {intakeBusy ? "아이디어를 읽고 있어요…" : "신청서 초안 만들기"}
               </button>
+              {intakeBusy && <p className="text-xs text-slate-500 text-center">설명이 충분하면 바로 초안을 만들고, 부족한 부분이 있으면 몇 가지 골라달라고 할게요.</p>}
+              {!canStart && (
+                <ul className="text-xs text-slate-500 space-y-0.5">
+                  {blockers.map((b) => <li key={b}>· {b}</li>)}
+                </ul>
+              )}
             </div>
           </div>
         )}
 
-        {step === 1 && (
+        {step === 1 && intake && (() => {
+          const cards = intake.cards || [];
+          const card = cards[cardIdx];
+          const known = intake.slots.filter((s) => s.status === "known");
+          return (
+            <div className="max-w-2xl mx-auto space-y-6">
+              <div>
+                <h2 className="text-lg font-semibold">몇 가지만 골라주세요</h2>
+                <p className="text-sm text-slate-500 mt-1">정답이 아니어도 됩니다. 가장 가까운 것을 고르면 AI가 그걸 바탕으로 씁니다. 모르면 "모르겠어요" — 지어내지 않고 가정으로 씁니다.</p>
+              </div>
+
+              {(intake.summary || known.length > 0) && (
+                <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-1">
+                  {intake.summary && <div><span className="font-medium text-slate-700">AI가 이해한 아이디어:</span> {intake.summary}</div>}
+                  {known.length > 0 && <div><span className="font-medium text-slate-700">설명에서 확인됨:</span> {known.map((s) => s.label).join(" · ")}</div>}
+                </div>
+              )}
+
+              {card && (
+                <section className="border border-slate-200 rounded-xl p-5 space-y-4">
+                  <div className="flex items-center justify-between text-xs text-slate-400">
+                    <span>{cardIdx + 1} / {cards.length} · {card.label}</span>
+                    <span>{card.why}</span>
+                  </div>
+                  <h3 className="font-semibold text-base">{card.question}</h3>
+                  <CardOptions key={card.slot} card={card} value={answers[card.slot]} onChange={(v) => setAnswer(card.slot, v)} />
+                  <div className="flex items-center justify-between pt-2 flex-wrap gap-2">
+                    <button onClick={() => setCardIdx(Math.max(cardIdx - 1, 0))} disabled={cardIdx === 0} className="text-sm text-slate-500 underline disabled:text-slate-300">이전</button>
+                    <div className="flex gap-2">
+                      <button onClick={generateAll} className="px-3 py-2 text-sm rounded-lg border border-slate-300">나머지 건너뛰고 바로 만들기</button>
+                      <button onClick={nextCard} className="px-4 py-2 text-sm rounded-lg bg-indigo-600 text-white">
+                        {cardIdx + 1 >= cards.length ? "초안 만들기" : "다음"}
+                      </button>
+                    </div>
+                  </div>
+                </section>
+              )}
+
+              <div className="flex gap-1 justify-center">
+                {cards.map((c, i) => (
+                  <button key={c.slot} onClick={() => setCardIdx(i)} title={c.label}
+                    className={`w-2.5 h-2.5 rounded-full ${i === cardIdx ? "bg-indigo-600" : answers[c.slot]?.unknown ? "bg-amber-400" : answers[c.slot]?.answer ? "bg-emerald-500" : "bg-slate-200"}`} />
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
+        {step === 2 && (
           <div className="space-y-8">
+            {intake?.summary && (
+              <p className="text-xs text-slate-500">AI가 이해한 아이디어: {intake.summary}{answeredCount > 0 && ` · 보충 답변 ${answeredCount}개 반영`}</p>
+            )}
             <div className="flex items-center justify-between flex-wrap gap-3">
               <p className="text-sm text-slate-600">
                 {running ? "초안을 만드는 중입니다. 완성된 문항부터 읽고 골라두세요." : `${doneCount}/${activeQuestions.length}개 문항 선택됨. 글은 직접 고쳐도 됩니다.`}
               </p>
               <div className="flex gap-2">
                 <button onClick={() => setStep(0)} className="px-3 py-1.5 text-sm rounded-lg border border-slate-300">입력 수정</button>
-                <button onClick={() => setStep(2)} disabled={doneCount === 0} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white disabled:bg-slate-300">제출용으로 정리</button>
+                <button onClick={() => setStep(3)} disabled={doneCount === 0} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white disabled:bg-slate-300">제출용으로 정리</button>
               </div>
             </div>
-
-            {field && (
-              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 text-sm">
-                <span className="font-medium">Q6 사업 분야 추천:</span> {field.field || "—"} <span className="text-slate-500">— {field.reason}</span>
-              </div>
-            )}
 
             {activeQuestions.map((q) => {
               const cur = picked[q.id] || selectedStyles[0]?.id;
@@ -306,7 +566,7 @@ export default function ModooWriter() {
                     {st === "loading" && !text && <div className="h-32 rounded-lg bg-slate-50 animate-pulse" />}
                     {st === "error" && (
                       <div className="p-4 rounded-lg bg-red-50 text-sm text-red-700 flex justify-between items-center gap-3">
-                        <span>생성에 실패했어요. {errors[q.id]?.[cur] && <span className="text-red-500 text-xs">({errors[q.id][cur]})</span>} 무료 모델은 잠시 후 다시 시도하면 대개 됩니다.</span>
+                        <span>생성에 실패했어요. {errors[q.id]?.[cur] ? <span className="text-red-600">{errors[q.id][cur]}</span> : "무료 모델은 잠시 후 다시 시도하면 대개 됩니다."}</span>
                         <button onClick={() => generateOne(q, STYLES.find((s) => s.id === cur))} className="underline shrink-0">다시 생성</button>
                       </div>
                     )}
@@ -319,7 +579,15 @@ export default function ModooWriter() {
                           <div className="h-full bg-indigo-600" style={{ width: `${ratio * 100}%` }} />
                         </div>
                         <div className="mt-2 flex items-center justify-between flex-wrap gap-2 text-xs text-slate-500">
-                          <span>{text.length} / {q.limit}자</span>
+                          <span>
+                            {text.length} / {q.limit}자
+                            {modelUsed[q.id]?.[cur] && (
+                              <span className={`ml-2 ${modelUsed[q.id][cur] !== form.model ? "text-amber-600" : "text-slate-400"}`}
+                                title={modelUsed[q.id][cur] !== form.model ? "선택한 모델이 막혀서 다른 모델로 자동 전환됨" : "실제 응답한 모델"}>
+                                · {shortModel(modelUsed[q.id][cur])}{modelUsed[q.id][cur] !== form.model && " (폴백)"}
+                              </span>
+                            )}
+                          </span>
                           <div className="flex gap-3">
                             {q.limit > 100 && q.limit - text.length >= 150 && (
                               <button onClick={() => extend(q, STYLES.find((s) => s.id === cur))} disabled={st === "loading"} className="underline disabled:text-slate-300">
@@ -328,8 +596,24 @@ export default function ModooWriter() {
                             )}
                             <button onClick={() => generateOne(q, STYLES.find((s) => s.id === cur))} disabled={st === "loading"} className="underline disabled:text-slate-300">새로 생성</button>
                             <button onClick={() => copy(q.id + cur, text)} className="underline">{copied === q.id + cur ? "복사됨" : "복사"}</button>
+                            {cardsForQuestion(q.id).length > 0 && (
+                              <button onClick={() => setAssistOpen((p) => ({ ...p, [q.id]: !p[q.id] }))} className="underline text-indigo-600">
+                                {assistOpen[q.id] ? "정보 보태기 닫기" : "정보 보태기"}
+                              </button>
+                            )}
                           </div>
                         </div>
+                        {assistOpen[q.id] && (
+                          <div className="mt-3 p-4 rounded-lg bg-indigo-50/50 border border-indigo-100 space-y-4">
+                            <p className="text-xs text-slate-600">이 문항에 들어갈 정보입니다. 고치거나 채운 뒤 <b>새로 생성</b>(다시 쓰기) 또는 <b>내용 더 보태기</b>(이어쓰기)를 누르면 반영됩니다.</p>
+                            {cardsForQuestion(q.id).map((c) => (
+                              <div key={c.slot} className="space-y-1.5">
+                                <div className="text-xs font-medium text-slate-700">{c.question} <span className="text-slate-400 font-normal">· {c.label}</span></div>
+                                <CardOptions card={c} value={answers[c.slot]} onChange={(v) => setAnswer(c.slot, v)} compact />
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </>
                     )}
                   </div>
@@ -339,7 +623,7 @@ export default function ModooWriter() {
           </div>
         )}
 
-        {step === 2 && (
+        {step === 3 && (
           <div className="space-y-6">
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
@@ -355,9 +639,10 @@ export default function ModooWriter() {
                 <div className="font-medium mb-1">직접 입력할 항목</div>
                 <ul className="text-slate-600 space-y-1">
                   <li>Q5 소개 영상 링크 (선택)</li>
-                  <li>Q6 사업 분야: {field?.field ? `${field.field} 추천` : "직접 선택"}</li>
+                  <li>Q6 사업 분야: {form.field || "아직 안 고름 — 제출 화면에서 선택"}</li>
                   <li>Q7 창업 여부: {form.isBusiness ? "현재 사업자" : "사업자 아님"}</li>
                   <li>Q9 팀원 수: {form.team}</li>
+                  <li>Q10 공개 여부: {form.q10Public ? "공개 (자랑 글 붙여넣기)" : "비공개 (안내 문장 또는 빈칸)"}</li>
                   <li>Q11 서약서 동의 3개</li>
                   <li>03. 멘토 기관 (예: 충남 &gt; 백석대학교 산학협력단)</li>
                 </ul>
@@ -387,7 +672,7 @@ export default function ModooWriter() {
                   {text ? (
                     <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-700">{text}</p>
                   ) : (
-                    <p className="text-sm text-slate-400">아직 고르지 않았어요. <button onClick={() => setStep(1)} className="underline">초안 고르기</button>로 돌아가세요.</p>
+                    <p className="text-sm text-slate-400">아직 고르지 않았어요. <button onClick={() => setStep(2)} className="underline">초안 고르기</button>로 돌아가세요.</p>
                   )}
                   <div className="text-xs text-slate-400 mt-2">{text.length} / {q.limit}자</div>
                 </section>
