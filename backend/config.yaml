@@ -1,0 +1,28 @@
+# LLM 연결 설정 — base_url / api_key / model 세 값만 바꾸면 어떤 OpenAI 호환 서버든 연결됨
+# api_key 에 "${ENV_NAME}" 형식으로 쓰면 환경변수(프로젝트 루트 .env 포함)에서 읽어옴.
+#
+# OpenRouter (무료 테스트):  base_url: https://openrouter.ai/api/v1   api_key: ${OPENROUTER_API_KEY}  model: <아래 목록>
+#   무료 모델(2026-08-31 기준, id 끝 ":free"):
+#     minimax/minimax-m3:free                 ✔ 테스트 통과: Q2 1600자 한국어 40초, 품질 무난 (현재 기본)
+#     nvidia/nemotron-3-super-120b-a12b:free  추론 모델. extra.reasoning 끄지 않으면 본문이 안 나옴. 200초+ 로 느림
+#     google/gemma-4-31b-it:free              한국어 강하지만 무료 풀 429 잦음 (2026-08-31 테스트 시 계속 실패)
+#     z-ai/glm-5.2:free                       무료 풀 429 잦음
+#     openrouter/free                         자동 선택 — 영어로 답하는 모델에 걸릴 수 있어 비추
+#   무료 티어는 분당/일일 요청 제한이 있어 429가 나면 잠시 후 재시도.
+# Ollama (로컬):        base_url: http://localhost:11434/v1   api_key: ollama        model: llama3.3:70b
+# 서버 컴 Ollama:       base_url: http://<서버IP>:11434/v1    api_key: ollama        model: llama3.3:70b
+# vLLM:                base_url: http://<서버IP>:8000/v1     api_key: dummy         model: <서빙 모델명>
+# LiteLLM 프록시(Claude): base_url: http://localhost:4000/v1  api_key: <litellm key> model: claude-sonnet-4-6
+
+llm:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key: "${OPENROUTER_API_KEY}"
+  model: "minimax/minimax-m3:free"
+  max_tokens: 4096      # 한국어 1900자 ≈ 3000토큰 내외, 여유 포함
+  temperature: 0.7
+  # extra: 요청 본문에 그대로 추가 (서버별 옵션). OpenRouter 추론 모델(nemotron 등)은 thinking 이 max_tokens 를
+  # 다 먹어 본문이 비므로 아래처럼 끄고 쓴다.  Ollama/vLLM 에서는 비워둘 것.
+  # extra:
+  #   reasoning: { enabled: false }
+
+concurrency: 2          # LLM 동시 요청 수 (OpenRouter 무료 티어는 2 권장, 로컬 vLLM 이면 4~8)

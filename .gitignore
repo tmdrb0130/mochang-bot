@@ -1,0 +1,21 @@
+# 비밀키 — 절대 커밋 금지 (.env.example 만 커밋)
+.env
+*/.env
+frontend/.env
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+frontend/dist/
+npm-debug.log*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
