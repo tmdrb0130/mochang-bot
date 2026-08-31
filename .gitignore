@@ -22,3 +22,7 @@ Thumbs.db
 
 # 백엔드 일일 요청 카운터 (로컬 상태)
 backend/.usage.json
+
+# 조사 결과 캐시
+backend/.cache/
+.pytest_cache/
