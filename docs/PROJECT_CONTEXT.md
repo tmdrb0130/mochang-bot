@@ -185,6 +185,20 @@ prompts/
 
 **미구현/다음**: 생성 후 "근거 없는 문장" 하이라이트(검증), 인테이크 결과 저장(새로고침 시 유실), 이력서/SNS 텍스트 붙여넣기로 capability 자동 추출.
 
+## 6-2. 조사·검증·동시성 (2026-08-31 저녁, 자율 작업 세션)
+
+- **웹 조사** `backend/rag/`: `research.py` search(query) 추상화(Vane → ddgs 폴백, 7일 디스크 캐시) + `pipeline.py` run_research()
+  (검색어 생성 → 검색 → 신뢰 도메인 우선 랭킹 → trafilatura 본문 → 사실 JSON → quote 원문 대조 → [웹 참고자료] 섹션). `POST /research`.
+  7절의 "웹 검색(2차)" 1~5번에 해당. 출처 표기 강제는 sections.md 의 references 머리말 + system.md 규칙으로.
+- **Vane**(구 Perplexica, Docker `itzcrazykns1337/vane`) 컨테이너 기동 + `rag/vane_setup.py` 로 OpenRouter 제공자·모델 등록(브라우저 불필요).
+  기본 `research.vane.enabled: false` — Vane 은 검색마다 자체 모델 호출을 하므로 무료 한도(50/일)에서는 ddgs 만 사용. 한도 해결 후 켤 것.
+- **검증** `pipeline/verify.py` + `prompts/verify.md`: 문항 md [필수 요소]를 체크리스트로 모델 판정, evidence 원문 대조로 재검증, `unsupported_claims`. `POST /verify`. (6절 6번)
+- **동시성** `llm/jobs.py` JobQueue: 모든 모델 호출이 큐 경유, `max_workers`(현재 2) 로 OpenRouter 동시 요청 상한, 429 지수 백오프,
+  `POST /jobs/{kind}` → `GET /jobs/{id}` 폴링(대기 순번). 부하 테스트 `scripts/load_test.py` (동시 50, 가짜 모델) 통과.
+- **프롬프트 md 로더 정리**: `short_question.md`, `sections.md`, `research/*.md`, `verify.md` — 코드에 프롬프트 문구 없음. `assemble.render()`.
+- **테스트** `tests/` 69건, 전부 mock(모델·네트워크 호출 없음). `requirements-dev.txt`.
+- 프론트 연결은 미구현: 조사 결과 표시·참고자료 선택, 검증 결과(누락·근거 없는 문장) 하이라이트, /jobs 폴링 전환. → PROGRESS.md
+
 ## 7. RAG 설계안
 
 **로컬 문서 (1차)**
