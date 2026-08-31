@@ -1,7 +1,7 @@
 """모두의 창업 신청서 자동 작성기 — FastAPI 백엔드 (MVP 뼈대).
 
 실행 (프로젝트 루트에서):  uvicorn backend.main:app --reload --port 8000
-엔드포인트: /health, /models, /intake, /research, /generate, /extend, /generate/dry-run
+엔드포인트: /health, /models, /intake, /research, /generate, /extend, /verify, /generate/dry-run
 Q6(사업 분야)·Q10 공개 여부는 사람이 프론트에서 직접 고른다 — AI 호출 없음.
 """
 from fastapi import FastAPI, HTTPException, Request
@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from .llm.client import LLMClient, LLMError, RateLimited, load_config
-from .pipeline import assemble, generate, intake
+from .pipeline import assemble, generate, intake, verify
 from .rag import pipeline as research_pipeline
 from .rag.research import researcher_from_config
 
@@ -134,6 +134,22 @@ async def extend_endpoint(req: ExtendRequest):
     current = form.pop("current")
     try:
         return await generate.extend_one(client, form, current)
+    except assemble.PromptNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+class VerifyRequest(GenerateRequest):
+    text: str                 # 검증할 생성문 (사용자가 고친 글도 가능)
+
+
+@app.post("/verify")
+async def verify_endpoint(req: VerifyRequest):
+    """문항 md 의 [필수 요소] 포함 여부를 모델이 판정 → {items, missing, unsupported_claims, format_issues, score}.
+    evidence 가 글에 없으면 present 를 false 로 뒤집는다 (모델 판정 재검증). 모델 호출 1회."""
+    form = req.model_dump()
+    text = form.pop("text")
+    try:
+        return await verify.verify_text(client, form, req.question_id, text)
     except assemble.PromptNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
 
