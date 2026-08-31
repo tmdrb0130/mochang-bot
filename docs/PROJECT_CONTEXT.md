@@ -221,19 +221,15 @@ frontend/
 - **기본 스타일 1개(story)** — 무료 티어 요청 수 절약. 사용자가 더 고를 수 있음. 브라우저 동시 요청 `PARALLEL = 2`, 최종 동시성은 백엔드 `config.yaml concurrency: 2`가 제한.
 - 문항별 오류 메시지 표시 + "다시 생성" 버튼(무료 티어 429 대응).
 
-### 9-1. 옛 산출물 `modoo-writer.jsx` (참고용 기록, 파일은 App.jsx 로 대체됨)
+### 9-1. `App.jsx`에 구현된 UI (원본은 Claude 아티팩트 단일 파일이었고, 첫 커밋 `4aac78c`의 `docs/legacy/`에 보존)
 
-React 단일 파일 아티팩트 (Tailwind 코어 클래스만 사용, `<form>` 태그 없음). 이미 구현된 것:
 - 3단계 UI: 아이디어 입력 → 초안 고르기 → 제출용 정리
 - 트랙 선택, 아이디어/역량 textarea, 창업 여부(사업자면 Q7-1 자동 추가), 팀원 수 select, 스타일 다중 선택
-- `QUESTIONS` 배열(id, label, title, limit, target, guide, onlyBusiness), `STYLES`, `TRACKS` 상수
-- `callClaude(system, user)`: Anthropic `/v1/messages` 직접 호출, `max_tokens: 1000`, `stop_reason === "max_tokens"`면 마지막 문장 끝에서 절단
-- `runLimited(tasks, 4)`: 동시성 4 제한 큐
-- 문항별 스타일 탭, 생성 상태 표시(loading/done/error), textarea 직접 편집, 글자수 게이지, "내용 더 보태기"(extend), "새로 생성", 복사
-- Q6 분야 추천(JSON 파싱)
+- `QUESTIONS`(id, label, title, limit, onlyBusiness), `STYLES`, `TRACKS` 상수 — 문항 의도·분량은 백엔드 md가 단일 출처
+- `runLimited(tasks, PARALLEL)`: 브라우저 쪽 동시성 큐
+- 문항별 스타일 탭, 생성 상태 표시(loading/done/error + 오류 메시지), textarea 직접 편집, 글자수 게이지, "내용 더 보태기"(`/extend`), "새로 생성", 복사
+- Q6 분야 추천(`/recommend-field`)
 - 제출용 정리: 직접 입력 항목 안내, 주의사항, 문항별/전체 복사
-
-**백엔드 연결 시 바꿀 것 (→ 완료)**: `callClaude` → `api.js`의 `/generate` 호출. `buildSystem/buildContext`는 백엔드 `prompts/` md로 이관됨. `QUESTIONS`에는 UI 표시용 `id/label/title/limit`만 남김(guide/target은 백엔드 md가 단일 출처).
 
 ## 10. MVP 작업 순서
 
@@ -254,7 +250,7 @@ React 단일 파일 아티팩트 (Tailwind 코어 클래스만 사용, `<form>` 
 > **2026-08-31 4단계(프론트 연결) 완료.** `frontend/` Vite 프로젝트 생성, `App.jsx`가 백엔드 호출. 백엔드에 `/extend`(이어쓰기, `prompts/extend.md`)와 `/recommend-field`(Q6 추천, `prompts/recommend_field.md`, 선택지 검증 포함) 추가.
 > `LLMClient`에 `asyncio.Semaphore(concurrency)` 적용. 실호출 확인: recommend tech→"유통/물류", local→"F&B"; extend q2 659자 추가 10초.
 > 관찰: 이어쓰기에서 "자취생 친구 여섯 명에게 물었다" 같은 **입력에 없는 사례를 지어냄** → 3단계 검증(필수요소 체크 + 사실 대조)에서 잡아야 할 1순위 이슈.
-> - `nemotron_server/`는 이전에 만든 OpenRouter 모델 비교용 Flask 채팅 UI(이미지 업로드 포함). 모델 목록 중 `deepseek/deepseek-chat:free`는 현재 OpenRouter 무료 목록에 없음.
+> - `nemotron_server/`(OpenRouter 모델 비교용 Flask 채팅 UI, 이미지 업로드 포함)는 백엔드가 OpenRouter를 직접 붙인 뒤 제거함. 필요하면 커밋 `4aac78c`에서 복구.
 
 1. Ollama에 모델 띄우고 OpenAI 호환 호출 성공 확인 (`config.yaml`로 모델 전환 확인) — *서버 컴 확보 전까지 OpenRouter로 대체 중, 전환은 config 3줄 수정*
 2. `prompts/` md 세트 작성 + 조립기 + **문항 하나** 생성 → 품질 확인
