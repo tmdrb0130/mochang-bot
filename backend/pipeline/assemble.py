@@ -55,6 +55,16 @@ def build_context(form: dict) -> str:
     capability = form.get("capability") or "(입력 없음 — 아이디어 설명에서 유추 가능한 범위만 언급하고 지어내지 말 것)"
     parts.append(f"지원자 역량·경력: {capability}")
     parts.extend(_answer_sections(form.get("answers") or []))
+    refs = form.get("references")
+    if refs:
+        # 조사 파이프라인(backend/rag/pipeline.py)이 만든 사실 목록 → 참고자료 섹션. 문자열이면 그대로.
+        if isinstance(refs, str):
+            parts.append(refs)
+        else:
+            from ..rag.pipeline import format_references
+            section = format_references(refs)
+            if section:
+                parts.append(section)
     return "\n\n".join(parts)
 
 

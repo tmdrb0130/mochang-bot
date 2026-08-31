@@ -1,7 +1,7 @@
 """모두의 창업 신청서 자동 작성기 — FastAPI 백엔드 (MVP 뼈대).
 
 실행 (프로젝트 루트에서):  uvicorn backend.main:app --reload --port 8000
-엔드포인트: /health, /models, /intake, /generate, /extend, /generate/dry-run
+엔드포인트: /health, /models, /intake, /research, /generate, /extend, /generate/dry-run
 Q6(사업 분야)·Q10 공개 여부는 사람이 프론트에서 직접 고른다 — AI 호출 없음.
 """
 from fastapi import FastAPI, HTTPException, Request
@@ -11,9 +11,13 @@ from pydantic import BaseModel
 
 from .llm.client import LLMClient, LLMError, RateLimited, load_config
 from .pipeline import assemble, generate, intake
+from .rag import pipeline as research_pipeline
+from .rag.research import researcher_from_config
 
 config = load_config()
 client = LLMClient(config)
+researcher = researcher_from_config(config)
+research_cfg = research_pipeline.ResearchConfig.from_config(config)
 
 app = FastAPI(title="modoo-writer backend")
 app.add_middleware(
@@ -51,6 +55,7 @@ class GenerateRequest(BaseModel):
     capability: str = ""
     model: str | None = None  # /models 목록 중 하나. 없으면 config.yaml 기본 모델
     answers: list[dict] | None = None  # 인테이크 카드 답변 [{slot,label,answer,unknown}] — 프롬프트에 사실/가정으로 주입
+    references: list[dict] | None = None  # /research 가 돌려준 facts — [웹 참고자료] 섹션으로 주입
 
 
 @app.get("/health")
@@ -85,6 +90,29 @@ async def intake_endpoint(req: IntakeRequest):
     """아이디어를 읽고 슬롯별 확인/부족 판정 + 부족한 슬롯의 '보기 고르기' 카드 생성 (LLM 1회).
     ready=True 면 프론트는 카드 단계를 건너뛰고 바로 생성."""
     return await intake.run_intake(client, req.model_dump())
+
+
+class ResearchRequest(BaseModel):
+    question_id: str
+    track: str = "tech"
+    idea: str
+    is_business: bool = False
+    current_item: str = ""
+    team: str = "팀원 없음"
+    capability: str = ""
+    model: str | None = None
+    answers: list[dict] | None = None
+
+
+@app.post("/research")
+async def research_endpoint(req: ResearchRequest):
+    """아이디어+문항 → 검색어 생성 → 웹 검색 → 본문 추출 → 출처 있는 사실 JSON (모델 호출 2회).
+    응답의 facts 를 /generate 의 references 로 넘기면 [웹 참고자료] 섹션으로 주입된다."""
+    form = req.model_dump()
+    try:
+        return await research_pipeline.run_research(client, researcher, form, req.question_id, research_cfg)
+    except assemble.PromptNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.post("/generate")
