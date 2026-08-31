@@ -18,6 +18,8 @@ import yaml
 from dotenv import load_dotenv
 from openai import APIStatusError, AsyncOpenAI, RateLimitError
 
+from .jobs import JobQueue
+
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = BACKEND_DIR / "config.yaml"
@@ -128,8 +130,16 @@ class LLMClient:
         self.is_openrouter = "openrouter.ai" in self.base_url
         self.fallback = bool(config.get("fallback", True)) and self.is_openrouter and len(self.model_ids) > 1
         self.usage = UsageCounter(USAGE_PATH, config.get("daily_request_limit") if self.is_openrouter else None)
-        # 동시 요청 수 제한 — 로컬 모델 과부하 방지 + OpenRouter 무료 티어 분당 한도(20 RPM) 보호
-        self._sem = asyncio.Semaphore(int(config.get("concurrency") or 3))
+        # 동시 요청 수 제한 — asyncio.Queue + 워커 N개 (jobs.py). 모든 모델 호출이 이 큐를 거친다.
+        # OpenRouter 로 나가는 동시 요청 = max_workers. 429/일시 오류는 워커가 지수 백오프로 재시도.
+        retry = config.get("retry") or {}
+        self.queue = JobQueue(
+            max_workers=int(config.get("max_workers") or config.get("concurrency") or 4),
+            retry_attempts=int(retry.get("attempts", 3)),
+            base_delay=float(retry.get("base_delay_seconds", 2.0)),
+            max_delay=float(retry.get("max_delay_seconds", 30.0)),
+            retry_on=(RateLimited,),
+        )
         headers = {"HTTP-Referer": "http://localhost", "X-Title": "modoo-writer"} if self.is_openrouter else {}
         self._client = AsyncOpenAI(
             base_url=self.base_url, api_key=c["api_key"], default_headers=headers, max_retries=2
@@ -159,17 +169,22 @@ class LLMClient:
 
     async def complete(self, system: str, user: str, model: str | None = None) -> LLMResult:
         model = self.resolve_model(model)
-        async with self._sem:
-            # 일시 오류면 목록의 다음 모델로 바꿔 최대 3번 시도 (같은 제공자가 연속으로 끊는 경우가 많음)
-            order = [model] + [i for i in self.model_ids if i != model]
-            last: Exception | None = None
-            for attempt, m in enumerate(order[:3]):
-                try:
-                    return await self._complete(system, user, m)
-                except TransientError as e:
-                    last = e
-                    await asyncio.sleep(1.5 * (attempt + 1))
-            raise LLMError(f"{last} — 무료 제공자가 연속으로 응답을 끊었습니다. 잠시 후 '다시 생성'을 눌러주세요.")
+        if not self.queue.started:
+            await self.queue.start()   # FastAPI startup 밖(CLI·테스트)에서 써도 동작하게 지연 시작
+        return await self.queue.run(lambda: self._complete_with_model_fallback(system, user, model), kind="llm")
+
+    async def _complete_with_model_fallback(self, system: str, user: str, model: str) -> LLMResult:
+        # 일시 오류(업스트림 504 등)면 목록의 다음 모델로 바꿔 최대 3번 시도 (같은 제공자가 연속으로 끊는 경우가 많음).
+        # 429(RateLimited) 는 여기서 잡지 않고 큐 워커가 지수 백오프로 재시도한다.
+        order = [model] + [i for i in self.model_ids if i != model]
+        last: Exception | None = None
+        for attempt, m in enumerate(order[:3]):
+            try:
+                return await self._complete(system, user, m)
+            except TransientError as e:
+                last = e
+                await asyncio.sleep(1.5 * (attempt + 1))
+        raise LLMError(f"{last} — 무료 제공자가 연속으로 응답을 끊었습니다. 잠시 후 '다시 생성'을 눌러주세요.")
 
     async def _complete(self, system: str, user: str, model: str) -> LLMResult:
         used = await self.usage.hit(model)

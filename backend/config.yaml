@@ -49,7 +49,14 @@ fallback: true
 # 백엔드가 요청 수를 backend/.usage.json 에 세어 /health 로 알려준다. $10 충전했으면 1000 으로 바꿀 것.
 daily_request_limit: 50
 
-concurrency: 2          # LLM 동시 요청 수 (OpenRouter 무료 티어는 2 권장, 로컬 vLLM 이면 4~8)
+# ── 동시성 층 (backend/llm/jobs.py) ──
+# 모든 모델 호출은 asyncio.Queue 를 거치고 워커 max_workers 개가 처리 → OpenRouter 로 나가는 동시 요청 수 상한.
+# 무료 티어(20회/분)는 2~3, 유료/로컬 vLLM 이면 4~8. 429 는 지수 백오프(base_delay × 2^n, 최대 max_delay)로 attempts 회 재시도.
+max_workers: 2
+retry:
+  attempts: 3
+  base_delay_seconds: 2
+  max_delay_seconds: 30
 
 # ── 웹 조사(research) ──
 # search(query) 는 vane → ddgs 순으로 시도. vane.enabled=false 면 ddgs(DuckDuckGo, 모델 호출 없음)만 쓴다.

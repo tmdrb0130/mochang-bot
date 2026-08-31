@@ -1,9 +1,12 @@
 """모두의 창업 신청서 자동 작성기 — FastAPI 백엔드 (MVP 뼈대).
 
 실행 (프로젝트 루트에서):  uvicorn backend.main:app --reload --port 8000
-엔드포인트: /health, /models, /intake, /research, /generate, /extend, /verify, /generate/dry-run
+엔드포인트: /health, /models, /intake, /research, /generate, /extend, /verify, /generate/dry-run,
+           /jobs/{kind} (제출) · /jobs/{id} (폴링) · /jobs (큐 상태)
 Q6(사업 분야)·Q10 공개 여부는 사람이 프론트에서 직접 고른다 — AI 호출 없음.
 """
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -19,7 +22,14 @@ client = LLMClient(config)
 researcher = researcher_from_config(config)
 research_cfg = research_pipeline.ResearchConfig.from_config(config)
 
-app = FastAPI(title="modoo-writer backend")
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await client.queue.start()      # 워커 N개 기동 (config.yaml max_workers)
+    yield
+    await client.queue.stop()
+
+
+app = FastAPI(title="modoo-writer backend", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -66,6 +76,7 @@ async def health():
         "base_url": client.base_url,
         "fallback": client.fallback,
         "usage": client.usage.snapshot(),   # 오늘 요청 수 / 한도 (OpenRouter 가 아니면 limit=None)
+        "queue": client.queue.stats(),      # 동시성 층 상태 (워커 수, 대기, 실행 중)
     }
 
 
@@ -152,6 +163,43 @@ async def verify_endpoint(req: VerifyRequest):
         return await verify.verify_text(client, form, req.question_id, text)
     except assemble.PromptNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# ── 비동기 작업: 제출 → 작업 ID → 폴링 ──
+# 긴 작업(문항 생성 30~60초, 조사 1~2분)을 HTTP 연결을 붙잡지 않고 처리. 대기 순번(position)을 보여줄 수 있다.
+
+_JOB_KINDS = {
+    "generate": (GenerateRequest, lambda f: generate.generate_one(client, f)),
+    "extend": (ExtendRequest, lambda f: generate.extend_one(client, {k: v for k, v in f.items() if k != "current"}, f["current"])),
+    "intake": (IntakeRequest, lambda f: intake.run_intake(client, f)),
+    "research": (ResearchRequest, lambda f: research_pipeline.run_research(client, researcher, f, f["question_id"], research_cfg)),
+    "verify": (VerifyRequest, lambda f: verify.verify_text(client, {k: v for k, v in f.items() if k != "text"}, f["question_id"], f["text"])),
+}
+
+
+@app.post("/jobs/{kind}")
+async def submit_job(kind: str, body: dict):
+    """kind ∈ generate|extend|intake|research|verify. 본문은 해당 동기 엔드포인트와 같다. → {job_id, position}"""
+    if kind not in _JOB_KINDS:
+        raise HTTPException(status_code=404, detail=f"알 수 없는 작업 종류: {kind}")
+    model_cls, runner = _JOB_KINDS[kind]
+    form = model_cls(**body).model_dump()
+    job = client.queue.submit(lambda: runner(form), kind=kind)
+    return {"job_id": job.id, "kind": kind, "position": client.queue.position(job.id), "queue": client.queue.stats()}
+
+
+@app.get("/jobs/{job_id}")
+async def get_job(job_id: str):
+    """{status: queued|running|done|error, position, result, error}. done 이면 result 에 동기 엔드포인트와 같은 응답."""
+    snap = client.queue.get(job_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail="작업이 없습니다 (만료되었거나 잘못된 ID).")
+    return snap
+
+
+@app.get("/jobs")
+async def queue_stats():
+    return client.queue.stats()
 
 
 @app.post("/generate/dry-run")
