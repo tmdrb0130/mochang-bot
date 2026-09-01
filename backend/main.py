@@ -5,6 +5,7 @@
            /jobs/{kind} (제출) · /jobs/{id} (폴링) · /jobs (큐 상태)
 Q6(사업 분야)·Q10 공개 여부는 사람이 프론트에서 직접 고른다 — AI 호출 없음.
 """
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -14,6 +15,7 @@ from pydantic import BaseModel
 
 from .llm.client import (RESEARCH_USAGE_PATH, LLMClient, LLMError, RateLimited,
                          load_config, research_client_config)
+from . import timing
 from .pipeline import assemble, generate, intake, verify
 from .rag import pipeline as research_pipeline
 from .rag.research import researcher_from_config
@@ -43,6 +45,25 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="modoo-writer backend", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def _record_timing(request: Request, call_next):
+    """모든 요청의 소요 시간을 backend/.timing.jsonl 에 남긴다 (사용자 대기 시간 추적용)."""
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    ms = round((time.perf_counter() - t0) * 1000, 1)
+    # 폴링(/jobs/{id})은 초당 여러 번 들어와 로그를 뒤덮으므로 느린 것만 남긴다.
+    path = request.url.path
+    if not (path.startswith("/jobs/") and request.method == "GET" and ms < 500):
+        timing.log("http", method=request.method, path=path, status=response.status_code, ms=ms)
+    return response
+
+
+# 작업이 끝날 때마다 대기 시간 / 실행 시간을 기록한다.
+client.queue.on_done = timing.job_done
+if research_client is not client:
+    research_client.queue.on_done = timing.job_done
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

@@ -59,7 +59,11 @@ class Job:
 
 class JobQueue:
     def __init__(self, max_workers: int = 4, retry_attempts: int = 3, base_delay: float = 2.0, max_delay: float = 30.0,
-                 retry_on: tuple[type[BaseException], ...] = (), history_limit: int = 500, sleep=asyncio.sleep):
+                 retry_on: tuple[type[BaseException], ...] = (), history_limit: int = 500, sleep=asyncio.sleep,
+                 on_done=None):
+        # on_done(job): 작업이 끝날 때(성공·실패 모두) 한 번 호출. 소요 시간 기록용.
+        # 기본 None 이라 테스트 동작에는 영향이 없다.
+        self.on_done = on_done
         self.max_workers = max(1, int(max_workers))
         self.retry_attempts = max(1, int(retry_attempts))
         self.base_delay = base_delay
@@ -212,3 +216,8 @@ class JobQueue:
                 job.finished = time.time()
                 self._running -= 1
                 self._queue.task_done()
+                if self.on_done:
+                    try:
+                        self.on_done(job)
+                    except Exception:
+                        pass          # 계측 실패가 작업 처리를 막으면 안 된다
