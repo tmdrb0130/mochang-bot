@@ -47,7 +47,12 @@ daily_request_limit: 50
 # ── 동시성 층 (backend/llm/jobs.py) ──
 # 모든 모델 호출은 asyncio.Queue 를 거치고 워커 max_workers 개가 처리 → OpenRouter 로 나가는 동시 요청 수 상한.
 # 무료 티어(20회/분)는 2~3, 유료/로컬 vLLM 이면 4~8. 429 는 지수 백오프(base_delay × 2^n, 최대 max_delay)로 attempts 회 재시도.
-max_workers: 12
+# 2026-09-02 실측(scripts/gpu_probe.py, 12/20/30/45 단계별): 45 동시까지 실패 0, 대기 0, preemption 0,
+# KV 캐시 최대 7% — GPU 쪽엔 여유가 많고 병목은 이 값이었다. p95 는 9.6→12.1→13.1→15.9초로 완만히만 증가.
+# 꺾이는 지점이 측정 구간 안에 없어서 '측정된 최대(45)의 한 단계 아래'인 30 을 안전 상한으로 잡았다.
+# (실사용 프롬프트는 측정용보다 길어 KV 를 더 쓰고, 조사 워커와 GPU 를 나눠 쓰며, 공유 서버라 여유를 남긴다.)
+# 총 동시 호출 = max_workers(30) + research.llm.max_workers(8) = 38 ≤ 측정 확인된 45.
+max_workers: 30
 
 # 한 클라이언트(IP)가 동시에 진행할 수 있는 작업 수 (POST /jobs/{kind}). 초과하면 429.
 # 인증이 없어 IP 로 구분한다 — 한 명이 문항 9개를 연달아 눌러 큐를 독점하는 것을 막는다.
@@ -73,7 +78,7 @@ research:
     model: "casperhansen/llama-3.3-70b-instruct-awq"
     max_tokens: 4096
     temperature: 0.3                                        # 사실 추출·JSON 이라 낮게
-    max_workers: 4                                          # 로컬 서버라 OpenRouter(2)보다 높여도 됨
+    max_workers: 8                                          # 위 실측 근거. 본문 30 + 조사 8 = 38 ≤ 45
 
   cache_ttl_seconds: 604800      # 같은 검색어 결과 디스크 캐시 7일 (backend/.cache/research/)
   max_queries: 4                 # 아이디어+문항당 생성할 검색어 수 (3~5)
