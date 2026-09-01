@@ -15,26 +15,31 @@
 # LiteLLM 프록시(Claude): base_url: http://localhost:4000/v1  api_key: <litellm key> model: claude-sonnet-4-6
 
 llm:
-  # 2026-09-01: OpenRouter 무료 한도(하루 50회) 때문에 여러 사람이 못 쓰는 문제로
-  # 원격 GPU 서버의 vLLM 70B 로 전환. base_url 이 openrouter.ai 가 아니면
-  # daily_request_limit / fallback 로직이 자동으로 꺼진다(client.py is_openrouter).
-  # 주의: SSH 터널이 필요하다 -> ssh -N -L 30800:localhost:30800 gpu
-  # 되돌리려면 config.yaml.openrouter.bak 참고.
-  base_url: "http://localhost:30800/v1"
-  api_key: "dummy"                        # vLLM 은 키를 검증하지 않음
-  model: "casperhansen/llama-3.3-70b-instruct-awq"
-  max_tokens: 4096                        # 실측 한국어 1.7자/토큰 -> 2000자면 약 1200토큰. 넉넉함
+  base_url: "https://openrouter.ai/api/v1"
+  api_key: "${OPENROUTER_API_KEY}"
+  model: "minimax/minimax-m3:free"
+  max_tokens: 4096      # 한국어 1900자 ≈ 3000토큰 내외, 여유 포함
   temperature: 0.7
-  extra: {}                               # vLLM 이므로 OpenRouter 전용 reasoning 옵션 제거
+  # extra: 요청 본문에 그대로 추가되는 서버별 옵션. OpenRouter 에서는 추론(thinking)을 꺼서
+  # nemotron 같은 추론 모델이 thinking 으로 max_tokens 를 다 먹고 본문을 못 내는 문제를 막는다.
+  # (추론 없는 모델은 이 옵션을 무시함.)  Ollama/vLLM 으로 바꾸면 extra 는 비워둘 것.
+  extra:
+    reasoning: { enabled: false }
 
 # UI에서 고를 수 있는 모델 목록. llm.model 이 기본값. 각 항목에 extra 를 두면 그 모델에만 추가 적용.
 models:
-  # vLLM 서버가 서빙하는 모델은 하나뿐이라 목록도 하나다.
-  # 다른 id 를 고르면 vLLM 이 404 를 낸다.
-  # OpenRouter 로 되돌릴 때 쓸 목록은 config.yaml.openrouter.bak 에 있다.
-  - id: casperhansen/llama-3.3-70b-instruct-awq
-    name: Llama 3.3 70B (사내 GPU)
-    note: 무료 한도 없음. 문항당 15~25초. 분량이 목표보다 짧게 나오는 경향 있음
+  - id: minimax/minimax-m3:free
+    name: MiniMax M3
+    note: 테스트 통과 — 한국어 자연스럽고 규칙 준수 양호. 문항당 25~40초. 기본값
+  - id: google/gemma-4-31b-it:free
+    name: Gemma 4 31B
+    note: 한국어 강함. 무료 풀 혼잡 시 429 잦음 (폴백으로 넘어감)
+  - id: z-ai/glm-5.2:free
+    name: GLM 5.2
+    note: 무료 풀 혼잡 시 429 잦음
+  - id: nvidia/nemotron-3-super-120b-a12b:free
+    name: Nemotron 3 Super
+    note: 추론 모델(reasoning 꺼서 사용). 반말·제목 출력 등 규칙 준수가 약함
 
 # 선택 모델이 429/다운이면 목록의 다른 모델로 OpenRouter 가 자동 전환 (`models` 파라미터, 최대 3개 → 선택 모델 + 목록 위쪽 2개).
 # 응답의 model 로 실제 모델 확인.
@@ -47,7 +52,7 @@ daily_request_limit: 50
 # ── 동시성 층 (backend/llm/jobs.py) ──
 # 모든 모델 호출은 asyncio.Queue 를 거치고 워커 max_workers 개가 처리 → OpenRouter 로 나가는 동시 요청 수 상한.
 # 무료 티어(20회/분)는 2~3, 유료/로컬 vLLM 이면 4~8. 429 는 지수 백오프(base_delay × 2^n, 최대 max_delay)로 attempts 회 재시도.
-max_workers: 12
+max_workers: 2
 retry:
   attempts: 3
   base_delay_seconds: 2
