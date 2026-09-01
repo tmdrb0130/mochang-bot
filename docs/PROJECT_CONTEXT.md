@@ -330,6 +330,38 @@ frontend/
 
 **2~3단계에서 반드시**: 같은 입력으로 Sonnet vs Llama 70B (vs Gemma 3 27B / EXAONE 3.5 32B) 결과 비교 → 기본 모델 방향 결정.
 
+## 12. 운영 메모 — SSH 터널 서비스화 (미적용, 이럴 수 있다는 기록)
+
+본문 생성 모델(라마 70B)은 원격 GPU 서버의 vLLM 이고, 이 PC 는 SSH 터널로 붙는다.
+
+    ssh -f -N -o BatchMode=yes ... -L 30800:localhost:30800 <gpu>
+
+지금 이 터널은 **Windows 서비스가 아니라 로그인 세션 프로세스**다. `-f` 로 백그라운드에
+분리돼 있어 VS Code 나 터미널을 닫아도 살아남지만, **로그아웃하거나 재부팅하면 죽는다.**
+(서버로 상시 운영 중이라 로그아웃은 사실상 없고, 재부팅만 실질 위험이다.)
+
+터널이 죽으면 nginx·백엔드는 멀쩡히 200 을 돌려주는데 **글 생성만 전부 실패**한다.
+겉으로는 정상으로 보여 알아채기 어렵다.
+
+필요해지면 NSSM 서비스로 등록할 수 있다:
+
+    nssm install vsp-tunnel "C:\Program Files\Git\usr\bin\ssh.exe" ^
+        -N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 30800:localhost:30800 <gpu>
+    nssm set vsp-tunnel Start SERVICE_AUTO_START
+    nssm set vsp-tunnel AppExit Default Restart
+    nssm set vsp-tunnel AppRestartDelay 5000
+
+포인트 두 가지
+
+- **`-f` 를 뺀다.** NSSM 이 프로세스를 직접 붙잡아야 죽었을 때 되살릴 수 있다.
+  `-f` 로 분리되면 NSSM 은 껍데기가 즉시 끝난 것으로 보고 관리하지 못한다.
+- `ServerAliveInterval` 로 네트워크가 끊긴 좀비 터널을 스스로 감지하게 한다.
+  포트는 열려 있는데 실제로는 안 통하는 상태를 막는다.
+
+전제: 키 인증이 되어 있어야 한다(비밀번호를 물으면 서비스로 못 띄운다).
+같은 PC 의 나머지 6개 서비스(vsp-nginx / vsp-faiss / vsp-llama / vsp-spring / vsp-front /
+mochang-api)는 이미 NSSM 으로 등록돼 자동 복구된다. 상세는 바탕화면 vsp자동복구.txt.
+
 ## 11. 미결 사항
 - 로컬 70B 서빙 하드웨어 확정 → 2026-09-01 Llama 70B 머신 확보, 거기서 이어 작업
 - ~~웹 검색 API 선택~~ → Vane 확정 (2절)
