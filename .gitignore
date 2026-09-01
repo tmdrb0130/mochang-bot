@@ -31,3 +31,4 @@ backend/.timing.jsonl.1
 backend/prompts.backup-*
 *.before-fix
 backend/.usage.research.json
+frontend/dist-check/

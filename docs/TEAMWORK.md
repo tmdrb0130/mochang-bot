@@ -58,6 +58,7 @@
 |---|---|
 | 포트 8000 | `mochang-api` 서비스가 쓰는 중. **개발용 uvicorn 이 필요하면 :8001 등 다른 포트로** 띄운다. `nssm stop mochang-api` 는 공개 서비스 중단 → **사용자 승인 필수** |
 | 포트 5173 | 세션2 전용 (`npm run dev`) |
+| `frontend/dist` | **빌드 = 즉시 공개 배포** (nginx 가 그대로 서빙). 문법 검증은 반드시 `npx vite build --outDir dist-check` 로. dist 빌드는 사용자 승인 후에만 (2026-09-02 08:18 오배포 사고로 규칙화) |
 | NSSM 서비스 6종 (`vsp-*`, `mochang-api`) | 어떤 세션도 임의로 stop/restart 금지. 필요하면 WORKBOARD "조율 필요"에 적기 |
 | SSH 터널(30800)·Ollama | 로그인 세션 프로세스 — 죽이면 생성이 전부 실패. 건드리지 않기 |
 | `backend/.usage.json`, `backend/.cache/` | 로컬 런타임 파일. 커밋·삭제 금지 |

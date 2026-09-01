@@ -14,7 +14,9 @@
 ## 실행·검증
 ```bash
 .venv/Scripts/python -m pytest -q          # 모델·네트워크 호출 0 (전부 mock). 커밋 전 반드시 통과
-cd frontend && npx vite build              # 프론트 문법 검증
+cd frontend && npx vite build --outDir dist-check   # 프론트 문법 검증 (dist-check 는 gitignore)
+# ⚠️ `npx vite build` 를 그냥 실행하면 frontend/dist 가 덮여 **즉시 공개 배포**된다
+#    (nginx 가 dist 를 그대로 서빙). dist 빌드는 배포 승인 후에만.
 uvicorn backend.main:app --reload --port 8000   # 백엔드 / 프론트: cd frontend && npm run dev
 ```
 Windows 는 `.venv\Scripts\python`, Linux/mac 은 `.venv/bin/python`. **작업 PC 들은 Windows PowerShell 5.1** — 사용자에게 주는 명령어에 `&&`·`source`·`export` 같은 bash 문법을 쓰지 말고 한 줄씩, venv 활성화는 `.\.venv\Scripts\Activate.ps1`. 의존성: `backend/requirements.txt`, `requirements-dev.txt`.
