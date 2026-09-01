@@ -86,7 +86,9 @@ http://localhost:5173 을 열면 화면 상단에 `모델: minimax/minimax-m3:fr
 1. 트랙 선택 → 아이디어 입력(10자 이상) → (있으면) 경력·경험 입력 → 사업 분야(Q6)·Q10 공개 여부·스타일 선택
 2. **신청서 초안 만들기** 클릭 → AI가 아이디어를 읽습니다(30~60초)
    - 설명이 충분하면 바로 초안 생성으로 넘어갑니다
-   - 부족한 부분이 있으면 **"정보 보충"** 카드가 최대 6장 나옵니다 — 가장 가까운 보기를 클릭, 또는 "기타" 한 줄, 또는 "모르겠어요"(지어내지 않고 가정으로 씀). "나머지 건너뛰고 바로 만들기"도 됩니다
+   - 부족한 부분이 있으면 **"정보 보충"** 카드가 최대 7장 나옵니다 — 가장 가까운 보기를 클릭, 또는 "기타" 한 줄, 또는 "모르겠어요"(지어내지 않고 가정으로 씀). "나머지 건너뛰고 바로 만들기"도 됩니다
+   - **책임멘토에게 받고 싶은 도움(Q4-2)** 카드는 항상 나옵니다 — 이 아이디어에서 막힐 만한 영역(원가·인허가·첫 고객 확보 …)을 AI가 보기로 내고, 고르거나 직접 적습니다
+   - 보기가 내 상황과 안 맞으면 **"다른 보기 보기"** — 이유를 한 줄 적으면(선택) 그 카드만 다른 방향으로 다시 만듭니다(모델 1회). 이미 본 보기는 다시 나오지 않습니다
 3. 문항당 25~40초. 완성된 문항부터 읽고, 스타일 탭에서 고르고, 직접 고쳐도 됩니다. 문항 아래 **"정보 보태기"**를 열면 그 문항에 들어갈 정보를 고친 뒤 새로 생성·이어쓰기할 수 있습니다.
 4. **제출용으로 정리** → 문항별 복사 → modoo.or.kr 도전하기 화면에 붙여넣기
 
@@ -146,7 +148,8 @@ mochang-bot/
 │   │   ├── questions/          #     q1.md … q10.md — 문항 의도 · 필수/권장 요소 · 피할 것
 │   │   ├── styles/             #     story.md · logic.md · plain.md
 │   │   ├── extend.md           #     이어쓰기 지시
-│   │   ├── intake.md           #     아이디어 읽기: 슬롯 판정 + 보기 카드 생성 규칙
+│   │   ├── intake.md           #     아이디어 읽기: 슬롯 9개 판정 + 보기 카드 생성 규칙 (mentoring = Q4-2 멘토 도움)
+│   │   ├── intake_regenerate.md#     카드 재생성: 다시 만들 슬롯·금지 보기·지원자 메모
 │   │   ├── short_question.md   #     Q1·Q10 100자 문항 '한 문장' 규칙
 │   │   ├── sections.md         #     user 프롬프트 섹션 머리말 (확인한 사실/모르는 것/웹 참고자료)
 │   │   ├── verify.md           #     검증 판정 지시
@@ -219,12 +222,13 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 |---|---|
 | `GET /health` | 연결 상태 · 기본 모델 · 오늘 요청 수/한도 |
 | `GET /models` | 선택 가능한 모델 목록 |
-| `POST /intake` | 아이디어 읽기: 슬롯별 확인/부족 판정 + 부족한 슬롯의 보기 카드 생성 (`ready`면 카드 생략) |
+| `POST /intake` | 아이디어 읽기: 슬롯 9개 확인/부족 판정 + 부족한 슬롯의 보기 카드 생성. `mentoring`(Q4-2) 카드는 항상 포함. `ready`는 핵심 정보 충분 여부(카드는 그래도 보여줌, 건너뛰기 가능) |
+| `POST /intake/regenerate` | 보기가 안 맞는 슬롯의 카드만 재생성 (`slots`, `seen`[이미 보여준 보기 → 금지], `note`[지원자 메모], `answers`[다른 카드 답]) → `{cards, error?}` |
 | `POST /generate` | 문항 하나 생성 (`model`, `answers`[카드 답변] 선택) |
 | `POST /extend` | 기존 글 뒤에 새 근거·사례만 이어쓰기 |
 | `POST /research` | 아이디어+문항 → 검색어 → 웹 검색(Vane/ddgs) → 본문 추출 → 출처 있는 사실 JSON (모델 2회). `facts` 를 `/generate` 의 `references` 로 넘기면 [웹 참고자료] 주입 |
 | `POST /verify` | 생성문이 문항 md 의 [필수 요소]를 담았는지 모델 판정 → `missing`, `unsupported_claims`, `score` |
-| `POST /jobs/{kind}` | 위 작업들을 비동기로 제출 → `{job_id, position}` (kind: generate·extend·intake·research·verify) |
+| `POST /jobs/{kind}` | 위 작업들을 비동기로 제출 → `{job_id, position}` (kind: generate·extend·intake·intake_regenerate·research·verify) |
 | `GET /jobs/{id}` | `{status, position, result, error}` 폴링 |
 | `GET /jobs` | 큐 상태 (워커 수, 대기, 실행 중) |
 | `POST /generate/dry-run` | 조립된 프롬프트만 반환 (프롬프트 튜닝용) |

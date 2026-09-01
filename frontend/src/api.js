@@ -40,6 +40,12 @@ export function intake(form) {
   return post("/intake", toPayload(form));
 }
 
+/** 카드 재생성: 보기가 안 맞는 슬롯만 다시 → { cards[슬롯별 새 카드], slots, model, error? }
+ *  seen: { slot: [이미 보여준 보기 label] } — 같은 보기는 백엔드가 걸러냄. note: 지원자 메모(선택). */
+export function intakeRegenerate(form, slots, seen, note = "") {
+  return post("/intake/regenerate", { ...toPayload(form), slots, seen, note });
+}
+
 /** 문항 하나 생성 → { question_id, style, text, length, limit, model } */
 export function generate(form, questionId, styleId) {
   return post("/generate", { ...toPayload(form), question_id: questionId, style: styleId });

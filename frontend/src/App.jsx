@@ -122,6 +122,26 @@ function CardOptions({ card, value, onChange, compact = false }) {
   );
 }
 
+// "다른 보기 보기" — 보기가 안 맞을 때 메모(선택)와 함께 그 카드만 다시 생성
+function RegenerateBar({ slot, state, onNote, onRun, compact = false }) {
+  const busy = state?.busy;
+  const size = compact ? "text-xs py-1" : "text-xs py-1.5";
+  return (
+    <div className="space-y-1">
+      <div className="flex gap-2 flex-wrap items-center">
+        <input value={state?.note || ""} onChange={(e) => onNote(slot, e.target.value)} onKeyDown={(e) => e.key === "Enter" && !busy && onRun(slot)}
+          placeholder="보기가 안 맞나요? 이유를 한 줄 적으면 더 잘 맞춰요 (선택)" disabled={busy}
+          className={`${size} px-3 rounded-lg border border-slate-200 flex-1 min-w-[220px] disabled:bg-slate-50`} />
+        <button onClick={() => onRun(slot)} disabled={busy}
+          className={`${size} px-3 rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:text-slate-400 disabled:border-slate-200`}>
+          {busy ? "다시 만드는 중…" : `다른 보기 보기${state?.count ? ` (${state.count})` : ""}`}
+        </button>
+      </div>
+      {state?.error && <p className="text-xs text-red-600">{state.error}</p>}
+    </div>
+  );
+}
+
 // ───────────────────────── 컴포넌트 ─────────────────────────
 export default function ModooWriter() {
   const [step, setStep] = useState(0); // 0 입력, 1 생성·선택, 2 제출용 정리
@@ -142,6 +162,7 @@ export default function ModooWriter() {
   const [intakeBusy, setIntakeBusy] = useState(false);
   const [answers, setAnswers] = useState({});      // answers[slot] = { answer: string|string[]|null, unknown: bool }
   const [cardIdx, setCardIdx] = useState(0);
+  const [regen, setRegen] = useState({});          // regen[slot] = { busy: bool, note: string, error?: string, count: number }
   const [assistOpen, setAssistOpen] = useState({}); // assistOpen[qid] = bool (초안 화면의 "정보 보태기" 패널)
   const [server, setServer] = useState(null); // { ok, model, usage } | { ok:false, error }
   const [models, setModels] = useState([]);   // [{ id, name, note }] — 백엔드 config.yaml 의 목록
@@ -231,8 +252,9 @@ export default function ModooWriter() {
       setIntake(r);
       setAnswers({});
       setCardIdx(0);
-      if (r.ready || !r.cards?.length) await generateAll();
-      else setStep(1);
+      setRegen({});
+      if (!r.cards?.length) await generateAll();
+      else setStep(1);                // ready 여도 카드(멘토링 등)가 있으면 보여준다 — 건너뛰기 버튼이 있다
     } catch {
       setIntake(null);
       await generateAll();           // 인테이크가 실패해도 생성은 막지 않는다
@@ -243,6 +265,35 @@ export default function ModooWriter() {
   }
 
   const setAnswer = (slot, value) => setAnswers((p) => ({ ...p, [slot]: value }));
+
+  // 카드 재생성: 이 슬롯의 보기가 안 맞을 때 다른 방향의 보기를 다시 받는다 (LLM 1회).
+  // 이미 보여준 보기는 금지 목록으로 보내고, 그 슬롯의 답 중 보기에서 고른 것은 지운다(직접 입력한 "기타"는 남김).
+  async function regenerateCard(slot) {
+    const card = intake?.cards?.find((c) => c.slot === slot);
+    if (!card || regen[slot]?.busy) return;
+    const prev = regen[slot] || {};
+    const seen = { [slot]: [...(prev.seen || []), ...card.options.map((o) => o.label)] };
+    setRegen((p) => ({ ...p, [slot]: { ...prev, busy: true, error: undefined } }));
+    try {
+      const r = await api.intakeRegenerate(formForApi(), [slot], seen, prev.note || "");
+      const fresh = r.cards?.find((c) => c.slot === slot);
+      if (!fresh) throw new Error(r.error || "새 보기를 만들지 못했어요.");
+      setIntake((p) => ({ ...p, cards: p.cards.map((c) => (c.slot === slot ? fresh : c)) }));
+      const oldLabels = new Set(card.options.map((o) => o.label));
+      setAnswers((p) => {
+        const a = p[slot];
+        if (!a || a.unknown || !Array.isArray(a.answer)) return p;
+        const kept = a.answer.filter((x) => !oldLabels.has(x.replace(/ \(\d+명\)$/, "")));
+        return { ...p, [slot]: kept.length ? { answer: kept, unknown: false } : undefined };
+      });
+      setRegen((p) => ({ ...p, [slot]: { ...prev, busy: false, seen: seen[slot], count: (prev.count || 0) + 1, note: "" } }));
+    } catch (e) {
+      setRegen((p) => ({ ...p, [slot]: { ...prev, busy: false, error: String(e.message || e) } }));
+    } finally {
+      refreshHealth();
+    }
+  }
+  const setRegenNote = (slot, note) => setRegen((p) => ({ ...p, [slot]: { ...(p[slot] || {}), note } }));
 
   // 카드 한 장 넘기기 — 마지막이면 생성 시작
   function nextCard() {
@@ -477,8 +528,12 @@ export default function ModooWriter() {
           return (
             <div className="max-w-2xl mx-auto space-y-6">
               <div>
-                <h2 className="text-lg font-semibold">몇 가지만 골라주세요</h2>
-                <p className="text-sm text-slate-500 mt-1">정답이 아니어도 됩니다. 가장 가까운 것을 고르면 AI가 그걸 바탕으로 씁니다. 모르면 "모르겠어요" — 지어내지 않고 가정으로 씁니다.</p>
+                <h2 className="text-lg font-semibold">{intake.ready ? "설명이 충분해요 — 몇 가지만 더 고르면 좋아요" : "몇 가지만 골라주세요"}</h2>
+                <p className="text-sm text-slate-500 mt-1">
+                  {intake.ready ? "건너뛰어도 초안은 만들어집니다. " : ""}
+                  정답이 아니어도 됩니다. 가장 가까운 것을 고르면 AI가 그걸 바탕으로 씁니다. 모르면 "모르겠어요" — 지어내지 않고 가정으로 씁니다.
+                  보기가 내 상황과 안 맞으면 <b>다른 보기 보기</b>로 다시 받을 수 있습니다.
+                </p>
               </div>
 
               {(intake.summary || known.length > 0) && (
@@ -495,7 +550,8 @@ export default function ModooWriter() {
                     <span>{card.why}</span>
                   </div>
                   <h3 className="font-semibold text-base">{card.question}</h3>
-                  <CardOptions key={card.slot} card={card} value={answers[card.slot]} onChange={(v) => setAnswer(card.slot, v)} />
+                  <CardOptions key={`${card.slot}-${regen[card.slot]?.count || 0}`} card={card} value={answers[card.slot]} onChange={(v) => setAnswer(card.slot, v)} />
+                  <RegenerateBar slot={card.slot} state={regen[card.slot]} onNote={setRegenNote} onRun={regenerateCard} />
                   <div className="flex items-center justify-between pt-2 flex-wrap gap-2">
                     <button onClick={() => setCardIdx(Math.max(cardIdx - 1, 0))} disabled={cardIdx === 0} className="text-sm text-slate-500 underline disabled:text-slate-300">이전</button>
                     <div className="flex gap-2">
@@ -609,7 +665,8 @@ export default function ModooWriter() {
                             {cardsForQuestion(q.id).map((c) => (
                               <div key={c.slot} className="space-y-1.5">
                                 <div className="text-xs font-medium text-slate-700">{c.question} <span className="text-slate-400 font-normal">· {c.label}</span></div>
-                                <CardOptions card={c} value={answers[c.slot]} onChange={(v) => setAnswer(c.slot, v)} compact />
+                                <CardOptions key={`${c.slot}-${regen[c.slot]?.count || 0}`} card={c} value={answers[c.slot]} onChange={(v) => setAnswer(c.slot, v)} compact />
+                                <RegenerateBar slot={c.slot} state={regen[c.slot]} onNote={setRegenNote} onRun={regenerateCard} compact />
                               </div>
                             ))}
                           </div>

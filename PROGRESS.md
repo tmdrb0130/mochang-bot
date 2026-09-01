@@ -1,3 +1,57 @@
+# PROGRESS — 2026-09-01 세션 (다음: Llama 70B 머신에서 클론 후 이어서)
+
+> 이 절이 최신. 08-31 자율 세션 보고는 아래에 그대로 둠.
+
+## 오늘 한 것
+
+| # | 항목 | 상태 |
+|---|---|---|
+| 1 | **Q4-2 멘토링 카드** — 인테이크 슬롯 `mentoring` 추가(9번째). 항상 카드 생성, ready 계산에선 제외, MAX_CARDS(7)에 잘려도 자리 보장, multi 보기 최대 8 | ✅ |
+| 2 | **카드 재생성** — `POST /intake/regenerate` (+ `/jobs/intake_regenerate`). `prompts/intake_regenerate.md`, 이미 본 보기 금지(코드로도 필터), 지원자 메모, 다른 카드 답을 사실로 주입 | ✅ |
+| 3 | 프론트 — `RegenerateBar`(메모 + "다른 보기 보기 (n)") 인테이크 카드·정보 보태기 패널 양쪽. ready 여도 카드 있으면 보여주고 머리말만 다르게 | ✅ vite build 통과 |
+| 4 | 테스트 `tests/test_intake.py` 12개 추가 → **81 passed** (모델 호출 0). ASGI 스모크로 엔드포인트·jobs 경로 확인 | ✅ |
+| 5 | README · PROJECT_CONTEXT 6-1 갱신 | ✅ |
+
+**실호출은 안 했음** — 멘토링 카드 보기 품질, 재생성이 실제로 "다른 방향"을 내는지는 다음 세션에서 `/intake` 1회 + `/intake/regenerate` 1회로 확인할 것.
+
+## 조사 결과: 무료 한도 카운터가 부정확한 이유 (오늘 확인)
+
+배지 53/50 인데도 생성이 되던 문제. **카운터는 막지 않고 세기만 하는 게 설계**이고(README), 문제는 숫자가 틀리는 것:
+- `client.py _complete()` 가 **요청 보내기 전에** `hit()` → 429·504·5xx 실패, 폴백(최대 3회), 백오프 재시도까지 전부 카운트. `.usage.json` count 57 vs by_model 합 42.
+- 서버 밖 호출(CLI `test_generate --call`, curl, Vane 자체 호출)은 안 잡힘.
+- OpenRouter 쪽: `GET /auth/key` 는 크레딧($) 기준이라 무료 요청은 0, 채팅 응답 헤더에 `x-ratelimit-*` **없음**, **`GET /api/v1/activity` 만 일자·모델별 requests 를 주는데 관리 키(management key) 필요** (`403 Only management keys can fetch activity`).
+
+**할 일**: ① openrouter.ai/settings/keys 에서 management key 발급 → `.env` `OPENROUTER_MANAGEMENT_KEY` → `/health` 가 `/activity` 의 오늘 `:free` requests 합계를 60초 캐시로 표시(없으면 로컬 카운터 폴백). ② 로컬 카운터는 **성공 응답 후에만** `hit()`, 배지 문구 "약 N회(추정)".
+
+## 결정 사항
+
+- **검색은 Vane(구 Perplexica)** 로 간다. Vane 은 SearXNG+페이지 읽기+임베딩만 내장, **채팅 LLM 은 외부에서 붙여야 함**(검색 1회에 최소 2회 호출: 검색어 재작성 + 요약). → 무료 한도를 안 먹게 **Vane 의 채팅 LLM 은 로컬 Ollama 에 붙인다** (`vane_setup.py` 에 ollama 제공자 등록 추가 필요. 작은 모델이면 충분 — 우리 백엔드는 Vane 의 요약문은 버리고 sources 만 씀).
+- **RAG(로컬 문서 `/ingest`)는 LlamaIndex** 로 간다 (PROJECT_CONTEXT 는 "필요해지면 검토"였음 → 확정). 미착수.
+
+## 다음 세션 (Llama 70B 머신) 시작 순서
+
+```bash
+git clone https://github.com/tmdrb0130/mochang-bot.git && cd mochang-bot
+cp .env.example .env            # OPENROUTER_API_KEY 입력 (+ 위 관리 키)
+python -m venv .venv && .venv/Scripts/activate   # (Linux: source .venv/bin/activate)
+pip install -r backend/requirements.txt -r requirements-dev.txt
+python -m pytest -q             # 81 passed 확인
+cd frontend && npm install && cd ..
+# 서버: uvicorn backend.main:app --reload --port 8000 / 프론트: cd frontend && npm run dev
+# Vane: docker run -d -p 3000:3000 -v vane-data:/home/vane/data --name vane itzcrazykns1337/vane:latest
+```
+
+작업 순서 제안:
+1. `/intake` + `/intake/regenerate` 실호출 1회씩 → 멘토링 보기·재생성 품질 확인
+2. `config.yaml llm` 을 로컬 Ollama(70B)로 전환 → 같은 입력으로 MiniMax 무료 vs Llama 70B 비교 (PROJECT_CONTEXT 로드맵 "2~3단계에서 반드시")
+3. `vane_setup.py` 에 Ollama 제공자 등록 옵션(`--ollama http://host.docker.internal:11434 --model ...`) → `research.vane.enabled: true` → `/research` 1회로 `backend == "vane"` 확인, 통계 페이지(JS) 본문이 읽히는지
+4. **조사 단계(조사 B)**: 문항 단위 `/research` → **주제 단위**(시장 통계 / 기존 서비스·경쟁 / 고객 페인포인트 / 유사 BM / 정책·규제 / 논문·보고서)로 검색어 1회 + 사실 추출 1~2회, 각 사실에 `use_for` 문항 태그. 프론트에 "조사 결과" 단계(사실 카드 체크 → 문항별 `references`)
+5. **조사 기반 카드(조사 A)**: 인테이크 1차 판정 → customer/problem/alternative/revenue 슬롯은 조사 결과를 넣어 2차 카드 생성, 보기마다 `source` 표시. "조사해서 보기 만들기" 토글
+6. 한도 카운터 수정(위 "할 일")
+7. LlamaIndex `/ingest`
+
+---
+
 # PROGRESS — 2026-08-31 자율 작업 세션 보고
 
 > 사용자가 자리를 비운 사이(약 2~3시간) 진행한 작업의 결과. 다음 세션은 맨 아래 "다음 세션 시작 명령"부터.
