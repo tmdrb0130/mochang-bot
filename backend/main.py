@@ -12,21 +12,34 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .llm.client import LLMClient, LLMError, RateLimited, load_config
+from .llm.client import (RESEARCH_USAGE_PATH, LLMClient, LLMError, RateLimited,
+                         load_config, research_client_config)
 from .pipeline import assemble, generate, intake, verify
 from .rag import pipeline as research_pipeline
 from .rag.research import researcher_from_config
 
 config = load_config()
 client = LLMClient(config)
+
+# 조사(검색어 생성·사실 추출) 전용 클라이언트. config.yaml 의 research.llm 이 있으면 그 모델(로컬 70B)을 쓰고,
+# 없으면 주 클라이언트를 그대로 쓴다. 지원서 본문 작성은 항상 client(= llm:) 가 한다.
+_research_llm_config = research_client_config(config)
+research_client = (
+    LLMClient(_research_llm_config, usage_path=RESEARCH_USAGE_PATH, pin_model=True)
+    if _research_llm_config else client
+)
 researcher = researcher_from_config(config)
 research_cfg = research_pipeline.ResearchConfig.from_config(config)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await client.queue.start()      # 워커 N개 기동 (config.yaml max_workers)
+    if research_client is not client:
+        await research_client.queue.start()
     yield
     await client.queue.stop()
+    if research_client is not client:
+        await research_client.queue.stop()
 
 
 app = FastAPI(title="modoo-writer backend", lifespan=lifespan)
@@ -74,6 +87,9 @@ async def health():
         "ok": True,
         "model": client.model,
         "base_url": client.base_url,
+        # 조사 단계가 쓰는 모델 (본문 작성 모델과 다를 수 있음)
+        "research_model": research_client.model,
+        "research_base_url": research_client.base_url,
         "fallback": client.fallback,
         "usage": client.usage.snapshot(),   # 오늘 요청 수 / 한도 (OpenRouter 가 아니면 limit=None)
         "queue": client.queue.stats(),      # 동시성 층 상태 (워커 수, 대기, 실행 중)
@@ -96,11 +112,30 @@ class IntakeRequest(BaseModel):
     model: str | None = None
 
 
+async def _with_idea_research(form: dict) -> dict:
+    """인테이크·재생성 전에 아이디어 단위 웹 조사를 돌리고 결과를 form["references"] 에 넣는다.
+    조사는 조사 전용 모델(로컬 라마)이 하고, 카드 생성은 client(작성 모델)가 한다.
+    조사가 실패해도 카드 생성은 계속한다 — 근거 없이 만들 뿐 흐름을 막지 않는다."""
+    try:
+        found = await research_pipeline.run_idea_research(research_client, researcher, form, research_cfg)
+    except Exception as e:                      # 검색 실패·타임아웃 등
+        return {"facts": [], "queries": [], "error": str(e)[:200]}
+    form["references"] = found.get("facts") or []
+    return found
+
+
 @app.post("/intake")
 async def intake_endpoint(req: IntakeRequest):
-    """아이디어를 읽고 슬롯별 확인/부족 판정 + 부족한 슬롯의 '보기 고르기' 카드 생성 (LLM 1회).
+    """웹 조사(라마) → 슬롯별 확인/부족 판정 + 부족한 슬롯의 '보기 고르기' 카드 생성.
+    보기는 조사로 확인된 사실에 근거해 만들어지고, 근거가 있으면 보기마다 source 가 붙는다.
     ready=True 면 프론트는 카드 단계를 건너뛰고 바로 생성."""
-    return await intake.run_intake(client, req.model_dump())
+    form = req.model_dump()
+    found = await _with_idea_research(form)
+    out = await intake.run_intake(client, form)
+    out["research"] = {"facts": found.get("facts") or [], "queries": found.get("queries") or [],
+                       "backend": found.get("backend"), "cached": found.get("cached"),
+                       **({"error": found["error"]} if found.get("error") else {})}
+    return out
 
 
 class IntakeRegenerateRequest(IntakeRequest):
@@ -120,7 +155,10 @@ async def intake_regenerate_endpoint(req: IntakeRegenerateRequest):
     """지원자가 '보기가 안 맞아요'라고 한 슬롯의 카드만 다시 생성 (LLM 1회). → {cards, slots, model, error?}
     프론트는 돌아온 cards 를 슬롯 기준으로 기존 카드와 바꿔 끼운다."""
     f = req.model_dump()
-    return await intake.regenerate_cards(client, _regenerate_form(f), f["slots"], f.get("seen") or {}, f.get("note") or "", f.get("keep") or {})
+    form = _regenerate_form(f)
+    # 재생성 보기도 조사 근거 위에서 만든다. 같은 아이디어면 디스크 캐시가 걸려 추가 조사 비용이 거의 없다.
+    await _with_idea_research(form)
+    return await intake.regenerate_cards(client, form, f["slots"], f.get("seen") or {}, f.get("note") or "", f.get("keep") or {})
 
 
 class ResearchRequest(BaseModel):
@@ -141,7 +179,7 @@ async def research_endpoint(req: ResearchRequest):
     응답의 facts 를 /generate 의 references 로 넘기면 [웹 참고자료] 섹션으로 주입된다."""
     form = req.model_dump()
     try:
-        return await research_pipeline.run_research(client, researcher, form, req.question_id, research_cfg)
+        return await research_pipeline.run_research(research_client, researcher, form, req.question_id, research_cfg)
     except assemble.PromptNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
 

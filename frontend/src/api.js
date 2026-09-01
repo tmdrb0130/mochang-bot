@@ -46,14 +46,23 @@ export function intakeRegenerate(form, slots, seen, note = "", keep = {}) {
   return post("/intake/regenerate", { ...toPayload(form), slots, seen, note, keep });
 }
 
-/** 문항 하나 생성 → { question_id, style, text, length, limit, model } */
-export function generate(form, questionId, styleId) {
-  return post("/generate", { ...toPayload(form), question_id: questionId, style: styleId });
+/** 웹 조사: 검색어 생성 → 검색 → 본문 추출 → 출처 검증된 사실 목록.
+ *  백엔드의 조사 전용 모델(config.yaml research.llm — 지금은 로컬 라마 70B)이 처리한다.
+ *  → { question_id, queries, backend, result_count, pages[{url,title}], facts[{fact,quote,source_title,url,date,publisher,use_for}], references, cached }
+ *  결과의 facts 를 generate/extend 의 references 로 넘기면 [웹 참고자료] 로 주입된다. */
+export function research(form, questionId) {
+  return post("/research", { ...toPayload(form), question_id: questionId });
+}
+
+/** 문항 하나 생성 → { question_id, style, text, length, limit, model }
+ *  references: /research 의 facts (없으면 조사 없이 생성) */
+export function generate(form, questionId, styleId, references = null) {
+  return post("/generate", { ...toPayload(form), question_id: questionId, style: styleId, ...(references?.length ? { references } : {}) });
 }
 
 /** 기존 글 뒤에 이어쓰기 → { text(합친 전체), added, length, limit, model } */
-export function extend(form, questionId, styleId, current) {
-  return post("/extend", { ...toPayload(form), question_id: questionId, style: styleId, current });
+export function extend(form, questionId, styleId, current, references = null) {
+  return post("/extend", { ...toPayload(form), question_id: questionId, style: styleId, current, ...(references?.length ? { references } : {}) });
 }
 
 /** 서버 상태 → { ok, model, base_url, fallback, usage: { used, limit, remaining, reset } } */

@@ -114,7 +114,8 @@ async def test_regenerate_keeps_picked_options_in_front_and_replaces_the_rest():
     seen = {"problem": ["남은 반찬 처리 부담", "저녁 장보기 귀찮음"]}
     out = await I.regenerate_cards(client, FORM, ["problem"], seen, keep=keep)
     opts = out["cards"][0]["options"]
-    assert opts[0] == {"label": "남은 반찬 처리 부담", "hint": "원래 힌트"}       # 유지 보기가 맨 앞, 힌트도 원래 것
+    # source 는 웹 조사 근거 표기 — keep 으로 넘어온 보기엔 없으므로 빈 문자열
+    assert opts[0] == {"label": "남은 반찬 처리 부담", "hint": "원래 힌트", "source": ""}  # 유지 보기가 맨 앞, 힌트도 원래 것
     assert [o["label"] for o in opts[1:]] == ["퇴근 후 저녁 준비 시간", "메뉴 고르기 피로"]
     system = client.calls[0]["system"]
     assert "이미 고른 보기" in system and "problem (해결할 불편): 남은 반찬 처리 부담" in system

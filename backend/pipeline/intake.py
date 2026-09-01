@@ -44,11 +44,13 @@ def _normalize_card(c: dict, banned: set[str] | None = None) -> dict | None:
         return None
     ctype = c.get("type") if c.get("type") in VALID_TYPES else "single"
     options = [
-        {"label": str(o.get("label", "")).strip(), "hint": str(o.get("hint", "")).strip()}
+        # source: 웹 조사에서 나온 근거 표기("매체, 연도"). 근거 없이 만든 보기는 빈 문자열.
+        {"label": str(o.get("label", "")).strip(), "hint": str(o.get("hint", "")).strip(),
+         "source": str(o.get("source", "") or "").strip()}
         for o in c.get("options", []) if isinstance(o, dict) and str(o.get("label", "")).strip()
     ]
     # 무료 모델이 간헐적으로 한자·가나를 섞음 → 그런 보기는 버린다
-    options = [o for o in options if not _FOREIGN_CJK.search(o["label"] + o["hint"])]
+    options = [o for o in options if not _FOREIGN_CJK.search(o["label"] + o["hint"] + o["source"])]
     if banned:
         options = [o for o in options if o["label"] not in banned]
     seen: set[str] = set()
@@ -130,7 +132,7 @@ async def run_intake(client: LLMClient, form: dict) -> dict:
 
 
 def _clean_options(items) -> list[dict]:
-    """[{label, hint}] 정리 — 빈 label 제거, 중복 제거."""
+    """[{label, hint, source}] 정리 — 빈 label 제거, 중복 제거."""
     out, seen = [], set()
     for o in items or []:
         if not isinstance(o, dict):
@@ -138,7 +140,8 @@ def _clean_options(items) -> list[dict]:
         label = str(o.get("label", "")).strip()
         if label and label not in seen:
             seen.add(label)
-            out.append({"label": label, "hint": str(o.get("hint", "")).strip()})
+            out.append({"label": label, "hint": str(o.get("hint", "")).strip(),
+                        "source": str(o.get("source", "") or "").strip()})
     return out
 
 

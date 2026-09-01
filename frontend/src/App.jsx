@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api.js";
 
 // ───────────────────────── 데이터 정의 ─────────────────────────
@@ -42,6 +42,8 @@ const QUESTIONS = [
 
 // 브라우저 쪽 동시 요청 수. 실제 LLM 동시성은 백엔드 config.yaml 의 concurrency 가 최종 제한한다.
 const PARALLEL = 2;
+// 조사 동시 실행 수. 백엔드 조사 모델은 로컬 70B 라 무료 한도가 없어 생성보다 높여도 된다.
+const RESEARCH_PARALLEL = 3;
 
 async function runLimited(tasks, limit) {
   const queue = [...tasks];
@@ -94,9 +96,12 @@ function CardOptions({ card, value, onChange, compact = false }) {
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         {card.options.map((o) => (
-          <button key={o.label} onClick={() => toggle(o.label)} title={o.hint}
+          <button key={o.label} onClick={() => toggle(o.label)} title={o.source ? `${o.hint}
+근거: ${o.source}` : o.hint}
             className={`${btn} rounded-lg border text-left ${isOn(o.label) ? "border-indigo-600 bg-indigo-50 text-indigo-900" : "border-slate-200 hover:border-slate-400"}`}>
             {isOn(o.label) && <span className="mr-1">✓</span>}{o.label}
+            {/* 웹 조사에서 근거가 나온 보기에만 출처를 붙인다 — 지어낸 보기와 구분된다 */}
+            {o.source && <span className="ml-1.5 text-[10px] text-sky-700 bg-sky-100 rounded px-1 py-0.5 align-middle">{o.source}</span>}
           </button>
         ))}
         <button onClick={() => onChange({ answer: null, unknown: true })}
@@ -143,6 +148,38 @@ function RegenerateBar({ slot, state, onNote, onRun, compact = false }) {
 }
 
 // ───────────────────────── 컴포넌트 ─────────────────────────
+// ───────────────────────── 웹 조사 근거 패널 ─────────────────────────
+// 백엔드 /research 결과. 조사는 로컬 라마 70B 가 하고, 이 사실들이 [웹 참고자료] 로 작성 모델에 넘어간다.
+function ResearchPanel({ state }) {
+  const [open, setOpen] = useState(false);
+  if (!state) return null;
+  if (state.busy) return <div className="px-4 py-2 text-xs text-slate-500 bg-sky-50 border-b border-sky-100">웹에서 근거 자료를 조사하는 중… (라마 70B)</div>;
+  if (state.error) return <div className="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-b border-amber-100">조사 실패 — 참고자료 없이 작성합니다. ({state.error})</div>;
+  const facts = state.facts || [];
+  if (!facts.length) return <div className="px-4 py-2 text-xs text-slate-500 bg-slate-50 border-b border-slate-200">조사에서 인용할 만한 근거를 못 찾았습니다. 참고자료 없이 작성했습니다.</div>;
+  return (
+    <div className="bg-sky-50 border-b border-sky-100">
+      <button onClick={() => setOpen((v) => !v)} className="w-full px-4 py-2 text-xs text-left text-sky-800 hover:bg-sky-100">
+        조사 근거 {facts.length}건{state.cached ? " (캐시)" : ""} — 검색어: {(state.queries || []).join(" / ")} {open ? "▲" : "▼"}
+      </button>
+      {open && (
+        <ol className="px-5 pb-3 space-y-2 text-xs text-slate-700 list-decimal">
+          {facts.map((f, i) => (
+            <li key={i}>
+              <div>{f.fact}</div>
+              <div className="text-slate-500">
+                {f.publisher || f.source_title || "출처 미상"}{f.date ? `, ${String(f.date).slice(0, 4)}` : ""}
+                {f.use_for ? ` · ${f.use_for}` : ""}
+                {f.url && <> · <a href={f.url} target="_blank" rel="noreferrer" className="text-sky-700 underline">원문</a></>}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
 export default function ModooWriter() {
   const [step, setStep] = useState(0); // 0 입력, 1 생성·선택, 2 제출용 정리
   const [form, setForm] = useState({
@@ -167,6 +204,12 @@ export default function ModooWriter() {
   const [server, setServer] = useState(null); // { ok, model, usage } | { ok:false, error }
   const [models, setModels] = useState([]);   // [{ id, name, note }] — 백엔드 config.yaml 의 목록
   const [modelUsed, setModelUsed] = useState({}); // modelUsed[qid][styleId] = 실제 응답한 모델 id
+  // ── 웹 조사 ──
+  // 생성 전에 문항마다 /research 를 돌려 출처 있는 사실을 모으고, 그걸 references 로 생성에 넘긴다.
+  // 조사는 백엔드의 조사 전용 모델(로컬 라마 70B)이 하고, 본문 작성은 llm: 모델(OpenRouter)이 한다.
+  const [researchState, setResearchState] = useState({}); // researchState[qid] = { busy, error, facts, queries, pages, backend }
+  // 생성 태스크가 즉시 읽어야 해서(setState 는 비동기) 사실은 ref 에도 둔다.
+  const researchRef = useRef({});
 
   const refreshHealth = () =>
     api.health()
@@ -220,6 +263,23 @@ export default function ModooWriter() {
   const setErr = (qid, sid, value) =>
     setErrors((p) => ({ ...p, [qid]: { ...(p[qid] || {}), [sid]: value } }));
 
+  // 문항 하나에 대한 조사. 이미 받아온 게 있으면 재사용(백엔드도 7일 디스크 캐시).
+  async function ensureResearch(qid) {
+    if (researchRef.current[qid]) return researchRef.current[qid];
+    setResearchState((p) => ({ ...p, [qid]: { ...(p[qid] || {}), busy: true, error: "" } }));
+    try {
+      const r = await api.research(formForApi(), qid);
+      researchRef.current[qid] = r.facts || [];
+      setResearchState((p) => ({ ...p, [qid]: { busy: false, error: "", facts: r.facts || [], queries: r.queries || [], pages: r.pages || [], backend: r.backend, cached: r.cached } }));
+      return researchRef.current[qid];
+    } catch (e) {
+      // 조사가 실패해도 생성은 계속한다 (참고자료 없이 작성).
+      setResearchState((p) => ({ ...p, [qid]: { busy: false, error: String(e.message || e), facts: [] } }));
+      researchRef.current[qid] = [];
+      return [];
+    }
+  }
+
   async function generateOne(q, style) {
     if (q.id === "q10" && !form.q10Public) {
       // 비공개 선택 → AI 호출 없이 고정 문장
@@ -231,7 +291,8 @@ export default function ModooWriter() {
     }
     setStat(q.id, style.id, "loading");
     try {
-      const res = await api.generate(formForApi(), q.id, style.id);
+      const references = researchRef.current[q.id] || [];
+      const res = await api.generate(formForApi(), q.id, style.id, references);
       setText(q.id, style.id, res.text.slice(0, q.limit));
       setUsed(q.id, style.id, res.model);
       setStat(q.id, style.id, "done");
@@ -301,6 +362,9 @@ export default function ModooWriter() {
   async function generateAll() {
     setRunning(true);
     setStep(2);
+    // 조사 → 작성 순서. 조사는 문항당 40~60초 걸리므로 병렬로 돌린다.
+    // 조사는 선택이 아니라 필수 단계다 — 근거 없는 지원서를 만들지 않기 위해.
+    await runLimited(activeQuestions.map((q) => () => ensureResearch(q.id)), RESEARCH_PARALLEL);
     const tasks = [];
     for (const q of activeQuestions) for (const s of selectedStyles) tasks.push(() => generateOne(q, s));
     await runLimited(tasks, PARALLEL);
@@ -313,7 +377,7 @@ export default function ModooWriter() {
     if (q.limit - current.length < 150) return;
     setStat(q.id, style.id, "loading");
     try {
-      const res = await api.extend(formForApi(), q.id, style.id, current);
+      const res = await api.extend(formForApi(), q.id, style.id, current, researchRef.current[q.id] || []);
       setText(q.id, style.id, res.text.slice(0, q.limit));
       setUsed(q.id, style.id, res.model);
       setStat(q.id, style.id, "done");
@@ -485,6 +549,11 @@ export default function ModooWriter() {
               </section>
 
               <section>
+<div className="mb-4 p-3 rounded-lg bg-sky-50 border border-sky-100 text-xs text-slate-600">
+                  <span className="font-medium text-slate-800">웹 조사가 함께 진행됩니다.</span> 아이디어와 문항마다 웹을 검색해
+                  출처가 확인된 사실만 모으고, 그 근거 위에서 보기와 초안을 만듭니다. 조사는 로컬 라마 70B 가 하므로 무료 한도를 쓰지 않습니다.
+                  문항당 40~60초가 더 걸립니다.
+                </div>
                 <h2 className="font-semibold mb-2">받아볼 글 스타일</h2>
                 <div className="space-y-2">
                   {STYLES.map((s) => {
@@ -613,6 +682,8 @@ export default function ModooWriter() {
                       })}
                     </div>
                   </div>
+
+                  <ResearchPanel state={researchState[q.id]} />
 
                   <div className="px-5 pb-4">
                     {st === "loading" && !text && <div className="h-32 rounded-lg bg-slate-50 animate-pulse" />}

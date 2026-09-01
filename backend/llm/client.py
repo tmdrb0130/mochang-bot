@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = BACKEND_DIR / "config.yaml"
 USAGE_PATH = BACKEND_DIR / ".usage.json"
+# 조사 전용 클라이언트(로컬 70B)는 별도 파일에 센다 — OpenRouter 무료 한도 카운터를 오염시키지 않기 위해.
+RESEARCH_USAGE_PATH = BACKEND_DIR / ".usage.research.json"
 
 _ENV_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
@@ -62,7 +64,28 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     with open(path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
     config["llm"]["api_key"] = _expand_env(config["llm"].get("api_key", ""))
+    rl = (config.get("research") or {}).get("llm")
+    if isinstance(rl, dict) and rl.get("api_key"):
+        rl["api_key"] = _expand_env(rl["api_key"])
     return config
+
+
+def research_client_config(config: dict) -> dict | None:
+    """research.llm 이 있으면 조사 전용 LLMClient 용 설정을 만든다. 없으면 None (주 클라이언트를 공용).
+
+    조사(검색어 생성·사실 추출)는 로컬 70B 로 돌리고, 지원서 본문 작성은 llm: 이 가리키는 모델이 한다.
+    조사 클라이언트는 UI 의 모델 선택(models:)을 따르지 않는다 — 다른 서버라 모델 id 가 통하지 않기 때문."""
+    rl = (config.get("research") or {}).get("llm")
+    if not isinstance(rl, dict) or not rl.get("base_url"):
+        return None
+    return {
+        "llm": rl,
+        "models": [],
+        "fallback": False,
+        "daily_request_limit": None,
+        "max_workers": rl.get("max_workers") or config.get("max_workers") or 4,
+        "retry": config.get("retry") or {},
+    }
 
 
 class UsageCounter:
@@ -118,7 +141,8 @@ class UsageCounter:
 
 
 class LLMClient:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, usage_path: Path = USAGE_PATH, pin_model: bool = False):
+        # pin_model=True 면 요청의 model 을 무시하고 항상 config 의 모델을 쓴다 (조사 전용 클라이언트).
         c = config["llm"]
         self.base_url = c["base_url"]
         self.model = c["model"]
@@ -129,7 +153,8 @@ class LLMClient:
         self.model_ids = [m["id"] for m in self.models] or [self.model]
         self.is_openrouter = "openrouter.ai" in self.base_url
         self.fallback = bool(config.get("fallback", True)) and self.is_openrouter and len(self.model_ids) > 1
-        self.usage = UsageCounter(USAGE_PATH, config.get("daily_request_limit") if self.is_openrouter else None)
+        self.pin_model = pin_model
+        self.usage = UsageCounter(usage_path, config.get("daily_request_limit") if self.is_openrouter else None)
         # 동시 요청 수 제한 — asyncio.Queue + 워커 N개 (jobs.py). 모든 모델 호출이 이 큐를 거친다.
         # OpenRouter 로 나가는 동시 요청 = max_workers. 429/일시 오류는 워커가 지수 백오프로 재시도.
         retry = config.get("retry") or {}
@@ -147,6 +172,8 @@ class LLMClient:
 
     def resolve_model(self, model: str | None) -> str:
         """요청에서 온 model 을 검증. 목록에 없는 id 는 거부(유료 모델 오남용 방지)."""
+        if self.pin_model:
+            return self.model   # 조사 전용 클라이언트 — 다른 서버라 UI 의 모델 id 가 통하지 않는다
         if not model:
             return self.model
         if self.models and model not in self.model_ids:

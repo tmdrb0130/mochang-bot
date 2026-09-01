@@ -259,3 +259,62 @@ async def run_research(client: LLMClient, researcher: Researcher, form: dict, qu
     }
     cache.set(key, [out])
     return out
+
+# ────────────────────────── 아이디어 단위 조사 (인테이크 카드용) ──────────────────────────
+# 문항 단위 조사(run_research)와 달리, 아이디어 자체를 주제별로 훑는다.
+# 인테이크 카드의 보기를 지어내지 않고 "실제로 있는 서비스·실제 고객 불만·실제 통계"에 근거해 만들기 위한 재료다.
+
+IDEA_TOPICS = [
+    "이미 있는 비슷한 서비스·경쟁 업체 (이름과 방식)",
+    "이 분야 고객이 실제로 겪는 불편·불만",
+    "시장 규모·이용자 수·성장률 같은 통계",
+    "비슷한 서비스가 돈을 버는 방식(수수료·구독·광고 등)",
+]
+
+IDEA_RESEARCH_KEY = "__idea__"
+
+
+def _idea_meta(form: dict) -> dict:
+    """run_research 의 문항 meta 자리에 넣을 '아이디어 조사' 의사(擬似) 문항."""
+    return {
+        "label": "아이디어 조사",
+        "title": "이 아이디어를 판단하는 데 필요한 사실 모으기",
+        "body": (
+            "아래 주제별로 실제 사례와 수치를 찾는다. 지원서 문항이 아니라 아이디어 자체를 파악하기 위한 조사다.\n"
+            + "\n".join(f"- {t}" for t in IDEA_TOPICS)
+        ),
+    }
+
+
+async def run_idea_research(client: LLMClient, researcher: Researcher, form: dict,
+                            cfg: ResearchConfig | None = None, cache: DiskCache | None = None,
+                            fetch=fetch_page) -> dict:
+    """아이디어 전체에 대한 주제 단위 조사. 모델 호출 2회(검색어 생성, 사실 추출).
+
+        facts = await run_idea_research(research_client, researcher, form, cfg)
+        form["references"] = facts["facts"]      # 인테이크 프롬프트에 [웹 참고자료] 로 주입
+
+    run_research 와 같은 부품을 쓰고 문항 meta 만 '아이디어 조사'로 바꾼 것이다."""
+    cfg = cfg or ResearchConfig()
+    cache = cache if cache is not None else DiskCache(ttl=cfg.cache_ttl)
+    key = _cache_key(form, IDEA_RESEARCH_KEY)
+    hit = cache.get(key)
+    if hit is not None and hit and isinstance(hit[0], dict) and "facts" in hit[0]:
+        return {**hit[0], "cached": True}
+
+    meta = _idea_meta(form)
+    queries = await generate_queries(client, form, meta, cfg)
+    results, pages = await collect_pages(researcher, queries, cfg, fetch=fetch)
+    facts = await extract_facts(client, form, meta, pages, cfg)
+    out = {
+        "question_id": IDEA_RESEARCH_KEY,
+        "queries": queries,
+        "backend": researcher.last_backend,
+        "result_count": len(results),
+        "pages": [{"url": p["url"], "title": p.get("title", ""), "from_snippet": p.get("from_snippet", False)} for p in pages],
+        "facts": facts,
+        "references": format_references(facts),
+        "cached": False,
+    }
+    cache.set(key, [out])
+    return out
