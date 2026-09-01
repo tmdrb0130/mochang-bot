@@ -21,8 +21,8 @@ const TRACKS = {
 const Q10_PRIVATE_TEXT = "아이디어 보호를 위해 심사 기간 동안은 공개하지 않겠습니다.";
 
 const STYLES = [
+  { id: "logic", name: "논리·근거형", desc: "문제 → 원인 → 해결 → 근거 순서로 설득하는 글 (기본 — 실호출 품질이 가장 안정적)" },
   { id: "story", name: "스토리텔링형", desc: "경험과 장면으로 시작해 공감을 끌어내는 글" },
-  { id: "logic", name: "논리·근거형", desc: "문제 → 원인 → 해결 → 근거 순서로 설득하는 글" },
   { id: "plain", name: "간결·실무형", desc: "짧은 문장으로 핵심만 담백하게 정리한 글" },
 ];
 
@@ -149,7 +149,7 @@ export default function ModooWriter() {
     track: "tech", idea: "", isBusiness: false, currentItem: "", team: "팀원 없음", capability: "",
     field: "",          // Q6 사업 분야 — 사람이 직접 선택
     q10Public: true,    // Q10 공개 여부 — 공개면 AI 생성, 비공개면 고정 문장
-    styles: ["story"], // 테스트 중엔 기본 1개 (무료 티어 요청 수 절약). 사용자가 더 고를 수 있음.
+    styles: ["logic"], // 기본 1개 (무료 티어 요청 수 절약). 2026-09-01: 논리·근거형이 실호출 품질 최고라 기본으로. 사용자가 더 고를 수 있음.
   });
   const [texts, setTexts] = useState({});   // texts[qid][styleId] = string
   const [status, setStatus] = useState({}); // status[qid][styleId] = 'loading' | 'done' | 'error'
@@ -267,25 +267,21 @@ export default function ModooWriter() {
   const setAnswer = (slot, value) => setAnswers((p) => ({ ...p, [slot]: value }));
 
   // 카드 재생성: 이 슬롯의 보기가 안 맞을 때 다른 방향의 보기를 다시 받는다 (LLM 1회).
-  // 이미 보여준 보기는 금지 목록으로 보내고, 그 슬롯의 답 중 보기에서 고른 것은 지운다(직접 입력한 "기타"는 남김).
+  // 이미 고른 보기(keep)는 그대로 남기고 나머지만 바뀐다. 이미 보여준 보기는 금지 목록(seen). 답(answers)은 건드리지 않는다.
   async function regenerateCard(slot) {
     const card = intake?.cards?.find((c) => c.slot === slot);
     if (!card || regen[slot]?.busy) return;
     const prev = regen[slot] || {};
     const seen = { [slot]: [...(prev.seen || []), ...card.options.map((o) => o.label)] };
+    const pickedRaw = answers[slot]?.answer;
+    const pickedList = (Array.isArray(pickedRaw) ? pickedRaw : pickedRaw ? [pickedRaw] : []).map((x) => x.replace(/ \(\d+명\)$/, ""));
+    const keep = { [slot]: card.options.filter((o) => pickedList.includes(o.label)) };
     setRegen((p) => ({ ...p, [slot]: { ...prev, busy: true, error: undefined } }));
     try {
-      const r = await api.intakeRegenerate(formForApi(), [slot], seen, prev.note || "");
+      const r = await api.intakeRegenerate(formForApi(), [slot], seen, prev.note || "", keep);
       const fresh = r.cards?.find((c) => c.slot === slot);
       if (!fresh) throw new Error(r.error || "새 보기를 만들지 못했어요.");
       setIntake((p) => ({ ...p, cards: p.cards.map((c) => (c.slot === slot ? fresh : c)) }));
-      const oldLabels = new Set(card.options.map((o) => o.label));
-      setAnswers((p) => {
-        const a = p[slot];
-        if (!a || a.unknown || !Array.isArray(a.answer)) return p;
-        const kept = a.answer.filter((x) => !oldLabels.has(x.replace(/ \(\d+명\)$/, "")));
-        return { ...p, [slot]: kept.length ? { answer: kept, unknown: false } : undefined };
-      });
       setRegen((p) => ({ ...p, [slot]: { ...prev, busy: false, seen: seen[slot], count: (prev.count || 0) + 1, note: "" } }));
     } catch (e) {
       setRegen((p) => ({ ...p, [slot]: { ...prev, busy: false, error: String(e.message || e) } }));
@@ -532,7 +528,7 @@ export default function ModooWriter() {
                 <p className="text-sm text-slate-500 mt-1">
                   {intake.ready ? "건너뛰어도 초안은 만들어집니다. " : ""}
                   정답이 아니어도 됩니다. 가장 가까운 것을 고르면 AI가 그걸 바탕으로 씁니다. 모르면 "모르겠어요" — 지어내지 않고 가정으로 씁니다.
-                  보기가 내 상황과 안 맞으면 <b>다른 보기 보기</b>로 다시 받을 수 있습니다.
+                  보기가 내 상황과 안 맞으면 <b>다른 보기 보기</b> — 이미 고른 보기는 남기고 나머지만 바뀝니다.
                 </p>
               </div>
 

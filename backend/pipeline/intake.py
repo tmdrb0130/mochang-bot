@@ -129,31 +129,51 @@ async def run_intake(client: LLMClient, form: dict) -> dict:
     return out
 
 
-def _regenerate_prompt(slots: list[str], seen: dict[str, list[str]], note: str) -> str:
-    """intake.md + intake_regenerate.md(다시 만들 슬롯 · 금지 보기 · 지원자 메모)."""
-    seen_lines = []
-    for slot in slots:
-        labels = [str(x).strip() for x in (seen.get(slot) or []) if str(x).strip()]
-        seen_lines.append(f"- {slot} ({SLOT_LABELS[slot]}): " + (" / ".join(labels) if labels else "(없음)"))
+def _clean_options(items) -> list[dict]:
+    """[{label, hint}] 정리 — 빈 label 제거, 중복 제거."""
+    out, seen = [], set()
+    for o in items or []:
+        if not isinstance(o, dict):
+            continue
+        label = str(o.get("label", "")).strip()
+        if label and label not in seen:
+            seen.add(label)
+            out.append({"label": label, "hint": str(o.get("hint", "")).strip()})
+    return out
+
+
+def _regenerate_prompt(slots: list[str], seen: dict[str, list[str]], keep: dict[str, list[dict]], note: str) -> str:
+    """intake.md + intake_regenerate.md(다시 만들 슬롯 · 유지할 보기 · 금지 보기 · 지원자 메모)."""
+    def lines(getter):
+        out = []
+        for slot in slots:
+            labels = getter(slot)
+            out.append(f"- {slot} ({SLOT_LABELS[slot]}): " + (" / ".join(labels) if labels else "(없음)"))
+        return "\n".join(out)
+
     extra = assemble.render("intake_regenerate.md",
                             slots=", ".join(f"{s} ({SLOT_LABELS[s]})" for s in slots),
-                            seen="\n".join(seen_lines),
+                            keep=lines(lambda s: [o["label"] for o in keep.get(s, [])]),
+                            seen=lines(lambda s: [str(x).strip() for x in (seen.get(s) or []) if str(x).strip()]),
                             note=note.strip() or "(없음)")
     return assemble.read_prompt("intake.md") + "\n\n" + extra
 
 
 async def regenerate_cards(client: LLMClient, form: dict, slots: list[str],
-                           seen: dict[str, list[str]] | None = None, note: str = "") -> dict:
+                           seen: dict[str, list[str]] | None = None, note: str = "",
+                           keep: dict[str, list[dict]] | None = None) -> dict:
     """지정한 슬롯의 카드만 다시 만든다 (LLM 1회). → {cards, slots(요청한 것), model, error?}
 
     seen: {slot: [이미 보여준 보기 label...]} — 결과에서 같은 보기는 걸러낸다(모델이 무시해도 코드가 막음).
+    keep: {slot: [{label, hint}...]} — 지원자가 이미 고른 보기. 결과 카드 맨 앞에 그대로 남기고, 새 보기는 그 뒤에 붙는다.
     form.answers 에 다른 카드의 답이 있으면 [지원자가 확인한 사실]로 들어가 그와 어울리는 보기를 낸다.
     """
     slots = [s for s in slots if s in SLOT_ORDER]
     if not slots:
         raise ValueError("다시 만들 슬롯이 없습니다. slots 에 " + ", ".join(SLOT_ORDER) + " 중 하나 이상을 넣어주세요.")
     seen = seen or {}
-    system = _regenerate_prompt(slots, seen, note)
+    keep = {s: _clean_options(v) for s, v in (keep or {}).items() if s in SLOT_ORDER}
+    system = _regenerate_prompt(slots, seen, keep, note)
     user = assemble.build_context(form)
     res = await client.complete(system, user, model=form.get("model"))
     try:
@@ -162,12 +182,20 @@ async def regenerate_cards(client: LLMClient, form: dict, slots: list[str],
         return {"cards": [], "slots": slots, "model": res.model, "error": "카드를 다시 만들지 못했습니다. 한 번 더 눌러보세요."}
     cards = []
     for c in parsed.get("cards", []):
-        if not isinstance(c, dict):
+        if not isinstance(c, dict) or c.get("slot") not in slots or any(k["slot"] == c["slot"] for k in cards):
             continue
-        banned = {str(x).strip() for x in seen.get(c.get("slot"), []) or []}
-        card = _normalize_card(c, banned=banned)
-        if card is None or card["slot"] not in slots or any(k["slot"] == card["slot"] for k in cards):
+        kept = keep.get(c["slot"], [])
+        banned = {str(x).strip() for x in seen.get(c["slot"], []) or []} | {o["label"] for o in kept}
+        # 새 보기(금지·유지 보기 제외)가 1개 이상 있어야 의미가 있다. 유지 보기 + 새 보기를 합쳐 카드로.
+        fresh = [o for o in _clean_options(c.get("options")) if o["label"] not in banned and not _FOREIGN_CJK.search(o["label"] + o["hint"])]
+        if not fresh:
             continue
+        card = _normalize_card({**c, "options": kept + fresh})
+        if card is None:
+            continue
+        # _normalize_card 의 상한(MAX_OPTIONS)에 유지 보기가 밀리지 않도록: 유지 보기는 전부 + 새 보기 최소 2개
+        limit = max(MAX_OPTIONS[card["type"]], len(kept) + 2)
+        card["options"] = (kept + fresh)[:limit]
         cards.append(card)
     cards.sort(key=lambda c: CARD_PRIORITY.index(c["slot"]))
     out = {"cards": cards, "slots": slots, "model": res.model}

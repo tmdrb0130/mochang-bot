@@ -178,8 +178,9 @@ prompts/
 **슬롯 9개**: customer, problem, alternative, solution, revenue, first_step, evidence(number — 몇 명), capability("이런 것도 경험이에요" 체크리스트), **mentoring**(2026-09-01 추가 — Q4-2 "책임멘토 도움" 전용 multi 카드. 이 아이디어에서 막힐 영역을 보기로, hint 는 멘토에게 물을 질문. 거의 항상 missing 이므로 `OPTIONAL_SLOTS` 로 두어 ready 계산에서 제외하고, `ALWAYS_CARD_SLOTS` 로 MAX_CARDS(7)에 잘려도 자리 보장)
 **모든 카드는 다중 선택**(2026-08-31 결정 — "가장 가까운 것 하나"보다 해당되는 것 전부 고르는 게 부담이 적고 정보도 많음). 답은 항상 배열, 백엔드 `_answer_sections`가 ", "로 합침. 기타 항목은 클릭으로 제거. number 카드는 보기 + 숫자를 "보기 (N명)"으로 저장.
 **카드 우선순위**: problem > customer > revenue > alternative > evidence > capability > mentoring > first_step > solution
+**기본 글 스타일(2026-09-01)**: 논리·근거형(`logic`) — 실호출 품질이 가장 안정적. 스토리형은 지원자 개인 서사를 지어내는 경향(08-31 실호출), 실무형도 품질 낮음 → `styles/story.md`·`plain.md` 다듬기 필요(할 일).
 **ready 의미 변경(2026-09-01)**: ready 여도 카드가 있으면 프론트가 보여준다(머리말만 "설명이 충분해요 — 건너뛰어도 됩니다"). 이전엔 ready 면 카드를 통째로 건너뛰어 멘토링 카드를 고를 기회가 없었음.
-**카드 재생성(2026-09-01)**: `POST /intake/regenerate` — 보기가 안 맞는 슬롯만 다시(LLM 1회). `prompts/intake_regenerate.md` 가 intake.md 뒤에 붙어 "다시 만들 슬롯 / 이미 보여준 보기(금지) / 지원자 메모"를 전달, `_normalize_card(banned=)` 가 모델이 금지를 무시해도 같은 보기를 걸러냄. 프론트 `RegenerateBar`(인테이크 카드·정보 보태기 패널 공용): 메모 입력 + "다른 보기 보기 (n)". 재생성 후 그 슬롯의 답 중 보기에서 고른 것만 지우고 "기타" 직접 입력은 남김. multi 카드 보기 상한 8(single 4).
+**카드 재생성(2026-09-01)**: `POST /intake/regenerate` — 보기가 안 맞는 슬롯만 다시(LLM 1회). `prompts/intake_regenerate.md` 가 intake.md 뒤에 붙어 "다시 만들 슬롯 / 이미 보여준 보기(금지) / 지원자 메모"를 전달, `_normalize_card(banned=)` 가 모델이 금지를 무시해도 같은 보기를 걸러냄. `keep`(이미 고른 보기 {label,hint})은 카드 맨 앞에 그대로 남고 새 보기가 뒤에 붙음 — 답(answers)은 건드리지 않음. 프론트 `RegenerateBar`(인테이크 카드·정보 보태기 패널 공용): 메모 입력 + "다른 보기 보기 (n)". multi 카드 보기 상한 8(single 4).
 
 **파일**: `prompts/intake.md`(판정·카드 규칙), `pipeline/intake.py`(파싱·정규화·ready 계산, 파싱 실패 시 카드 없이 진행), `assemble._answer_sections()`, `system.md`에 "사람 수·인터뷰·통계는 확인된 사실에 있는 것만" 규칙, 프론트 `CardOptions` 컴포넌트(인테이크·보태기 공용).
 

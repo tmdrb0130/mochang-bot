@@ -11,6 +11,8 @@
 | 3 | 프론트 — `RegenerateBar`(메모 + "다른 보기 보기 (n)") 인테이크 카드·정보 보태기 패널 양쪽. ready 여도 카드 있으면 보여주고 머리말만 다르게 | ✅ vite build 통과 |
 | 4 | 테스트 `tests/test_intake.py` 12개 추가 → **81 passed** (모델 호출 0). ASGI 스모크로 엔드포인트·jobs 경로 확인 | ✅ |
 | 5 | README · PROJECT_CONTEXT 6-1 갱신 | ✅ |
+| 6 | 재생성 시 **이미 고른 보기는 유지**(`keep`, 카드 맨 앞·원래 hint), 나머지만 교체. 답(answers)은 건드리지 않음 | ✅ 83 passed |
+| 7 | **기본 글 스타일 → 논리·근거형**(`logic`), 목록에서도 첫 번째. 스토리형·실무형은 품질 낮음 → `styles/story.md`·`plain.md` 다듬기 **할 일** | ✅ 기본값만 |
 
 **실호출은 안 했음** — 멘토링 카드 보기 품질, 재생성이 실제로 "다른 방향"을 내는지는 다음 세션에서 `/intake` 1회 + `/intake/regenerate` 1회로 확인할 것.
 
@@ -49,6 +51,7 @@ cd frontend && npm install && cd ..
 5. **조사 기반 카드(조사 A)**: 인테이크 1차 판정 → customer/problem/alternative/revenue 슬롯은 조사 결과를 넣어 2차 카드 생성, 보기마다 `source` 표시. "조사해서 보기 만들기" 토글
 6. 한도 카운터 수정(위 "할 일")
 7. LlamaIndex `/ingest`
+8. `styles/story.md`·`plain.md` 다듬기 — 같은 입력으로 logic 과 나란히 실호출 비교하며 (스토리형: 지원자 개인 서사 지어내기 금지 규칙 강화)
 
 ---
 

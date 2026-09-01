@@ -107,11 +107,12 @@ class IntakeRegenerateRequest(IntakeRequest):
     slots: list[str]                          # 다시 만들 슬롯 (예: ["problem"])
     seen: dict[str, list[str]] | None = None  # {slot: [이미 보여준 보기 label]} — 같은 보기 금지
     note: str = ""                            # 지원자 메모 ("너무 일반적이에요" 등, 선택)
+    keep: dict[str, list[dict]] | None = None # {slot: [{label, hint}]} — 이미 고른 보기, 그대로 유지하고 나머지만 교체
     answers: list[dict] | None = None         # 다른 카드의 답 — 그와 어울리는 보기를 내도록
 
 
 def _regenerate_form(f: dict) -> dict:
-    return {k: v for k, v in f.items() if k not in ("slots", "seen", "note")}
+    return {k: v for k, v in f.items() if k not in ("slots", "seen", "note", "keep")}
 
 
 @app.post("/intake/regenerate")
@@ -119,7 +120,7 @@ async def intake_regenerate_endpoint(req: IntakeRegenerateRequest):
     """지원자가 '보기가 안 맞아요'라고 한 슬롯의 카드만 다시 생성 (LLM 1회). → {cards, slots, model, error?}
     프론트는 돌아온 cards 를 슬롯 기준으로 기존 카드와 바꿔 끼운다."""
     f = req.model_dump()
-    return await intake.regenerate_cards(client, _regenerate_form(f), f["slots"], f.get("seen") or {}, f.get("note") or "")
+    return await intake.regenerate_cards(client, _regenerate_form(f), f["slots"], f.get("seen") or {}, f.get("note") or "", f.get("keep") or {})
 
 
 class ResearchRequest(BaseModel):
@@ -192,7 +193,7 @@ _JOB_KINDS = {
     "extend": (ExtendRequest, lambda f: generate.extend_one(client, {k: v for k, v in f.items() if k != "current"}, f["current"])),
     "intake": (IntakeRequest, lambda f: intake.run_intake(client, f)),
     "intake_regenerate": (IntakeRegenerateRequest, lambda f: intake.regenerate_cards(
-        client, _regenerate_form(f), f["slots"], f.get("seen") or {}, f.get("note") or "")),
+        client, _regenerate_form(f), f["slots"], f.get("seen") or {}, f.get("note") or "", f.get("keep") or {})),
     "research": (ResearchRequest, lambda f: research_pipeline.run_research(client, researcher, f, f["question_id"], research_cfg)),
     "verify": (VerifyRequest, lambda f: verify.verify_text(client, {k: v for k, v in f.items() if k != "text"}, f["question_id"], f["text"])),
 }

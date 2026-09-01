@@ -107,6 +107,30 @@ async def test_regenerate_returns_only_requested_slots_and_bans_seen_options():
 
 
 @pytest.mark.asyncio
+async def test_regenerate_keeps_picked_options_in_front_and_replaces_the_rest():
+    """이미 고른 보기(keep)는 카드 맨 앞에 그대로 남고, 새 보기는 뒤에 붙는다. 모델이 keep 을 다시 내도 중복되지 않는다."""
+    client = FakeClient([reply([card("problem", ["남은 반찬 처리 부담", "퇴근 후 저녁 준비 시간", "메뉴 고르기 피로"])])])
+    keep = {"problem": [{"label": "남은 반찬 처리 부담", "hint": "원래 힌트"}]}
+    seen = {"problem": ["남은 반찬 처리 부담", "저녁 장보기 귀찮음"]}
+    out = await I.regenerate_cards(client, FORM, ["problem"], seen, keep=keep)
+    opts = out["cards"][0]["options"]
+    assert opts[0] == {"label": "남은 반찬 처리 부담", "hint": "원래 힌트"}       # 유지 보기가 맨 앞, 힌트도 원래 것
+    assert [o["label"] for o in opts[1:]] == ["퇴근 후 저녁 준비 시간", "메뉴 고르기 피로"]
+    system = client.calls[0]["system"]
+    assert "이미 고른 보기" in system and "problem (해결할 불편): 남은 반찬 처리 부담" in system
+
+
+@pytest.mark.asyncio
+async def test_regenerate_keep_does_not_get_cut_by_option_limit():
+    """유지 보기가 상한(single=4)을 차지해도 새 보기가 최소 2개는 들어간다."""
+    client = FakeClient([reply([card("problem", ["새1", "새2", "새3"])])])
+    keep = {"problem": [{"label": f"유지{i}", "hint": ""} for i in range(4)]}
+    out = await I.regenerate_cards(client, FORM, ["problem"], keep=keep)
+    labels = [o["label"] for o in out["cards"][0]["options"]]
+    assert labels[:4] == ["유지0", "유지1", "유지2", "유지3"] and labels[4:] == ["새1", "새2"]
+
+
+@pytest.mark.asyncio
 async def test_regenerate_passes_other_answers_as_facts():
     client = FakeClient([reply([card("mentoring", ["a", "b"], "multi")])])
     form = dict(FORM, answers=[{"slot": "customer", "label": "대상 고객", "answer": ["1인 가구 직장인"], "unknown": False}])
