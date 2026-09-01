@@ -35,3 +35,27 @@ def test_query_dump_analyse_counts_overlap():
     assert row["아이디어 검색어가 덮는 문항 검색어"] == "1/2"
     assert row["사실상 같은 검색어 쌍(토큰 50%+)"] == 1        # q1↔q2 는 안 겹침
     assert row["가장 비슷한 문항쌍"][2] == 0.0                  # q1 vs q2
+
+
+# ── GPU 동시성 측정 (scripts/gpu_probe.py) — 지표 파싱만. 실제 호출은 사람이 실행 ──
+
+def test_gpu_probe_parses_prometheus_metrics():
+    from scripts.gpu_probe import parse_metrics
+
+    text = "\n".join([
+        "# HELP vllm:num_requests_running 실행 중",
+        "# TYPE vllm:num_requests_running gauge",
+        'vllm:num_requests_running{engine="0",model_name="llama"} 12.0',
+        'vllm:kv_cache_usage_perc{engine="0",model_name="llama"} 0.873',
+        'vllm:num_preemptions_total{engine="0",model_name="llama"} 4.0',
+        'vllm:generation_tokens_total{engine="0"} 1000.0',
+        'vllm:generation_tokens_total{engine="1"} 500.0',
+        'vllm:관심없는_지표{a="b"} 9.0',
+        "쓰레기줄",
+    ])
+    m = parse_metrics(text)
+    assert m["vllm:num_requests_running"] == 12.0
+    assert m["vllm:kv_cache_usage_perc"] == 0.873
+    assert m["vllm:num_preemptions_total"] == 4.0
+    assert m["vllm:generation_tokens_total"] == 1500.0      # 라벨이 달라도 같은 이름은 합산
+    assert "vllm:관심없는_지표" not in m

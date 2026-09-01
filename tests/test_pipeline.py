@@ -162,13 +162,15 @@ async def test_run_research_end_to_end_with_cache(tmp_path, form):
     fetch = make_fetch({"https://kostat.go.kr/x": PAGE_TEXT})
     cache = R.DiskCache(tmp_path / "f")
 
-    out = await P.run_research(client, researcher, form, "q2", P.ResearchConfig(max_queries=2), cache=cache, fetch=fetch)
+    # 예전 경로(문항마다 처음부터 조사) — share_idea_research: false 로 되돌렸을 때의 동작
+    cfg = P.ResearchConfig(max_queries=2, share_idea_research=False)
+    out = await P.run_research(client, researcher, form, "q2", cfg, cache=cache, fetch=fetch)
     assert out["queries"] == ["반찬가게 폐기율", "1인 가구 식사"]
     assert out["facts"][0]["fact"] == "폐기율 23%" and out["cached"] is False
     assert "2026년 서울시" in out["references"]
     assert len(client.calls) == 2                                   # 검색어 1회 + 추출 1회
 
-    again = await P.run_research(FakeClient([]), researcher, form, "q2", P.ResearchConfig(), cache=cache, fetch=fetch)
+    again = await P.run_research(FakeClient([]), researcher, form, "q2", cfg, cache=cache, fetch=fetch)
     assert again["cached"] is True and again["facts"] == out["facts"]   # 두 번째는 모델 호출 0회
 
 
@@ -209,3 +211,198 @@ async def test_collect_pages_fetches_only_as_many_pages_as_needed(tmp_path):
     await P.collect_pages(researcher, ["q1"], P.ResearchConfig(max_pages_to_extract=6, max_pages_to_fetch=8),
                           fetch=fetch)
     assert len(fetched) == 8                                     # 실패 대비 여유는 설정으로만
+
+
+# ── 2단계: 아이디어당 1회 조사 + 문항별 보완 검색 ──
+
+def _next(queue, fallback):
+    """큐에서 하나 꺼내고, 다 쓰면 마지막 값을 계속 쓴다."""
+    if not queue:
+        return fallback
+    return queue.pop(0) if len(queue) > 1 else queue[0]
+
+
+class ScriptedClient:
+    """system 프롬프트를 보고 어떤 단계(검색어/보완 검색어/사실 추출)인지 구분해 답하는 가짜 모델.
+
+    세 인자 모두 '호출 순서대로 꺼내 쓰는 큐' — 문항마다 다른 검색어·사실이 나오는 실제 상황을 흉내낸다.
+    실제 모델 호출은 없다.
+    """
+
+    def __init__(self, queries, facts, followups):
+        self.queries = list(queries)
+        self.facts = list(facts)
+        self.followups = list(followups)
+        self.calls = []
+
+    def stage(self, system: str) -> str:
+        if "이미 조사가 한 번 끝난 상태" in system:
+            return "followup"
+        if "웹 검색창에 그대로 넣을" in system:
+            return "queries"
+        return "facts"
+
+    async def complete(self, system, user, model=None):
+        stage = self.stage(system)
+        self.calls.append(stage)
+        if stage == "queries":
+            return LLMResult(text=json.dumps(_next(self.queries, []), ensure_ascii=False), model="fake")
+        if stage == "followup":
+            return LLMResult(text=json.dumps(_next(self.followups, []), ensure_ascii=False), model="fake")
+        return LLMResult(text=_next(self.facts, "[]"), model="fake")
+
+
+def facts_json(*rows) -> str:
+    return json.dumps([{"fact": f, "quote": q, "source_title": "서울시 조사", "url": u,
+                        "date": "2026-02-01", "publisher": "서울시"} for f, q, u in rows], ensure_ascii=False)
+
+
+# quote 는 PAGE_TEXT 안에 실제로 있는 문장이어야 _verify_quotes 를 통과한다.
+SHARED_FACTS = facts_json(("반찬가게 하루 폐기율 23%", "하루 폐기율은 평균 23%", "https://kostat.go.kr/x"),
+                          ("1인 가구 62%가 주 3회 이상 배달", "1인 가구의 62%가 주 3회 이상 배달을 이용한다",
+                           "https://kostat.go.kr/x"))
+FOLLOWUP_FACTS = facts_json(("표본은 반찬가게 120곳", "반찬가게 120곳과 1인 가구 800명을 대상으로 진행됐다",
+                             "https://seoul.go.kr/y"))
+
+
+def counting_researcher(tmp_path, counters):
+    """검색어당 결과를 주는 가짜 백엔드 — 검색 횟수를 센다. 결과 URL 은 검색어마다 다르다."""
+    async def backend(query, max_results):
+        counters["search"] += 1
+        n = abs(hash(query)) % 100000
+        return [R.make_result(f"{query} 결과{i}", f"https://ex{n}-{i}.co.kr/a", "요약", "2026-03-01", "news")
+                for i in range(max_results)]
+    return R.Researcher(backends=[("fake", backend)], cache=R.DiskCache(tmp_path / "search"))
+
+
+def counting_fetch(counters):
+    async def fetch(url, timeout=15):
+        counters["fetch"] += 1
+        return PAGE_TEXT
+    return fetch
+
+
+@pytest.mark.asyncio
+async def test_run_research_reuses_shared_facts_and_only_searches_the_gap(tmp_path, form):
+    counters = {"search": 0, "fetch": 0}
+    researcher = counting_researcher(tmp_path, counters)
+    client = ScriptedClient([["공통1", "공통2"]], [SHARED_FACTS, FOLLOWUP_FACTS], [["보완 검색어"]])
+    cfg = P.ResearchConfig(max_queries=2, max_pages_to_extract=2, max_followup_queries=2, max_followup_pages=1)
+    cache = R.DiskCache(tmp_path / "facts")
+
+    out = await P.run_research(client, researcher, form, "q2", cfg, cache=cache, fetch=counting_fetch(counters))
+
+    assert out["shared_queries"] == ["공통1", "공통2"]           # 아이디어 공통 조사에서 온 것
+    assert out["followup_queries"] == ["보완 검색어"]             # 이 문항에서만 추가한 것
+    assert out["queries"] == ["공통1", "공통2", "보완 검색어"]    # 기존 필드는 둘을 합쳐서 유지
+    assert [f["fact"] for f in out["facts"]][0] == "표본은 반찬가게 120곳"   # 문항 전용 사실이 앞
+    assert out["shared_facts_used"] == 2 and len(out["facts"]) == 3          # 문항 1 + 공통 2
+    assert out["references"] and out["cached"] is False
+    assert client.calls == ["queries", "facts", "followup", "facts"]   # 공통 조사 2회 + 보완 2회
+    assert counters == {"search": 3, "fetch": 3}                       # 공통 2검색+2fetch, 보완 1검색+1fetch
+
+
+@pytest.mark.asyncio
+async def test_run_research_does_not_search_when_shared_research_is_enough(tmp_path, form):
+    """모델이 '충분하다'(빈 배열)고 답하면 이 문항의 외부 요청은 0건, 모델 호출도 1회뿐."""
+    counters = {"search": 0, "fetch": 0}
+    researcher = counting_researcher(tmp_path, counters)
+    client = ScriptedClient([["공통1"]], [SHARED_FACTS], [[]])
+    cfg = P.ResearchConfig(max_queries=1, max_results_per_query=1, max_pages_to_extract=1, max_followup_pages=1)
+    cache = R.DiskCache(tmp_path / "facts")
+    fetch = counting_fetch(counters)
+
+    await P.run_idea_research(client, researcher, form, cfg, cache=cache, fetch=fetch)   # 공통 조사 먼저
+    before = dict(counters)
+    client.calls.clear()
+
+    out = await P.run_research(client, researcher, form, "q8", cfg, cache=cache, fetch=fetch)
+    assert counters == before                                    # 검색·fetch 추가 0건
+    assert client.calls == ["followup"]                          # 사실 추출도 안 한다 (새 페이지가 없으므로)
+    assert out["followup_queries"] == [] and out["shared_facts_used"] == 2
+    assert [f["fact"] for f in out["facts"]] == [f["fact"] for f in json.loads(SHARED_FACTS)]
+
+
+@pytest.mark.asyncio
+async def test_run_research_does_not_refetch_pages_from_shared_research(tmp_path, form):
+    """보완 검색 결과가 공통 조사에서 이미 본 페이지면 다시 받지 않는다."""
+    same = [R.make_result("같은 글", "https://ex.co.kr/a", "요약", "2026-03-01", "news"),
+            R.make_result("새 글", "https://new.co.kr/b", "요약", "2026-03-02", "news")]
+    counters = {"search": 0, "fetch": 0}
+
+    async def backend(query, max_results):
+        counters["search"] += 1
+        return same[:max_results]
+
+    researcher = R.Researcher(backends=[("fake", backend)], cache=R.DiskCache(tmp_path / "s"))
+    client = ScriptedClient([["공통1"]], [SHARED_FACTS, FOLLOWUP_FACTS], [["보완"]])
+    cfg = P.ResearchConfig(max_queries=1, max_results_per_query=1, max_pages_to_extract=1,
+                           max_followup_queries=1, max_followup_pages=2)
+    cache = R.DiskCache(tmp_path / "f")
+    fetch = counting_fetch(counters)
+
+    await P.run_idea_research(client, researcher, form, cfg, cache=cache, fetch=fetch)   # ex.co.kr/a 만 받음
+    fetched_in_shared = counters["fetch"]
+    cfg2 = P.ResearchConfig(max_queries=1, max_results_per_query=2, max_pages_to_extract=1,
+                            max_followup_queries=1, max_followup_pages=2)
+    out = await P.run_research(client, researcher, form, "q2", cfg2, cache=cache, fetch=fetch)
+
+    assert fetched_in_shared == 1
+    assert counters["fetch"] == 2                                # 새 글 1건만 추가로 받음
+    assert [p["url"] for p in out["pages"]] == ["https://ex.co.kr/a", "https://new.co.kr/b"]
+
+
+QUESTION_IDS = ["q1", "q2", "q3_1", "q3_2", "q4_1", "q4_2", "q7_1", "q8", "q10"]
+
+
+async def _one_person_scenario(tmp_path, form, share: bool) -> dict:
+    """1인 시나리오 — 인테이크(아이디어 조사) + 문항 9개. 외부 요청(검색+fetch) 수를 센다.
+
+    0단계 실측대로 문항마다 검색어가 서로 다르다고 본다 (문자열 중복률 3~7% → 검색 캐시는 거의 안 먹는다)."""
+    counters = {"search": 0, "fetch": 0}
+    researcher = counting_researcher(tmp_path, counters)
+    cfg = P.ResearchConfig(max_queries=4, max_results_per_query=6, max_pages_to_extract=6,
+                           max_pages_to_fetch=6, share_idea_research=share,
+                           max_followup_queries=2, max_followup_pages=3)
+    cache = R.DiskCache(tmp_path / f"facts-{share}")
+    fetch = counting_fetch(counters)
+    client = ScriptedClient(
+        [[f"공통{i}" for i in range(4)]] + [[f"{qid} 검색{i}" for i in range(4)] for qid in QUESTION_IDS],
+        [SHARED_FACTS, FOLLOWUP_FACTS],
+        # 문항마다 다른 각도의 보완 검색어 2개 — 모델이 상한을 꽉 채워 답하는 최악의 경우
+        [[f"{qid} 보완A", f"{qid} 보완B"] for qid in QUESTION_IDS])
+
+    await P.run_idea_research(client, researcher, form, cfg, cache=cache, fetch=fetch)   # 인테이크
+    for qid in QUESTION_IDS:
+        await P.run_research(client, researcher, form, qid, cfg, cache=cache, fetch=fetch)
+    return {**counters, "총 외부 요청": counters["search"] + counters["fetch"], "모델 호출": len(client.calls)}
+
+
+@pytest.mark.asyncio
+async def test_one_person_scenario_external_requests_before_and_after(tmp_path, form):
+    """RESEARCH_PLAN 2단계 완료 조건 — 1인 시나리오의 외부 요청 수가 실제로 줄었는지 센다."""
+    before = await _one_person_scenario(tmp_path / "before", form, share=False)
+    after = await _one_person_scenario(tmp_path / "after", form, share=True)
+
+    # 예전: 조사 10회 × (검색어 4 + 페이지 6) = 100건
+    assert before == {"search": 40, "fetch": 60, "총 외부 요청": 100, "모델 호출": 20}
+    # 지금: 공통 조사 1회(4+6) + 문항 9개 × (보완 검색어 2 + 페이지 3) = 55건
+    assert after == {"search": 22, "fetch": 33, "총 외부 요청": 55, "모델 호출": 20}
+    assert after["총 외부 요청"] <= before["총 외부 요청"] * 0.6
+
+
+@pytest.mark.asyncio
+async def test_one_person_scenario_when_shared_research_covers_everything(tmp_path, form):
+    """보완 검색이 필요 없다고 모델이 판단하면(0단계 실측 기준 문항의 36~58%) 요청은 공통 조사 10건뿐."""
+    counters = {"search": 0, "fetch": 0}
+    researcher = counting_researcher(tmp_path, counters)
+    cfg = P.ResearchConfig(max_queries=4, max_pages_to_extract=6, max_pages_to_fetch=6)
+    cache = R.DiskCache(tmp_path / "facts")
+    client = ScriptedClient([[f"공통{i}" for i in range(4)]], [SHARED_FACTS], [[]])
+    fetch = counting_fetch(counters)
+
+    await P.run_idea_research(client, researcher, form, cfg, cache=cache, fetch=fetch)
+    for qid in QUESTION_IDS:
+        await P.run_research(client, researcher, form, qid, cfg, cache=cache, fetch=fetch)
+    assert counters["search"] + counters["fetch"] == 10
+    assert client.calls.count("facts") == 1                      # 사실 추출은 공통 조사 때 한 번뿐

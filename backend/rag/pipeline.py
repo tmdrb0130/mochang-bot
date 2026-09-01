@@ -37,6 +37,12 @@ class ResearchConfig:
     max_pages_to_fetch: int = 0
     fetch_timeout: int = 15
     cache_ttl: int = 7 * 24 * 3600
+    # ── 아이디어당 1회 조사 (RESEARCH_PLAN 2단계) ──
+    # True 면 문항 조사가 아이디어 공통 조사 결과를 그대로 물려받고, 모자란 각도만 보완 검색한다.
+    # False 면 예전처럼 문항마다 처음부터 조사한다 (되돌리기용 한 줄 스위치).
+    share_idea_research: bool = True
+    max_followup_queries: int = 2      # 문항당 보완 검색어 **상한**. 모델이 0개를 내면 검색을 아예 안 한다
+    max_followup_pages: int = 3        # 보완 검색으로 본문을 받아올 페이지 수 상한
 
     @classmethod
     def from_config(cls, config: dict) -> "ResearchConfig":
@@ -47,6 +53,9 @@ class ResearchConfig:
             max_pages_to_extract=int(rc.get("max_pages_to_extract", 6)),
             max_pages_to_fetch=int(rc.get("max_pages_to_fetch", 0)),
             fetch_timeout=int(rc.get("fetch_timeout", 15)),
+            share_idea_research=bool(rc.get("share_idea_research", True)),
+            max_followup_queries=int(rc.get("max_followup_queries", 2)),
+            max_followup_pages=int(rc.get("max_followup_pages", 3)),
             cache_ttl=int(rc.get("cache_ttl_seconds", 7 * 24 * 3600)),
         )
 
@@ -91,6 +100,49 @@ async def generate_queries(client: LLMClient, form: dict, meta: dict, cfg: Resea
     return queries or fallback_queries(form, meta, cfg.max_queries)
 
 
+def _fact_digest(facts: list[dict], limit: int = 10) -> str:
+    """이미 확보한 사실을 모델에게 짧게 보여 주기 위한 요약 (원문 quote 는 뺀다 — 길기만 하다)."""
+    lines = []
+    for f in facts[:limit]:
+        pub = _clean(f.get("publisher")) or domain(str(f.get("url", "")))
+        year = _clean(str(f.get("date") or ""))[:4]
+        tail = f" ({pub}{', ' + year if year else ''})" if pub else ""
+        lines.append(f"- {_clean(f.get('fact'))}{tail}")
+    return "\n".join(lines) or "- (없음)"
+
+
+async def generate_followup_queries(client: LLMClient, form: dict, meta: dict, shared: dict,
+                                    cfg: ResearchConfig) -> list[str]:
+    """공통 조사(shared)로 못 채우는 각도만 검색어로. 충분하면 빈 리스트 — 그러면 이 문항은 외부 요청 0건.
+
+    generate_queries 와 달리 **실패 시 폴백 검색어를 만들지 않는다**. 이미 공통 조사 사실이 있으므로
+    억지로 검색하는 것보다 안 하는 쪽이 낫다 (요청 수를 늘리지 않는 것이 2단계의 목적)."""
+    if cfg.max_followup_queries <= 0:
+        return []
+    system = assemble.render("research/followup_queries.md", n=cfg.max_followup_queries)
+    shared_queries = list(shared.get("queries") or [])
+    user = "\n\n".join([
+        assemble.build_context({k: v for k, v in form.items() if k != "references"}),
+        f"[문항] {meta.get('label', '')}. {meta.get('title', '')}",
+        f"[문항 의도·필수 요소]\n{meta.get('body', '')[:1200]}",
+        f"[이미 확보한 사실]\n{_fact_digest(shared.get('facts') or [])}",
+        f"[이미 사용한 검색어] {' | '.join(shared_queries) or '(없음)'}",
+    ])
+    try:
+        res = await client.complete(system, user, model=form.get("model"))
+        queries = [str(q).strip() for q in _parse_json_array(res.text) if str(q).strip()]
+    except Exception:
+        return []
+    used = {_norm(q) for q in shared_queries}
+    out = []
+    for q in queries:
+        if _norm(q) in used:            # 공통 조사와 글자만 같은 검색어는 버린다
+            continue
+        used.add(_norm(q))
+        out.append(q)
+    return out[: cfg.max_followup_queries]
+
+
 # ────────────────────────── 2) 검색 + 3) 본문 추출 ──────────────────────────
 
 def rank_results(results: list[dict]) -> list[dict]:
@@ -128,28 +180,39 @@ async def fetch_page(url: str, timeout: int = 15) -> str:
     return (text or "")[:MAX_PAGE_CHARS]
 
 
+def _url_key(url: str) -> str:
+    return (url or "").split("#")[0].rstrip("/")
+
+
 async def collect_pages(researcher: Researcher, queries: list[str], cfg: ResearchConfig,
-                        fetch=fetch_page) -> tuple[list[dict], list[dict]]:
-    """검색 → 랭킹 → 상위 N 페이지 본문. (검색 결과 전체, 본문 있는 페이지) 반환."""
+                        fetch=fetch_page, skip_urls: set[str] | None = None,
+                        max_pages: int | None = None) -> tuple[list[dict], list[dict]]:
+    """검색 → 랭킹 → 상위 N 페이지 본문. (검색 결과 전체, 본문 있는 페이지) 반환.
+
+    skip_urls: 이미 다른 조사에서 본문을 받아온 URL — 다시 받지 않는다 (요청 절약).
+    max_pages: 이번 호출에서 쓸 페이지 수 상한 (기본 cfg.max_pages_to_extract)."""
     all_results: list[dict] = []
     for q in queries:
         rows = await researcher.search(q, cfg.max_results_per_query)
         for r in rows:
             all_results.append({**r, "query": q})
+    skip = {_url_key(u) for u in (skip_urls or set())}
     seen, unique = set(), []
     for r in all_results:
-        k = r["url"].split("#")[0].rstrip("/")
-        if k and k not in seen:
+        k = _url_key(r["url"])
+        if k and k not in seen and k not in skip:
             seen.add(k)
             unique.append(r)
-    ranked = rank_results(unique)[: cfg.max_pages_to_fetch or cfg.max_pages_to_extract]
+    want = cfg.max_pages_to_extract if max_pages is None else max_pages
+    budget = cfg.max_pages_to_fetch or cfg.max_pages_to_extract      # 받아올 페이지 수 (본문 실패 대비 여유 포함)
+    ranked = rank_results(unique)[: min(budget, want) if max_pages is not None else budget]
     texts = await asyncio.gather(*(fetch(r["url"], cfg.fetch_timeout) for r in ranked))
     pages = []
     for r, t in zip(ranked, texts):
         body = t or r.get("snippet") or ""
         if len(body) >= MIN_BODY_CHARS:
             pages.append({**r, "text": body, "from_snippet": not bool(t)})
-        if len(pages) >= cfg.max_pages_to_extract:
+        if len(pages) >= want:
             break
     return unique, pages
 
@@ -300,30 +363,84 @@ def _cache_key(form: dict, question_id: str) -> str:
     return f"research-facts|{h}"
 
 
+def _merge_facts(primary: list[dict], secondary: list[dict], limit: int = MAX_FACTS) -> list[dict]:
+    """문항 전용 사실을 먼저 넣고 남는 자리를 공통 조사 사실로 채운다. 같은 (URL, 사실) 은 한 번만."""
+    out, seen = [], set()
+    for f in list(primary) + list(secondary):
+        key = (_url_key(str(f.get("url", ""))), _norm(str(f.get("fact", ""))))
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        out.append(f)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _page_row(p: dict) -> dict:
+    return {"url": p["url"], "title": p.get("title", ""), "from_snippet": p.get("from_snippet", False)}
+
+
 async def run_research(client: LLMClient, researcher: Researcher, form: dict, question_id: str,
                        cfg: ResearchConfig | None = None, cache: DiskCache | None = None, fetch=fetch_page) -> dict:
-    """전체 파이프라인. 모델 호출 2회(검색어 생성, 사실 추출). 결과는 (아이디어, 문항) 단위로 디스크 캐시."""
+    """문항 조사. 결과는 (아이디어, 문항) 단위로 디스크 캐시.
+
+    기본 경로(cfg.share_idea_research=True, RESEARCH_PLAN 2단계):
+      아이디어 공통 조사를 한 번만 하고(두 번째 문항부터는 캐시 적중 = 외부 요청 0건),
+      그 사실로 못 채우는 각도만 보완 검색한다. 모델 호출 1~2회, 외부 요청 0~(보완 검색어+페이지)건.
+    예전 경로(False): 문항마다 검색어 4개로 처음부터 조사. 모델 호출 2회, 외부 요청 10건."""
     cfg = cfg or ResearchConfig()
     cache = cache if cache is not None else DiskCache(ttl=cfg.cache_ttl)
     key = _cache_key(form, question_id)
     hit = cache.get(key)
     if hit is not None and hit and isinstance(hit[0], dict) and "facts" in hit[0]:
-        return {**hit[0], "cached": True}
+        # 2단계 이전에 저장된 캐시에는 새 필드가 없다 — 기본값을 깔아 응답 모양을 항상 같게 유지한다.
+        return {"shared_queries": [], "followup_queries": [], "shared_facts_used": 0, **hit[0], "cached": True}
 
     meta, body = assemble.load_question(question_id)
     meta = {**meta, "body": body}
-    queries = await generate_queries(client, form, meta, cfg)
-    results, pages = await collect_pages(researcher, queries, cfg, fetch=fetch)
-    facts = await extract_facts(client, form, meta, pages, cfg)
+
+    if not cfg.share_idea_research:
+        queries = await generate_queries(client, form, meta, cfg)
+        results, pages = await collect_pages(researcher, queries, cfg, fetch=fetch)
+        facts = await extract_facts(client, form, meta, pages, cfg)
+        shared_queries: list[str] = []
+        shared_used = 0
+        shared_pages: list[dict] = []
+        shared_result_count = 0
+    else:
+        # 아이디어 공통 조사 — 이 아이디어의 첫 문항에서만 실제로 돌고, 나머지 8문항은 캐시에서 온다.
+        shared = await run_idea_research(client, researcher, form, cfg, cache=cache, fetch=fetch)
+        shared_queries = list(shared.get("queries") or [])
+        shared_pages = list(shared.get("pages") or [])
+        shared_facts = list(shared.get("facts") or [])
+        shared_result_count = int(shared.get("result_count") or 0)
+
+        queries = await generate_followup_queries(client, form, meta, shared, cfg)
+        results, pages = [], []
+        new_facts: list[dict] = []
+        if queries:
+            results, pages = await collect_pages(
+                researcher, queries, cfg, fetch=fetch,
+                skip_urls={p.get("url", "") for p in shared_pages},   # 공통 조사에서 이미 본 페이지는 다시 안 받는다
+                max_pages=cfg.max_followup_pages)
+            new_facts = await extract_facts(client, form, meta, pages, cfg)
+        facts = _merge_facts(new_facts, shared_facts)
+        shared_used = sum(1 for f in facts if f not in new_facts)
+
     out = {
         "question_id": question_id,
-        "queries": queries,
+        "queries": (shared_queries + queries) if cfg.share_idea_research else queries,
         "backend": researcher.last_backend,
-        "result_count": len(results),
-        "pages": [{"url": p["url"], "title": p.get("title", ""), "from_snippet": p.get("from_snippet", False)} for p in pages],
+        "result_count": shared_result_count + len(results),
+        "pages": (shared_pages if cfg.share_idea_research else []) + [_page_row(p) for p in pages],
         "facts": facts,
         "references": format_references(facts),
         "cached": False,
+        # ── 2단계에서 추가된 필드 (기존 필드는 그대로) ──
+        "shared_queries": shared_queries,        # 아이디어 공통 조사에서 쓴 검색어
+        "followup_queries": queries if cfg.share_idea_research else [],   # 이 문항에서만 추가로 검색한 것
+        "shared_facts_used": shared_used,        # facts 중 공통 조사에서 물려받은 개수
     }
     cache.set(key, [out])
     return out
