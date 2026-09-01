@@ -15,7 +15,7 @@
 cd frontend && npx vite build              # 프론트 문법 검증
 uvicorn backend.main:app --reload --port 8000   # 백엔드 / 프론트: cd frontend && npm run dev
 ```
-Windows 는 `.venv\Scripts\python`, Linux/mac 은 `.venv/bin/python`. 의존성: `backend/requirements.txt`, `requirements-dev.txt`.
+Windows 는 `.venv\Scripts\python`, Linux/mac 은 `.venv/bin/python`. **작업 PC 들은 Windows PowerShell 5.1** — 사용자에게 주는 명령어에 `&&`·`source`·`export` 같은 bash 문법을 쓰지 말고 한 줄씩, venv 활성화는 `.\.venv\Scripts\Activate.ps1`. 의존성: `backend/requirements.txt`, `requirements-dev.txt`.
 
 ## 규칙
 - **프롬프트 문구는 전부 `backend/prompts/*.md`** — 코드에 한국어 프롬프트를 박지 않는다. 새 md 는 `tests/test_prompts.py` 목록에 등록.
