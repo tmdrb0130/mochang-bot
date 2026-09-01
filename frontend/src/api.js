@@ -54,15 +54,86 @@ export function research(form, questionId) {
   return post("/research", { ...toPayload(form), question_id: questionId });
 }
 
+// ───────────────────────── 작업 큐 (비동기 제출 → 폴링) ─────────────────────────
+// 생성·이어쓰기는 30~60초 걸린다. 동기 POST 로 연결을 붙잡으면 사람이 몰릴 때 프록시·브라우저 타임아웃에 걸리고
+// 대기 순번도 알 수 없다 → POST /jobs/{kind} 로 job_id 를 받고 GET /jobs/{job_id} 를 폴링한다.
+// job_id 만 있으면 새로고침 뒤에도 같은 작업을 이어받을 수 있다 (App.jsx 가 sessionStorage 에 보관).
+
+/** 이어받으려던 작업이 서버에 없을 때 (서버 재시작, 히스토리 500건 초과로 밀려남). */
+export class JobExpiredError extends Error {
+  constructor(message = "작업 정보가 서버에서 사라졌습니다 (만료 또는 재시작).") {
+    super(message);
+    this.name = "JobExpiredError";
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 큐에 제출 → { job_id, kind, position, queue } */
+export function submitJob(kind, body) {
+  return post(`/jobs/${kind}`, body);
+}
+
+/** 작업 상태 → { job_id, kind, status: queued|running|done|error, position, queued_seconds, elapsed_seconds, result, error } */
+export function jobStatus(jobId) {
+  return request(`/jobs/${jobId}`);
+}
+
+// 제출이 429(동시 작업 제한)로 막히면 잠시 뒤 다시 시도. 백엔드는 IP 당 동시 3건까지 허용한다.
+const BUSY_RETRY = 12;
+const BUSY_DELAY = 5000;
+// 폴링 중 네트워크가 잠깐 끊기는 것으로 진행 중인 작업을 버리지 않는다.
+const POLL_FAILS_ALLOWED = 3;
+
+/** 큐에 넣고 끝날 때까지 폴링해 result 를 돌려준다.
+ *  onSubmit(jobId): 제출 직후 (새로고침 대비 저장용) / onTick(snap): 폴링할 때마다 (대기 순번 표시용).
+ *  실패한 작업은 Error, 이어받기가 불가능하면 JobExpiredError 를 던진다. */
+export async function runJob(kind, body, { onSubmit, onTick, interval = 2500 } = {}) {
+  let submitted;
+  for (let i = 0; ; i++) {
+    try {
+      submitted = await submitJob(kind, body);
+      break;
+    } catch (e) {
+      if (e.status !== 429 || i >= BUSY_RETRY) throw e;
+      onTick?.({ status: "queued", position: null, busy: true });   // "다른 작업이 끝나기를 기다리는 중"
+      await sleep(BUSY_DELAY);
+    }
+  }
+  onSubmit?.(submitted.job_id);
+  onTick?.({ status: "queued", position: submitted.position });
+  return followJob(submitted.job_id, { onTick, interval });
+}
+
+/** 이미 제출된 작업을 끝까지 폴링한다 (새로고침 후 이어받기). */
+export async function followJob(jobId, { onTick, interval = 2500 } = {}) {
+  let fails = 0;
+  for (;;) {
+    await sleep(interval);
+    let snap;
+    try {
+      snap = await jobStatus(jobId);
+    } catch (e) {
+      if (e.status === 404) throw new JobExpiredError();
+      if (++fails > POLL_FAILS_ALLOWED) throw e;     // 연속 실패가 아니면 계속 시도
+      continue;
+    }
+    fails = 0;
+    onTick?.(snap);
+    if (snap.status === "done") return snap.result;
+    if (snap.status === "error") throw new Error(snap.error || "작업이 실패했습니다.");
+  }
+}
+
 /** 문항 하나 생성 → { question_id, style, text, length, limit, model }
- *  references: /research 의 facts (없으면 조사 없이 생성) */
-export function generate(form, questionId, styleId, references = null) {
-  return post("/generate", { ...toPayload(form), question_id: questionId, style: styleId, ...(references?.length ? { references } : {}) });
+ *  references: /research 의 facts (없으면 조사 없이 생성). opts 는 runJob 과 같다. */
+export function generate(form, questionId, styleId, references = null, opts) {
+  return runJob("generate", { ...toPayload(form), question_id: questionId, style: styleId, ...(references?.length ? { references } : {}) }, opts);
 }
 
 /** 기존 글 뒤에 이어쓰기 → { text(합친 전체), added, length, limit, model } */
-export function extend(form, questionId, styleId, current, references = null) {
-  return post("/extend", { ...toPayload(form), question_id: questionId, style: styleId, current, ...(references?.length ? { references } : {}) });
+export function extend(form, questionId, styleId, current, references = null, opts) {
+  return runJob("extend", { ...toPayload(form), question_id: questionId, style: styleId, current, ...(references?.length ? { references } : {}) }, opts);
 }
 
 /** 서버 상태 → { ok, model, base_url, fallback, usage: { used, limit, remaining, reset } } */

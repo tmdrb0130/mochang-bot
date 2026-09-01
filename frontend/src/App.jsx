@@ -3,6 +3,8 @@ import * as api from "./api.js";
 
 // ───────────────────────── 데이터 정의 ─────────────────────────
 // 문항 의도·작성 지침은 백엔드 backend/prompts/ 의 md 파일이 단일 출처. 여기엔 UI 표시용 메타만 둔다.
+// 2026-09-02 결정: 일반/기술 트랙만 쓴다. 로컬 트랙은 UI 에서만 뺐고 백엔드 프롬프트(tracks/local.md)·API 는 그대로다 —
+// 되살릴 때 아래 항목과 선택 화면만 복원하면 된다.
 const TRACKS = {
   tech: {
     name: "일반/기술 분야",
@@ -10,20 +12,15 @@ const TRACKS = {
     // Q6 사업 분야 선택지 (modoo.or.kr 도전하기 화면과 동일) — 사람이 직접 고른다
     fields: ["IT", "교육", "금융", "운영관리", "네트워킹", "농축/수산업", "라이프스타일", "마케팅/PR", "모빌리티", "미디어/엔터테인먼트", "바이오/의료", "에너지/자원", "유통/물류", "임팩트", "재무", "프롭테크", "하드웨어", "기타"],
   },
-  local: {
-    name: "로컬 분야",
-    desc: "지역 자원을 기반으로 창의성과 혁신을 결합하는 아이템 (패션·F&B·뷰티·생활)",
-    fields: ["패션", "F&B", "뷰티", "생활"],
-  },
 };
 
 // Q10(대중 공개용 자랑)을 비공개로 선택하면 AI 호출 없이 이 문장을 넣는다. 사용자가 고칠 수 있음.
 const Q10_PRIVATE_TEXT = "아이디어 보호를 위해 심사 기간 동안은 공개하지 않겠습니다.";
 
+// 2026-09-02 결정: 논리·근거형 하나만 쓴다 (실호출 품질이 가장 안정적이고, 문항당 생성 호출이 1회로 고정된다).
+// 스토리텔링·간결실무도 UI 에서만 뺐다 — 백엔드 styles/story.md, styles/plain.md 는 그대로 살아 있다.
 const STYLES = [
-  { id: "logic", name: "논리·근거형", desc: "문제 → 원인 → 해결 → 근거 순서로 설득하는 글 (기본 — 실호출 품질이 가장 안정적)" },
-  { id: "story", name: "스토리텔링형", desc: "경험과 장면으로 시작해 공감을 끌어내는 글" },
-  { id: "plain", name: "간결·실무형", desc: "짧은 문장으로 핵심만 담백하게 정리한 글" },
+  { id: "logic", name: "논리·근거형", desc: "문제 → 원인 → 해결 → 근거 순서로 설득하는 글" },
 ];
 
 const TEAM_OPTIONS = ["팀원 없음", "1명", "2명", "3명", "4명", "5명", "6~9명", "10명 이상"];
@@ -153,7 +150,7 @@ function RegenerateBar({ slot, state, onNote, onRun, compact = false }) {
 function ResearchPanel({ state }) {
   const [open, setOpen] = useState(false);
   if (!state) return null;
-  if (state.busy) return <div className="px-4 py-2 text-xs text-slate-500 bg-sky-50 border-b border-sky-100">웹에서 근거 자료를 조사하는 중… (라마 70B)</div>;
+  if (state.busy) return <div className="px-4 py-2 text-xs text-slate-500 bg-sky-50 border-b border-sky-100">웹에서 근거 자료를 조사하는 중… (백석대학교 로컬 LLM)</div>;
   if (state.error) return <div className="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-b border-amber-100">조사 실패 — 참고자료 없이 작성합니다. ({state.error})</div>;
   const facts = state.facts || [];
   if (!facts.length) return <div className="px-4 py-2 text-xs text-slate-500 bg-slate-50 border-b border-slate-200">조사에서 인용할 만한 근거를 못 찾았습니다. 참고자료 없이 작성했습니다.</div>;
@@ -180,6 +177,23 @@ function ResearchPanel({ state }) {
   );
 }
 
+// ───────────────────────── 작업 큐 진행 표시 ─────────────────────────
+// 생성은 큐에 들어간다. 사람이 몰리면 몇 분 기다릴 수 있으므로 "지금 몇 번째인지"를 보여준다 —
+// 진행 표시가 없으면 멈춘 것으로 오해하고 새로고침·재시도해서 큐를 더 밀리게 만든다.
+function JobProgress({ info }) {
+  if (!info) return <div className="text-xs text-slate-500 mb-2">작업을 대기열에 넣는 중…</div>;
+  const { status, position, busy } = info;
+  const label = busy
+    ? "먼저 넣은 작업이 끝나기를 기다리는 중… (한 번에 3건까지)"
+    : status === "queued"
+      ? (position == null ? "대기열에서 차례를 기다리는 중…"
+        : position === 0 ? "대기 중 — 다음 차례입니다"
+        : `대기 중 — 앞에 ${position}건`)
+      : status === "running" ? "작성 중… (보통 30~60초)"
+      : "처리 중…";
+  return <div className="text-xs text-slate-500 mb-2">{label}</div>;
+}
+
 // ───────────────────────── 작업 내용 저장 (새로고침 대비) ─────────────────────────
 // 인테이크 카드·답변·초안은 메모리에만 있어서 새로고침하면 사라졌다.
 // 조사 + 인테이크에 2분 가까이 걸리므로 유실이 크다 → localStorage 에 담아둔다.
@@ -189,10 +203,47 @@ const SAVE_KEY = "modoo-writer-state-v1";
 function loadSaved() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    return raw ? JSON.parse(raw) : null;
+    return raw ? migrate(JSON.parse(raw)) : null;
   } catch {
     return null;                      // 사생활 보호 모드 등에서 접근이 막히면 그냥 저장 없이 동작
   }
+}
+
+// 예전 저장본에는 지금은 없는 트랙(local)·스타일(story, plain)이 들어 있을 수 있다.
+// 그대로 두면 없는 스타일로 생성을 시도하다 터지므로, 살아 있는 항목만 남긴다.
+function migrate(saved) {
+  if (!saved?.form) return saved;
+  const styleIds = STYLES.map((s) => s.id);
+  const styles = (saved.form.styles || []).filter((id) => styleIds.includes(id));
+  saved.form = {
+    ...saved.form,
+    track: TRACKS[saved.form.track] ? saved.form.track : "tech",
+    styles: styles.length ? styles : [styleIds[0]],
+  };
+  // 고른 초안이 사라진 스타일이면 선택을 비운다 (남은 스타일의 초안이 있으면 그게 보이고, 없으면 다시 생성하면 된다)
+  saved.picked = Object.fromEntries(Object.entries(saved.picked || {}).filter(([, sid]) => styleIds.includes(sid)));
+  return saved;
+}
+
+// ── 진행 중인 작업 id (V6: 새로고침 이어받기) ──
+// 생성/이어쓰기는 큐에 들어가 있으므로 job id 만 있으면 탭을 새로고침해도 결과를 다시 받을 수 있다.
+// 탭을 닫으면 지워지는 sessionStorage 를 쓴다 — 다른 탭·다음 방문까지 끌고 갈 이유는 없다.
+const JOBS_KEY = "modoo-writer-jobs-v1";
+
+// 조사 결과를 재사용해도 되는 범위. 이 값이 달라지면 이전 조사는 다른 아이디어의 것이므로 버린다.
+// (2026-09-02 버그: 문항 id 로만 캐시해서 아이디어를 바꿔도 옛 조사를 그대로 재사용했다.)
+const researchSignature = (form) => `${form?.track || ""}|${(form?.idea || "").trim()}`;
+
+function loadJobs() {
+  try {
+    return JSON.parse(sessionStorage.getItem(JOBS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveJobs(map) {
+  try { sessionStorage.setItem(JOBS_KEY, JSON.stringify(map)); } catch { /* 접근 차단 — 이어받기만 못 함 */ }
 }
 
 function saveState(data) {
@@ -231,8 +282,24 @@ export default function ModooWriter() {
   // 조사는 백엔드의 조사 전용 모델(로컬 라마 70B)이 하고, 본문 작성은 llm: 모델(OpenRouter)이 한다.
   const [researchState, setResearchState] = useState(saved?.researchState ?? {}); // researchState[qid] = { busy, error, facts, queries, pages, backend }
   // 생성 태스크가 즉시 읽어야 해서(setState 는 비동기) 사실은 ref 에도 둔다.
-  // 저장본에서 복원할 때 ref 도 같이 채워야 재생성 시 조사를 다시 돌지 않는다
-  const researchRef = useRef(Object.fromEntries(Object.entries(saved?.researchState ?? {}).map(([k, v]) => [k, v?.facts ?? []])));
+  // 저장본에서 복원할 때 ref 도 같이 채워야 재생성 시 조사를 다시 돌지 않는다.
+  // 단 실패했던 문항(error)은 복원하지 않는다 — 복원하면 다음에도 조사를 건너뛴다.
+  const researchRef = useRef(Object.fromEntries(
+    Object.entries(saved?.researchState ?? {}).filter(([, v]) => v && !v.error).map(([k, v]) => [k, v.facts ?? []])
+  ));
+  // 그 조사 결과가 "어느 아이디어의 것인지". 아이디어·트랙이 바뀌면 옛 결과를 통째로 버린다.
+  const researchKeyRef = useRef(saved?.researchKey ?? researchSignature(saved?.form ?? {}));
+  // ── 작업 큐 ──
+  const jobsRef = useRef(loadJobs());                     // { "qid|styleId": job_id } — 진행 중인 것만
+  const [jobInfo, setJobInfo] = useState({});             // jobInfo[qid][styleId] = { status, position, busy } (대기 순번 표시용)
+  const setJobTick = (qid, sid, value) =>
+    setJobInfo((p) => ({ ...p, [qid]: { ...(p[qid] || {}), [sid]: value } }));
+  const rememberJob = (key, id) => { jobsRef.current = { ...jobsRef.current, [key]: id }; saveJobs(jobsRef.current); };
+  const forgetJob = (key) => {
+    const { [key]: _drop, ...rest } = jobsRef.current;
+    jobsRef.current = rest;
+    saveJobs(rest);
+  };
 
   const refreshHealth = () =>
     api.health()
@@ -269,7 +336,7 @@ export default function ModooWriter() {
       const kept = Object.fromEntries(Object.entries(byStyle).filter(([, v]) => v !== "loading"));
       if (Object.keys(kept).length) cleanStatus[qid] = kept;
     }
-    saveState({ step, form, texts, status: cleanStatus, picked, intake, answers, cardIdx, modelUsed, researchState });
+    saveState({ step, form, texts, status: cleanStatus, picked, intake, answers, cardIdx, modelUsed, researchState, researchKey: researchKeyRef.current });
   }, [step, form, texts, status, picked, intake, answers, cardIdx, modelUsed, researchState]);
 
   const formForApi = () => ({ ...form, answers: buildAnswers() });
@@ -301,8 +368,21 @@ export default function ModooWriter() {
   const setErr = (qid, sid, value) =>
     setErrors((p) => ({ ...p, [qid]: { ...(p[qid] || {}), [sid]: value } }));
 
+  // 아이디어·트랙이 바뀌었으면 이전 조사 결과를 전부 버린다. 조사를 시작하는 지점에서 한 번만 확인한다.
+  function dropStaleResearch() {
+    const key = researchSignature(form);
+    if (key === researchKeyRef.current) return;
+    researchKeyRef.current = key;
+    researchRef.current = {};
+    setResearchState({});
+  }
+
   // 문항 하나에 대한 조사. 이미 받아온 게 있으면 재사용(백엔드도 7일 디스크 캐시).
   async function ensureResearch(qid) {
+    dropStaleResearch();
+    // 조사는 했지만 인용할 사실이 없었던 문항은 []. JS 에서 빈 배열은 truthy 라 그대로 재사용된다 —
+    // 같은 아이디어로 같은 검색을 또 돌릴 이유가 없으니 의도한 동작이다.
+    // 반대로 조사가 "실패"한 경우는 아래 catch 에서 키 자체를 지워두므로 다음 생성 때 다시 시도한다.
     if (researchRef.current[qid]) return researchRef.current[qid];
     setResearchState((p) => ({ ...p, [qid]: { ...(p[qid] || {}), busy: true, error: "" } }));
     try {
@@ -312,9 +392,37 @@ export default function ModooWriter() {
       return researchRef.current[qid];
     } catch (e) {
       // 조사가 실패해도 생성은 계속한다 (참고자료 없이 작성).
+      // ref 에는 아무것도 남기지 않는다 → 다음에 생성을 다시 돌리면 조사도 다시 시도한다.
       setResearchState((p) => ({ ...p, [qid]: { busy: false, error: String(e.message || e), facts: [] } }));
-      researchRef.current[qid] = [];
+      delete researchRef.current[qid];
       return [];
+    }
+  }
+
+  // 생성·이어쓰기·이어받기의 공통 처리. run(opts) 은 { text, model } 을 주는 큐 호출이고,
+  // opts 를 통해 job id(저장용)와 대기 순번(표시용)이 흘러나온다.
+  async function runQuestionJob(q, style, run) {
+    const key = `${q.id}|${style.id}`;
+    setStat(q.id, style.id, "loading");
+    setErr(q.id, style.id, "");
+    try {
+      const res = await run({
+        onSubmit: (id) => rememberJob(key, id),
+        onTick: (snap) => setJobTick(q.id, style.id, { status: snap.status, position: snap.position, busy: snap.busy }),
+      });
+      setText(q.id, style.id, res.text.slice(0, q.limit));
+      setUsed(q.id, style.id, res.model);
+      setStat(q.id, style.id, "done");
+      setPicked((p) => (p[q.id] ? p : { ...p, [q.id]: style.id }));
+    } catch (e) {
+      setErr(q.id, style.id, e instanceof api.JobExpiredError
+        ? "새로고침 전에 돌던 작업을 이어받지 못했어요 (서버에서 만료됨). 다시 생성해 주세요."
+        : String(e.message || e));
+      setStat(q.id, style.id, "error");
+    } finally {
+      forgetJob(key);
+      setJobTick(q.id, style.id, null);
+      refreshHealth();
     }
   }
 
@@ -327,21 +435,23 @@ export default function ModooWriter() {
       setPicked((p) => (p[q.id] ? p : { ...p, [q.id]: style.id }));
       return;
     }
-    setStat(q.id, style.id, "loading");
-    try {
-      const references = researchRef.current[q.id] || [];
-      const res = await api.generate(formForApi(), q.id, style.id, references);
-      setText(q.id, style.id, res.text.slice(0, q.limit));
-      setUsed(q.id, style.id, res.model);
-      setStat(q.id, style.id, "done");
-      setPicked((p) => (p[q.id] ? p : { ...p, [q.id]: style.id }));
-    } catch (e) {
-      setErr(q.id, style.id, String(e.message || e));
-      setStat(q.id, style.id, "error");
-    } finally {
-      refreshHealth();
-    }
+    // 아이디어를 고친 뒤 "새로 생성"을 누른 경우 옛 아이디어의 조사 결과가 참고자료로 끼어들면 안 된다.
+    // 여기서는 조사를 새로 돌리지 않는다 — 참고자료 없이 쓰고, 조사는 다음 "초안 만들기"에서 다시 한다.
+    dropStaleResearch();
+    const references = researchRef.current[q.id] || [];
+    await runQuestionJob(q, style, (opts) => api.generate(formForApi(), q.id, style.id, references, opts));
   }
+
+  // 새로고침으로 끊긴 작업 이어받기 (V6). 큐에 남아 있으면 결과를 그대로 받고, 없으면 만료 안내를 띄운다.
+  useEffect(() => {
+    for (const [key, id] of Object.entries(jobsRef.current)) {
+      const [qid, sid] = key.split("|");
+      const q = QUESTIONS.find((x) => x.id === qid);
+      const style = STYLES.find((x) => x.id === sid);
+      if (!q || !style) { forgetJob(key); continue; }
+      runQuestionJob(q, style, (opts) => api.followJob(id, opts));
+    }
+  }, []);
 
   // 1) 아이디어 읽기(인테이크) → 충분하면 바로 생성, 부족하면 카드 단계로
   async function startIntake() {
@@ -413,18 +523,9 @@ export default function ModooWriter() {
   async function extend(q, style) {
     const current = texts[q.id]?.[style.id] || "";
     if (q.limit - current.length < 150) return;
-    setStat(q.id, style.id, "loading");
-    try {
-      const res = await api.extend(formForApi(), q.id, style.id, current, researchRef.current[q.id] || []);
-      setText(q.id, style.id, res.text.slice(0, q.limit));
-      setUsed(q.id, style.id, res.model);
-      setStat(q.id, style.id, "done");
-    } catch (e) {
-      setErr(q.id, style.id, String(e.message || e));
-      setStat(q.id, style.id, "error");
-    } finally {
-      refreshHealth();
-    }
+    dropStaleResearch();
+    const references = researchRef.current[q.id] || [];
+    await runQuestionJob(q, style, (opts) => api.extend(formForApi(), q.id, style.id, current, references, opts));
   }
 
   function copy(key, value) {
@@ -503,16 +604,13 @@ export default function ModooWriter() {
         {step === 0 && (
           <div className="grid md:grid-cols-5 gap-8">
             <div className="md:col-span-3 space-y-7">
+              {/* 트랙이 하나뿐이라 선택 화면 대신 안내만 둔다. 로컬 트랙을 되살리려면
+                  TRACKS 에 항목을 되돌리고 이 절을 버튼 목록으로 바꾸면 된다. */}
               <section>
-                <h2 className="font-semibold mb-2">어느 분야로 지원하나요?</h2>
-                <div className="grid grid-cols-2 gap-2">
-                  {Object.entries(TRACKS).map(([k, t]) => (
-                    <button key={k} onClick={() => setForm({ ...form, track: k, field: "" })}
-                      className={`text-left p-3 rounded-lg border ${form.track === k ? "border-indigo-600 bg-indigo-50" : "border-slate-200 hover:border-slate-400"}`}>
-                      <div className="font-medium">{t.name}</div>
-                      <div className="text-xs text-slate-500 mt-1 leading-relaxed">{t.desc}</div>
-                    </button>
-                  ))}
+                <h2 className="font-semibold mb-2">지원 분야</h2>
+                <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
+                  <div className="font-medium">{TRACKS[form.track].name}</div>
+                  <div className="text-xs text-slate-500 mt-1 leading-relaxed">{TRACKS[form.track].desc}</div>
                 </div>
               </section>
 
@@ -589,24 +687,14 @@ export default function ModooWriter() {
               <section>
 <div className="mb-4 p-3 rounded-lg bg-sky-50 border border-sky-100 text-xs text-slate-600">
                   <span className="font-medium text-slate-800">웹 조사가 함께 진행됩니다.</span> 아이디어와 문항마다 웹을 검색해
-                  출처가 확인된 사실만 모으고, 그 근거 위에서 보기와 초안을 만듭니다. 조사는 로컬 라마 70B 가 하므로 무료 한도를 쓰지 않습니다.
+                  출처가 확인된 사실만 모으고, 그 근거 위에서 보기와 초안을 만듭니다. 조사는 백석대학교 로컬 LLM 이 하므로 무료 한도를 쓰지 않습니다.
                   문항당 40~60초가 더 걸립니다.
                 </div>
-                <h2 className="font-semibold mb-2">받아볼 글 스타일</h2>
-                <div className="space-y-2">
-                  {STYLES.map((s) => {
-                    const on = form.styles.includes(s.id);
-                    return (
-                      <button key={s.id} onClick={() => setForm({ ...form, styles: on ? form.styles.filter((x) => x !== s.id) : [...form.styles, s.id] })}
-                        className={`w-full text-left p-3 rounded-lg border ${on ? "border-indigo-600 bg-indigo-50" : "border-slate-200"}`}>
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium text-sm">{s.name}</span>
-                          <span className={`w-4 h-4 rounded-full border ${on ? "bg-indigo-600 border-indigo-600" : "border-slate-300"}`} />
-                        </div>
-                        <div className="text-xs text-slate-500 mt-1">{s.desc}</div>
-                      </button>
-                    );
-                  })}
+                {/* 스타일도 하나뿐이라 선택 UI 를 접었다 (작업 11). STYLES 에 항목을 되돌리면 여기를 버튼 목록으로 되살린다. */}
+                <h2 className="font-semibold mb-2">글 스타일</h2>
+                <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
+                  <div className="font-medium text-sm">{STYLES[0].name}</div>
+                  <div className="text-xs text-slate-500 mt-1">{STYLES[0].desc}</div>
                 </div>
               </section>
 
@@ -689,7 +777,7 @@ export default function ModooWriter() {
               <div className="flex gap-2">
                 <button onClick={() => setStep(0)} className="px-3 py-1.5 text-sm rounded-lg border border-slate-300">입력 수정</button>
                 {/* 저장본까지 비우고 처음부터. 새로고침으로는 안 지워지므로 명시적 버튼이 필요하다. */}
-                <button onClick={() => { if (confirm("지금까지 만든 초안과 조사 결과가 모두 지워집니다. 계속할까요?")) { try { localStorage.removeItem(SAVE_KEY); } catch { /* 접근 차단 */ } location.reload(); } }}
+                <button onClick={() => { if (confirm("지금까지 만든 초안과 조사 결과가 모두 지워집니다. 계속할까요?")) { try { localStorage.removeItem(SAVE_KEY); sessionStorage.removeItem(JOBS_KEY); } catch { /* 접근 차단 */ } location.reload(); } }}
                   className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 text-slate-500">새로 시작</button>
                 <button onClick={() => setStep(3)} disabled={doneCount === 0} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white disabled:bg-slate-300">제출용으로 정리</button>
               </div>
@@ -727,6 +815,7 @@ export default function ModooWriter() {
                   <ResearchPanel state={researchState[q.id]} />
 
                   <div className="px-5 pb-4">
+                    {st === "loading" && <JobProgress info={jobInfo[q.id]?.[cur]} />}
                     {st === "loading" && !text && <div className="h-32 rounded-lg bg-slate-50 animate-pulse" />}
                     {st === "error" && (
                       <div className="p-4 rounded-lg bg-red-50 text-sm text-red-700 flex justify-between items-center gap-3">
