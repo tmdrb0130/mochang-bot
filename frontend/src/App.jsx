@@ -183,7 +183,9 @@ function ResearchPanel({ state }) {
 function JobProgress({ info }) {
   if (!info) return <div className="text-xs text-slate-500 mb-2">작업을 대기열에 넣는 중…</div>;
   const { status, position, busy } = info;
-  const label = busy
+  const label = status === "resuming"
+    ? "새로고침 전에 맡긴 작업을 이어받는 중…"
+    : busy
     ? "먼저 넣은 작업이 끝나기를 기다리는 중… (한 번에 3건까지)"
     : status === "queued"
       ? (position == null ? "대기열에서 차례를 기다리는 중…"
@@ -449,6 +451,8 @@ export default function ModooWriter() {
       const q = QUESTIONS.find((x) => x.id === qid);
       const style = STYLES.find((x) => x.id === sid);
       if (!q || !style) { forgetJob(key); continue; }
+      // 첫 폴링(2.5초 뒤)까지는 "대기열에 넣는 중"으로 보여 새로 제출한 것처럼 오해된다 → 이어받는 중임을 먼저 알린다.
+      setJobTick(qid, sid, { status: "resuming" });
       runQuestionJob(q, style, (opts) => api.followJob(id, opts));
     }
   }, []);
@@ -544,7 +548,7 @@ export default function ModooWriter() {
         <div className="max-w-5xl mx-auto px-5 py-5 flex items-end justify-between gap-4 flex-wrap">
           <div>
             <h1 className="text-2xl font-bold tracking-tight">모두의 창업 신청서 작성 도우미</h1>
-            <p className="text-sm text-slate-500 mt-1">아이디어 한 문단이면 됩니다. 문항별 초안을 여러 스타일로 받아서 고르고, 붙여넣기만 하세요.</p>
+            <p className="text-sm text-slate-500 mt-1">아이디어 한 문단이면 됩니다. 문항별 초안을 받아서 다듬고, 붙여넣기만 하세요.</p>
           </div>
           <nav className="flex gap-1 text-sm">
             {["아이디어 입력", "정보 보충", "초안 고르기", "제출용 정리"].map((n, i) => {
