@@ -98,12 +98,24 @@ def test_researcher_from_config_respects_vane_enabled():
 
 @pytest.mark.asyncio
 async def test_ddgs_backend_uses_monkeypatched_client(monkeypatch):
+    calls = []
+
     class FakeDDGS:
         def __enter__(self): return self
         def __exit__(self, *a): return False
-        def text(self, q, region, max_results): return [{"title": "T", "href": "https://t.com", "body": "b"}]
-        def news(self, q, region, max_results): return [{"title": "N", "url": "https://n.com", "body": "nb", "date": "2026-01-02T00:00:00+00:00"}]
+        def text(self, q, region, max_results):
+            calls.append("text")
+            return [{"title": "T", "href": "https://t.com", "body": "b"}]
+        def news(self, q, region, max_results):
+            calls.append("news")
+            return [{"title": "N", "url": "https://n.com", "body": "nb", "date": "2026-01-02T00:00:00+00:00"}]
     import ddgs
     monkeypatch.setattr(ddgs, "DDGS", FakeDDGS)
-    out = await R.DDGSearch()("q", 5)
+
+    out = await R.DDGSearch()("q", 5)                       # 기본: text 만 (뉴스는 네이버 API 로 이관 예정)
+    assert [r["source_type"] for r in out] == ["web"] and calls == ["text"]
+
+    calls.clear()
+    out = await R.DDGSearch(include_news=True)("q", 5)      # 명시하면 뉴스도 (되살리기 가능)
     assert [r["source_type"] for r in out] == ["web", "news"] and out[1]["date"] == "2026-01-02"
+    assert calls == ["text", "news"]

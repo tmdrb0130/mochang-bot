@@ -189,3 +189,23 @@ def test_build_context_skips_references_for_short_questions():
         assert "[웹 참고자료" not in ctx, f"{qid} 에 참고자료가 들어갔다"
     ctx = assemble.build_context({"track": "tech", "idea": "x", "question_id": "q2", "references": refs})
     assert "[웹 참고자료" in ctx
+
+
+@pytest.mark.asyncio
+async def test_collect_pages_fetches_only_as_many_pages_as_needed(tmp_path):
+    """RESEARCH_PLAN 1단계 — 예전엔 max_pages_to_extract*2 를 받아 절반을 버렸다. 이제 필요한 만큼만 fetch."""
+    results = [R.make_result(f"제목{i}", f"https://ex{i}.com/a", "스니펫") for i in range(20)]
+    researcher = R.Researcher(backends=[("fake", lambda q, n: _aret(results))], cache=R.DiskCache(tmp_path))
+    fetched = []
+
+    async def fetch(url, timeout):
+        fetched.append(url)
+        return PAGE_TEXT
+
+    await P.collect_pages(researcher, ["q1"], P.ResearchConfig(max_pages_to_extract=6), fetch=fetch)
+    assert len(fetched) == 6                                     # 12 가 아니라 6
+
+    fetched.clear()
+    await P.collect_pages(researcher, ["q1"], P.ResearchConfig(max_pages_to_extract=6, max_pages_to_fetch=8),
+                          fetch=fetch)
+    assert len(fetched) == 8                                     # 실패 대비 여유는 설정으로만

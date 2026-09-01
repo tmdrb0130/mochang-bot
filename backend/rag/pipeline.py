@@ -32,6 +32,9 @@ class ResearchConfig:
     max_queries: int = 4
     max_results_per_query: int = 6
     max_pages_to_extract: int = 6
+    # 실제로 본문을 받아오는 페이지 수. 예전엔 max_pages_to_extract*2 를 받아 절반을 버렸다(요청 낭비).
+    # 0 이면 max_pages_to_extract 와 같다. fetch 실패가 잦으면 8 정도로 조금만 올린다.
+    max_pages_to_fetch: int = 0
     fetch_timeout: int = 15
     cache_ttl: int = 7 * 24 * 3600
 
@@ -42,6 +45,7 @@ class ResearchConfig:
             max_queries=int(rc.get("max_queries", 4)),
             max_results_per_query=int(rc.get("max_results_per_query", 6)),
             max_pages_to_extract=int(rc.get("max_pages_to_extract", 6)),
+            max_pages_to_fetch=int(rc.get("max_pages_to_fetch", 0)),
             fetch_timeout=int(rc.get("fetch_timeout", 15)),
             cache_ttl=int(rc.get("cache_ttl_seconds", 7 * 24 * 3600)),
         )
@@ -138,7 +142,7 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
         if k and k not in seen:
             seen.add(k)
             unique.append(r)
-    ranked = rank_results(unique)[: cfg.max_pages_to_extract * 2]
+    ranked = rank_results(unique)[: cfg.max_pages_to_fetch or cfg.max_pages_to_extract]
     texts = await asyncio.gather(*(fetch(r["url"], cfg.fetch_timeout) for r in ranked))
     pages = []
     for r, t in zip(ranked, texts):

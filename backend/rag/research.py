@@ -162,9 +162,13 @@ class VaneSearch:
 # ────────────────────────── 백엔드 2: ddgs ──────────────────────────
 
 class DDGSearch:
-    """DuckDuckGo(ddgs). 모델 호출 없음. text + news 를 합쳐 준다."""
+    """DuckDuckGo(ddgs). 모델 호출 없음. 기본은 text 만 — include_news=True 면 news 도 합쳐 준다.
 
-    def __init__(self, region: str = "kr-kr", include_news: bool = True):
+    2026-09-02: 뉴스 호출을 기본으로 끄면서 조사 1회당 DDG 요청이 절반(8→4)이 됐다.
+    뉴스 근거 자체를 버린 게 아니라 네이버 뉴스 API 로 옮길 예정이다 (RESEARCH_PLAN 3단계).
+    그때까지 ddgs 뉴스가 필요하면 DDGSearch(include_news=True) 로 되살릴 수 있다."""
+
+    def __init__(self, region: str = "kr-kr", include_news: bool = False):
         self.region = region
         self.include_news = include_news
 
