@@ -37,11 +37,14 @@ git clone https://github.com/tmdrb0130/mochang-bot.git && cd mochang-bot
 cp .env.example .env            # OPENROUTER_API_KEY 입력 (+ 위 관리 키)
 python -m venv .venv && .venv/Scripts/activate   # (Linux: source .venv/bin/activate)
 pip install -r backend/requirements.txt -r requirements-dev.txt
-python -m pytest -q             # 81 passed 확인
+python -m pytest -q             # 83 passed 확인
 cd frontend && npm install && cd ..
 # 서버: uvicorn backend.main:app --reload --port 8000 / 프론트: cd frontend && npm run dev
 # Vane: docker run -d -p 3000:3000 -v vane-data:/home/vane/data --name vane itzcrazykns1337/vane:latest
+#       → python -m backend.rag.vane_setup  (새 머신은 볼륨이 비어 있으므로 제공자 재등록, 출력된 id 로 config.yaml research.vane.* 갱신)
 ```
+
+이 PC(원래 작업 PC) 상태: Docker Desktop 꺼짐, Vane 컨테이너 정지, `.env` 는 커밋 안 됨. 여기로 돌아오면 `git pull` 부터.
 
 작업 순서 제안:
 1. `/intake` + `/intake/regenerate` 실호출 1회씩 → 멘토링 보기·재생성 품질 확인
@@ -51,7 +54,8 @@ cd frontend && npm install && cd ..
 5. **조사 기반 카드(조사 A)**: 인테이크 1차 판정 → customer/problem/alternative/revenue 슬롯은 조사 결과를 넣어 2차 카드 생성, 보기마다 `source` 표시. "조사해서 보기 만들기" 토글
 6. 한도 카운터 수정(위 "할 일")
 7. LlamaIndex `/ingest`
-8. `styles/story.md`·`plain.md` 다듬기 — 같은 입력으로 logic 과 나란히 실호출 비교하며 (스토리형: 지원자 개인 서사 지어내기 금지 규칙 강화)
+8. 08-31 절에서 아직 남은 것: **`/verify` 실호출**(Q2 결과의 "자취 3년 차"가 `unsupported_claims` 에 잡히는지) → 검증 결과 UI(노란 문장), `/jobs` 폴링 프론트 전환, 인테이크 결과 저장(새로고침 유실), SearXNG 한국어 엔진(네이버)
+9. `styles/story.md`·`plain.md` 다듬기 — 같은 입력으로 logic 과 나란히 실호출 비교하며 (스토리형: 지원자 개인 서사 지어내기 금지 규칙 강화)
 
 ---
 

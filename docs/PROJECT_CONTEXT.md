@@ -22,8 +22,9 @@
 | 최종 기본 모델 | 로컬 Llama 70B (Ollama → 트래픽 늘면 vLLM) |
 | 모델 연결 방식 | **OpenAI 호환 API 하나로 통일**. `base_url / api_key / model` 세 값만 설정 파일로 분리. Claude·Gemini는 LiteLLM 프록시로 같은 형식 사용 |
 | 프롬프트 관리 | 코드에 하드코딩하지 않고 **md 파일**로 분리 (아래 4절) |
-| RAG | 로컬 문서(PDF/PPTX/DOCX) 먼저, 웹 검색(뉴스·근거자료)은 2차 |
-| RAG 프레임워크 | MVP는 직접 구현(200줄 내외). 필요해지면 LlamaIndex 검토 (LangChain보다 문서 검색 특화) |
+| RAG | 로컬 문서(PDF/PPTX/DOCX) 먼저, 웹 검색(뉴스·근거자료)은 2차 → 실제로는 웹 조사(`/research`)가 먼저 구현됨(2026-08-31) |
+| RAG 프레임워크 | **LlamaIndex 확정**(2026-09-01). 로컬 문서 `/ingest` 는 미착수 |
+| 웹 검색 | **Vane(구 Perplexica)** 확정(2026-09-01). 자체 모델 없음 → 채팅 LLM 은 **로컬 Ollama** 에 연결(무료 한도 보호), 임베딩은 Vane 내장. ddgs 는 폴백 |
 | 백엔드 | Python + FastAPI |
 | 프론트엔드 | 기존 React 아티팩트를 `frontend/src/App.jsx`로 이관(Vite + React 19 + Tailwind v4). API 호출은 `frontend/src/api.js` → 백엔드 |
 
@@ -188,6 +189,22 @@ prompts/
 
 **미구현/다음**: 생성 후 "근거 없는 문장" 하이라이트(검증), 인테이크 결과 저장(새로고침 시 유실), 이력서/SNS 텍스트 붙여넣기로 capability 자동 추출.
 
+## 6-3. 조사 단계·조사 기반 카드 — 계획 (2026-09-01, 미구현)
+
+**목표 흐름**
+```
+입력 → 인테이크 1차(슬롯 판정)
+     → 조사 A: 기존 서비스·대안 / 고객 페인포인트 / 시장 현황        (Vane)
+     → 카드 생성: 조사 결과를 근거로 보기 작성, 보기마다 source        ← "조사해서 보기 만들기" 토글(기본 on)
+     → 조사 B: 문항별 인용 자료 — 통계·기사·논문·정책·유사 BM          (Vane)
+         사실 카드(문장·출처·연도·use_for 문항) 목록 → 사용자가 체크 → 재조사 버튼
+     → 초안 생성: 체크한 사실만 references 로 주입 (이미 지원)
+```
+- 조사 B 는 문항 단위 `/research`(9문항 × 2회 = 18회)가 아니라 **주제 단위**(시장 통계 / 기존 서비스·경쟁 / 고객 행태·페인포인트 / 유사 BM·수익 사례 / 정책·지원·규제 / 논문·보고서)로: 검색어 생성 1회 + 사실 추출 1~2회, 각 사실에 `use_for` 태그(extract_facts.md 에 이미 있음).
+- 조사 A 는 인테이크를 2단계로: 1차 판정 → customer/problem/alternative/revenue 슬롯은 조사 결과를 넣어 2차 카드 생성(보기마다 source). 시간이 1~2분 늘어나므로 토글.
+- 비용: Vane 채팅 LLM 을 로컬 Ollama 로 두면 한 번 전체 흐름 ≈ 생성 9 + 인테이크 2 + 조사 3~4 = **15회** OpenRouter 호출. 정부 통계 페이지(JS 렌더링)는 trafilatura 가 못 읽으므로 Vane(Playwright) 경로가 여기서 유리.
+- 동기: 지원자가 시장·경쟁·BM 을 잘 몰라도 조사 근거가 붙은 보기를 고르며 이해하고, 사업계획서를 고도화할 수 있게.
+
 ## 6-2. 조사·검증·동시성 (2026-08-31 저녁, 자율 작업 세션)
 
 - **웹 조사** `backend/rag/`: `research.py` search(query) 추상화(Vane → ddgs 폴백, 7일 디스크 캐시) + `pipeline.py` run_research()
@@ -199,7 +216,7 @@ prompts/
 - **동시성** `llm/jobs.py` JobQueue: 모든 모델 호출이 큐 경유, `max_workers`(현재 2) 로 OpenRouter 동시 요청 상한, 429 지수 백오프,
   `POST /jobs/{kind}` → `GET /jobs/{id}` 폴링(대기 순번). 부하 테스트 `scripts/load_test.py` (동시 50, 가짜 모델) 통과.
 - **프롬프트 md 로더 정리**: `short_question.md`, `sections.md`, `research/*.md`, `verify.md` — 코드에 프롬프트 문구 없음. `assemble.render()`.
-- **테스트** `tests/` 69건, 전부 mock(모델·네트워크 호출 없음). `requirements-dev.txt`.
+- **테스트** `tests/` 83건(2026-09-01 기준), 전부 mock(모델·네트워크 호출 없음). `requirements-dev.txt`.
 - 프론트 연결은 미구현: 조사 결과 표시·참고자료 선택, 검증 결과(누락·근거 없는 문장) 하이라이트, /jobs 폴링 전환. → PROGRESS.md
 
 ## 7. RAG 설계안
@@ -307,14 +324,15 @@ frontend/
 2. `prompts/` md 세트 작성 + 조립기 + **문항 하나** 생성 → 품질 확인
 3. 전 문항·스타일 생성 + 후처리 + 검증(필수 요소 체크)
 4. React 프론트를 백엔드에 연결 — **완료(2026-08-31)**
-5. 로컬 문서 RAG (`/ingest`)
-6. 웹 검색 RAG, 모델 비교 화면
+5. 웹 조사 — API 완료(2026-08-31), **UI·주제 단위 조사·조사 기반 카드는 미구현** (6-3 절)
+6. 로컬 문서 RAG (`/ingest`, LlamaIndex)
+7. 모델 비교 화면
 
 **2~3단계에서 반드시**: 같은 입력으로 Sonnet vs Llama 70B (vs Gemma 3 27B / EXAONE 3.5 32B) 결과 비교 → 기본 모델 방향 결정.
 
 ## 11. 미결 사항
-- 로컬 70B 서빙 하드웨어 확정
-- 웹 검색 API 선택
+- 로컬 70B 서빙 하드웨어 확정 → 2026-09-01 Llama 70B 머신 확보, 거기서 이어 작업
+- ~~웹 검색 API 선택~~ → Vane 확정 (2절)
 - 다중 사용자 서비스 시 인증·저장(사용자별 초안 보관) 여부
 - 무료 한도 초과 시 운영 방침: OpenRouter $10 충전(1000회/일)로 갈지, 서버 컴 로컬 모델로 바로 갈지. 여러 사용자가 쓰면 50회/일은 하루 5명 분량밖에 안 됨
 - "정성껏 다시 쓰기"에만 상위 모델(Claude Opus/Fable) 붙이는 하이브리드 구성 검토

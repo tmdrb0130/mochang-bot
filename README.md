@@ -130,7 +130,7 @@ http://localhost:5173 을 열면 화면 상단에 `모델: minimax/minimax-m3:fr
 ```
 mochang-bot/
 ├── backend/                    # Python · FastAPI
-│   ├── main.py                 #   API: /health /models /generate /extend /generate/dry-run
+│   ├── main.py                 #   API: /health /models /intake /intake/regenerate /generate /extend /research /verify /jobs
 │   ├── config.yaml             #   LLM 연결 설정 (base_url / api_key / model) — 여기만 바꾸면 모델 교체
 │   ├── llm/client.py           #   OpenAI 호환 클라이언트 (OpenRouter · Ollama · vLLM · LiteLLM 공용)
 │   ├── llm/jobs.py             #   동시성 층: asyncio.Queue + 워커 N개(max_workers), 429 백오프, 작업 ID 폴링
@@ -258,10 +258,17 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 - [x] React 프론트 백엔드 연결
 - [x] 생성문 검증 API (`/verify`) — 필수 요소 누락·근거 없는 문장 판정 (UI 표시는 미구현)
 - [x] 아이디어 구조화 → 부족한 항목만 "보기 + 모르겠어요" 카드로 묻는 입력 UX, 문항별 "정보 보태기"
+- [x] Q4-2 멘토링 카드(항상 생성) + 카드 재생성("다른 보기 보기", 고른 보기는 유지) — 2026-09-01
 - [x] 웹 조사 API (`/research`) — Vane/ddgs 검색 → 출처·원문 있는 사실 → 참고자료 주입 (UI 연결은 미구현)
 - [x] 동시성 층 — 큐·워커·백오프·`/jobs` 폴링
-- [ ] 로컬 문서 RAG (`/ingest`)
-- [ ] 로컬 70B 모델(Ollama/vLLM) 전환 및 모델 품질 비교
+- [ ] 로컬 70B 모델(Ollama/vLLM) 전환 및 모델 품질 비교 (같은 입력으로 MiniMax 무료 vs Llama 70B)
+- [ ] Vane 의 채팅 LLM 을 로컬 Ollama 에 연결 → 검색이 무료 한도를 안 먹게 (`vane_setup.py` ollama 옵션)
+- [ ] **조사 단계 UI** — 인테이크 뒤 주제 단위 조사(시장 통계 / 기존 서비스 / 고객 페인포인트 / 유사 BM / 정책 / 논문) → 사실 카드 체크 → 문항별 참고자료 주입
+- [ ] **조사 기반 카드** — customer/problem/alternative/revenue 보기를 검색 결과 근거로 생성, 보기마다 출처 표시
+- [ ] `/verify` 결과 UI(누락 요소·근거 없는 문장 하이라이트), `/jobs` 폴링으로 프론트 전환
+- [ ] 무료 한도 배지 정확도 — OpenRouter management key 로 `/api/v1/activity` 실제 집계 표시 (로컬 카운터는 성공 시에만)
+- [ ] 로컬 문서 RAG (`/ingest`) — **LlamaIndex** (2026-09-01 결정)
+- [ ] `styles/story.md`·`plain.md` 품질 다듬기 (기본은 논리·근거형)
 
 설계 배경, 문항별 필수 요소 분석, 결정 사항은 [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md) 에 있습니다.
 
@@ -291,13 +298,15 @@ python -m backend.rag.vane_setup          # .env 의 키로 OpenRouter + minimax
 ```
 출력된 provider id 를 `config.yaml research.vane.*` 에 넣고 `enabled: true`.
 
+> Vane 은 자체 모델이 없고 **채팅 LLM 을 외부에서 붙여야** 동작합니다(검색 1회당 최소 2회 호출: 검색어 재작성 + 요약). OpenRouter 무료 모델을 붙이면 검색마다 하루 50회 한도를 소모하므로, **로컬 Ollama 에 붙이는 것이 계획**입니다(작은 모델이면 충분 — 백엔드는 Vane 요약문을 버리고 `sources` 만 씁니다). 임베딩은 Vane 내장 Transformers(로컬·무료).
+
 지어내기 방지: 모델이 낸 `quote` 가 실제 페이지 본문에 없으면 그 사실은 버립니다(`rag/pipeline.py _verify_quotes`). 참고자료 섹션은 "목록 밖 수치 금지 · 출처/연도 표기" 규칙을 함께 넣습니다.
 
 ## 테스트
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                          # 69 tests, 모델·네트워크 호출 없음 (전부 mock)
+python -m pytest                          # 83 tests, 모델·네트워크 호출 없음 (전부 mock)
 python -m scripts.load_test --n 50        # 동시 50 요청으로 큐 제한 확인 (가짜 모델)
 python -m scripts.load_test --n 50 --jobs # /jobs 제출+폴링 경로
 ```
