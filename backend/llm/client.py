@@ -164,6 +164,8 @@ class LLMClient:
             base_delay=float(retry.get("base_delay_seconds", 2.0)),
             max_delay=float(retry.get("max_delay_seconds", 30.0)),
             retry_on=(RateLimited,),
+            # 한 클라이언트(IP)가 동시에 점유할 수 있는 작업 수. 0 이면 무제한 (config.yaml max_jobs_per_client)
+            max_per_client=int(config.get("max_jobs_per_client") or 0),
         )
         headers = {"HTTP-Referer": "http://localhost", "X-Title": "modoo-writer"} if self.is_openrouter else {}
         self._client = AsyncOpenAI(

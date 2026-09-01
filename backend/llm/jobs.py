@@ -29,12 +29,25 @@ class QueueError(RuntimeError):
     pass
 
 
+class TooManyJobs(QueueError):
+    """한 클라이언트(IP)가 동시에 가진 작업이 상한을 넘었다 → HTTP 429.
+
+    인증이 없어 IP 를 클라이언트 식별자로 쓴다. 한 명이 문항 9개를 연달아 눌러 큐를 독점하면
+    다른 사람이 몇 분씩 대기하게 되므로, 큐에 들어가기 전에 막는다."""
+
+    def __init__(self, active: int, limit: int):
+        self.active = active
+        self.limit = limit
+        super().__init__(f"동시에 진행할 수 있는 작업은 {limit}건까지입니다 (현재 {active}건). 하나가 끝나면 다시 시도해 주세요.")
+
+
 @dataclass
 class Job:
     id: str
     factory: Factory
     kind: str = "llm"
     status: str = "queued"          # queued | running | done | error
+    owner: str | None = None        # 제출한 클라이언트 식별자(IP). 동시 작업 제한용 — 응답에는 내보내지 않는다
     result: Any = None
     error: str | None = None
     attempts: int = 0
@@ -60,7 +73,9 @@ class Job:
 class JobQueue:
     def __init__(self, max_workers: int = 4, retry_attempts: int = 3, base_delay: float = 2.0, max_delay: float = 30.0,
                  retry_on: tuple[type[BaseException], ...] = (), history_limit: int = 500, sleep=asyncio.sleep,
-                 on_done=None):
+                 on_done=None, max_per_client: int = 0):
+        # max_per_client: 한 클라이언트(owner)가 동시에 가질 수 있는 작업 수(queued+running). 0 이면 무제한.
+        self.max_per_client = max(0, int(max_per_client))
         # on_done(job): 작업이 끝날 때(성공·실패 모두) 한 번 호출. 소요 시간 기록용.
         # 기본 None 이라 테스트 동작에는 영향이 없다.
         self.on_done = on_done
@@ -105,10 +120,15 @@ class JobQueue:
         return bool(self._workers)
 
     # ── 제출 ──
-    def submit(self, factory: Factory, kind: str = "llm") -> Job:
+    def submit(self, factory: Factory, kind: str = "llm", owner: str | None = None) -> Job:
         if not self._workers:
             raise QueueError("JobQueue 가 시작되지 않았습니다 (app startup 에서 await queue.start()).")
-        job = Job(id=uuid.uuid4().hex[:12], factory=factory, kind=kind, future=asyncio.get_running_loop().create_future())
+        if owner and self.max_per_client:
+            active = self.active_for(owner)
+            if active >= self.max_per_client:
+                raise TooManyJobs(active, self.max_per_client)
+        job = Job(id=uuid.uuid4().hex[:12], factory=factory, kind=kind, owner=owner,
+                  future=asyncio.get_running_loop().create_future())
         self._jobs[job.id] = job
         self._trim_history()
         self._queue.put_nowait(job)
@@ -154,10 +174,15 @@ class JobQueue:
                 ahead += 1
         return ahead
 
+    def active_for(self, owner: str) -> int:
+        """해당 클라이언트가 아직 끝나지 않은(queued+running) 작업 수."""
+        return sum(1 for j in self._jobs.values() if j.owner == owner and j.status in ("queued", "running"))
+
     def stats(self) -> dict:
         statuses = [j.status for j in self._jobs.values()]
         return {
             "max_workers": self.max_workers,
+            "max_per_client": self.max_per_client,
             "running": self._running,
             "queued": statuses.count("queued"),
             "done": self.total_done,

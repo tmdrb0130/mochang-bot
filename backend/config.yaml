@@ -33,7 +33,7 @@ models:
   # 다른 id 를 고르면 vLLM 이 404 를 낸다.
   # OpenRouter 로 되돌릴 때 쓸 목록은 config.yaml.openrouter.bak 에 있다.
   - id: casperhansen/llama-3.3-70b-instruct-awq
-    name: Llama 3.3 70B (사내 GPU)
+    name: 백석대학교 로컬 LLM
     note: 무료 한도 없음. 문항당 15~25초. 분량이 목표보다 짧게 나오는 경향 있음
 
 # 선택 모델이 429/다운이면 목록의 다른 모델로 OpenRouter 가 자동 전환 (`models` 파라미터, 최대 3개 → 선택 모델 + 목록 위쪽 2개).
@@ -48,6 +48,11 @@ daily_request_limit: 50
 # 모든 모델 호출은 asyncio.Queue 를 거치고 워커 max_workers 개가 처리 → OpenRouter 로 나가는 동시 요청 수 상한.
 # 무료 티어(20회/분)는 2~3, 유료/로컬 vLLM 이면 4~8. 429 는 지수 백오프(base_delay × 2^n, 최대 max_delay)로 attempts 회 재시도.
 max_workers: 12
+
+# 한 클라이언트(IP)가 동시에 진행할 수 있는 작업 수 (POST /jobs/{kind}). 초과하면 429.
+# 인증이 없어 IP 로 구분한다 — 한 명이 문항 9개를 연달아 눌러 큐를 독점하는 것을 막는다.
+# 0 이면 무제한. 프론트가 문항 여러 개를 동시에 돌릴 수 있으므로 너무 낮추지 말 것.
+max_jobs_per_client: 3
 retry:
   attempts: 3
   base_delay_seconds: 2

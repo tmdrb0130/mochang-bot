@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from backend.llm.jobs import JobQueue, QueueError
+from backend.llm.jobs import JobQueue, QueueError, TooManyJobs
 
 
 class Probe:
@@ -188,3 +188,99 @@ async def test_nested_run_inside_worker_does_not_deadlock():
     results = await asyncio.wait_for(asyncio.gather(*(q.run(outer) for _ in range(5))), timeout=5)
     assert results == ["llmllm"] * 5 and q.peak_running == 1
     await q.stop()
+
+
+# ────────────── V4: 클라이언트(IP)당 동시 작업 제한 ──────────────
+
+@pytest.mark.asyncio
+async def test_per_client_limit_rejects_and_recovers():
+    """같은 owner 는 상한까지만 동시 제출 가능, 다른 owner 는 영향 없음, 하나 끝나면 다시 열린다."""
+    q = JobQueue(max_workers=2, max_per_client=2)
+    await q.start()
+    gate = asyncio.Event()
+
+    async def blocker():
+        await gate.wait()
+        return "ok"
+
+    a1 = q.submit(blocker, kind="generate", owner="1.1.1.1")
+    a2 = q.submit(blocker, kind="generate", owner="1.1.1.1")
+    with pytest.raises(TooManyJobs) as e:
+        q.submit(blocker, kind="generate", owner="1.1.1.1")
+    assert e.value.limit == 2 and e.value.active == 2 and "2건" in str(e.value)
+
+    b1 = q.submit(Probe().make("b"), kind="generate", owner="2.2.2.2")   # 다른 IP 는 통과
+    assert q.active_for("1.1.1.1") == 2 and q.active_for("2.2.2.2") == 1
+
+    gate.set()
+    await asyncio.gather(a1.future, a2.future, b1.future)
+    assert q.active_for("1.1.1.1") == 0                                   # 끝난 작업은 안 센다
+    a3 = q.submit(Probe().make("a3"), kind="generate", owner="1.1.1.1")   # 다시 열림
+    assert await a3.future == "a3"
+    assert q.stats()["max_per_client"] == 2
+    await q.stop()
+
+
+@pytest.mark.asyncio
+async def test_per_client_limit_off_by_default():
+    """owner 를 안 주거나 상한이 0 이면 제한 없음 — 내부 queue.run() 경로가 막히면 안 된다."""
+    q = JobQueue(max_workers=2)                       # max_per_client 기본 0
+    await q.start()
+    assert q.stats()["max_per_client"] == 0
+    probe = Probe()
+    for _ in range(10):
+        q.submit(probe.make(1), owner="9.9.9.9")      # 상한 0 → 무제한
+    await q.stop()
+
+    q2 = JobQueue(max_workers=2, max_per_client=1)
+    await q2.start()
+    for _ in range(10):
+        q2.submit(Probe().make(1))                    # owner 없음 → 제한 대상 아님
+    await q2.stop()
+
+
+@pytest.mark.asyncio
+async def test_submit_endpoint_returns_429_over_limit(monkeypatch):
+    """POST /jobs/{kind} 가 같은 IP 의 초과 제출을 429 로 막고, 다른 IP 는 정상 수락한다."""
+    import httpx
+
+    from backend import main as M
+    from backend.llm.client import LLMResult
+
+    gate = asyncio.Event()
+
+    async def fake_complete(system, user, model):
+        await gate.wait()
+        return LLMResult(text="가짜 응답", model=model)
+
+    monkeypatch.setattr(M.client, "_complete", fake_complete)
+    monkeypatch.setattr(M.client.queue, "max_per_client", 2)
+    body = {"question_id": "q1", "style": "plain", "track": "tech", "idea": "동시 작업 제한 테스트 아이디어"}
+    mine, other = {"X-Forwarded-For": "203.0.113.7"}, {"X-Forwarded-For": "203.0.113.8"}
+
+    async with M.lifespan(M.app):
+        transport = httpx.ASGITransport(app=M.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=30) as c:
+            ok = [await c.post("/jobs/generate", json=body, headers=mine) for _ in range(2)]
+            assert [r.status_code for r in ok] == [200, 200]
+            assert all("job_id" in r.json() and "position" in r.json() for r in ok)   # 기존 필드 유지
+
+            over = await c.post("/jobs/generate", json=body, headers=mine)
+            assert over.status_code == 429 and "2건" in over.json()["detail"]
+            assert over.headers.get("retry-after") == "10"
+
+            assert (await c.post("/jobs/generate", json=body, headers=other)).status_code == 200
+
+            stats = (await c.get("/jobs", headers=mine)).json()
+            assert stats["your_active"] == 2 and stats["max_per_client"] == 2 and "max_workers" in stats
+
+            gate.set()
+            for r in ok:
+                for _ in range(100):
+                    snap = (await c.get(f"/jobs/{r.json()['job_id']}")).json()
+                    if snap["status"] in ("done", "error"):
+                        break
+                    await asyncio.sleep(0.02)
+                assert snap["status"] == "done"
+
+            assert (await c.post("/jobs/generate", json=body, headers=mine)).status_code == 200

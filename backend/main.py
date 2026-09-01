@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from .llm.client import (RESEARCH_USAGE_PATH, LLMClient, LLMError, RateLimited,
                          load_config, research_client_config)
+from .llm.jobs import TooManyJobs
 from . import timing
 from .pipeline import assemble, generate, intake, verify
 from .rag import pipeline as research_pipeline
@@ -258,14 +259,32 @@ _JOB_KINDS = {
 }
 
 
+def _client_key(request: Request) -> str:
+    """동시 작업 제한용 클라이언트 식별자. 인증이 없으므로 IP 를 쓴다.
+
+    공개 배포는 nginx(50001) 뒤라 request.client.host 가 전부 127.0.0.1 이 된다 →
+    프록시가 붙여 주는 X-Forwarded-For 의 첫 항목(원 클라이언트)을 우선 본다."""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else "unknown"
+
+
 @app.post("/jobs/{kind}")
-async def submit_job(kind: str, body: dict):
-    """kind ∈ generate|extend|intake|intake_regenerate|research|verify. 본문은 해당 동기 엔드포인트와 같다. → {job_id, position}"""
+async def submit_job(kind: str, body: dict, request: Request):
+    """kind ∈ generate|extend|intake|intake_regenerate|research|verify. 본문은 해당 동기 엔드포인트와 같다. → {job_id, position}
+    같은 IP 가 동시에 가질 수 있는 작업은 config.yaml max_jobs_per_client 건까지 — 넘으면 429."""
     if kind not in _JOB_KINDS:
         raise HTTPException(status_code=404, detail=f"알 수 없는 작업 종류: {kind}")
     model_cls, runner = _JOB_KINDS[kind]
     form = model_cls(**body).model_dump()
-    job = client.queue.submit(lambda: runner(form), kind=kind)
+    try:
+        job = client.queue.submit(lambda: runner(form), kind=kind, owner=_client_key(request))
+    except TooManyJobs as e:
+        raise HTTPException(status_code=429, detail=str(e),
+                            headers={"Retry-After": "10"})
     return {"job_id": job.id, "kind": kind, "position": client.queue.position(job.id), "queue": client.queue.stats()}
 
 
@@ -279,8 +298,9 @@ async def get_job(job_id: str):
 
 
 @app.get("/jobs")
-async def queue_stats():
-    return client.queue.stats()
+async def queue_stats(request: Request):
+    """큐 전체 상태 + 이 클라이언트(IP)가 지금 점유 중인 작업 수(your_active). 기존 필드는 그대로."""
+    return {**client.queue.stats(), "your_active": client.queue.active_for(_client_key(request))}
 
 
 @app.post("/generate/dry-run")
