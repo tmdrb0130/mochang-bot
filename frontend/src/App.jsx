@@ -244,7 +244,12 @@ export default function ModooWriter() {
     api.models()
       .then((m) => {
         setModels(m.models || []);
-        setForm((f) => (f.model ? f : { ...f, model: m.default }));
+        setForm((f) => {
+          // 저장된 모델이 목록에 없으면(config.yaml 에서 모델을 갈아끼운 경우) 기본값으로 되돌린다.
+          // 안 그러면 예전 localStorage 를 가진 브라우저가 계속 옛 모델을 보내 400 을 받는다.
+          const ids = (m.models || []).map((x) => x.id);
+          return f.model && ids.includes(f.model) ? f : { ...f, model: m.default };
+        });
       })
       .catch(() => {});
   }, []);

@@ -171,13 +171,17 @@ class LLMClient:
         )
 
     def resolve_model(self, model: str | None) -> str:
-        """요청에서 온 model 을 검증. 목록에 없는 id 는 거부(유료 모델 오남용 방지)."""
+        """요청에서 온 model 을 검증. 목록에 없는 id 는 기본 모델로 대체(유료 모델 오남용 방지)."""
         if self.pin_model:
             return self.model   # 조사 전용 클라이언트 — 다른 서버라 UI 의 모델 id 가 통하지 않는다
         if not model:
             return self.model
         if self.models and model not in self.model_ids:
-            raise ValueError(f"허용되지 않은 모델입니다: {model}. /models 에서 목록을 확인하세요.")
+            # config.yaml 에서 모델을 갈아끼우면, 예전 localStorage 를 가진 브라우저가 옛 id 를 계속 보낸다.
+            # 여기서 예외를 던지면 사용자는 25초를 기다린 끝에 실패를 본다 → 기본 모델로 대체하고 진행한다.
+            # 목록 밖 모델을 쓰게 해주는 것이 아니라 기본값으로 되돌리는 것이므로 오남용 방지 의도는 그대로다.
+            print(f"[warn] 목록에 없는 모델 요청: {model} → 기본 모델 {self.model} 로 대체", flush=True)
+            return self.model
         return model
 
     def _extra_for(self, model: str) -> dict:
