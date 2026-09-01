@@ -119,3 +119,74 @@ async def test_ddgs_backend_uses_monkeypatched_client(monkeypatch):
     out = await R.DDGSearch(include_news=True)("q", 5)      # 명시하면 뉴스도 (되살리기 가능)
     assert [r["source_type"] for r in out] == ["web", "news"] and out[1]["date"] == "2026-01-02"
     assert calls == ["text", "news"]
+
+
+# ── 네이버 검색 API 어댑터 (RESEARCH_PLAN 3단계). 키 없이 mock 으로만 검증 ──
+
+def test_naver_config_off_without_keys(monkeypatch):
+    monkeypatch.delenv("NAVER_CLIENT_ID", raising=False)
+    monkeypatch.delenv("NAVER_CLIENT_SECRET", raising=False)
+    assert R.NaverConfig.from_config({}).configured is False
+    assert [n for n, _ in R.researcher_from_config({}).backends] == ["ddgs"]   # 키 없으면 예전 그대로
+
+    monkeypatch.setenv("NAVER_CLIENT_ID", "id")
+    monkeypatch.setenv("NAVER_CLIENT_SECRET", "secret")
+    cfg = R.NaverConfig.from_config({"naver": {"kinds": ["news", "doc", "없는유형"]}})
+    assert cfg.configured and cfg.kinds == ["news", "doc"]                     # 모르는 유형은 버린다
+    assert [n for n, _ in R.researcher_from_config({}).backends] == ["naver", "ddgs"]
+
+
+def test_naver_parse_strips_tags_and_normalizes():
+    payload = {"items": [{
+        "title": "1인 가구 <b>식품</b> 폐기 &amp; 낭비",
+        "originallink": "https://news.co.kr/a", "link": "https://n.news.naver.com/a",
+        "description": "본문   <b>요약</b>입니다", "pubDate": "Mon, 01 Sep 2026 09:00:00 +0900",
+    }]}
+    rows = R.NaverSearch(R.NaverConfig(client_id="i", client_secret="s")).parse("news", payload)
+    assert rows == [{"title": "1인 가구 식품 폐기 & 낭비", "url": "https://news.co.kr/a",   # 원문 링크 우선
+                     "snippet": "본문 요약입니다", "date": "2026-09-01", "source_type": "news"}]
+    assert R.NaverSearch(R.NaverConfig()).parse("doc", {})== []
+    assert R.NaverSearch(R.NaverConfig()).parse("doc", {"items": [{"title": "논문", "link": "https://k.re.kr/1"}]}
+                                                )[0]["source_type"] == "academic"
+
+
+@pytest.mark.asyncio
+async def test_naver_search_requests_each_kind_and_survives_one_failure(monkeypatch):
+    """kinds 마다 요청 1회. 유형 하나가 죽어도 나머지 결과는 살린다."""
+    seen = []
+
+    class FakeResponse:
+        def __init__(self, path):
+            self.path = path
+
+        def raise_for_status(self):
+            if "blog" in self.path:
+                raise RuntimeError("500")
+
+        def json(self):
+            return {"items": [{"title": "T", "link": f"https://x.com/{self.path}", "description": "d"}]}
+
+    class FakeClient:
+        def __init__(self, **kw):
+            self.headers = kw.get("headers", {})
+
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+
+        async def get(self, url, params=None):
+            seen.append((url.rsplit("/", 1)[-1], params["display"], self.headers.get("X-Naver-Client-Id")))
+            return FakeResponse(url)
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+    cfg = R.NaverConfig(client_id="id", client_secret="secret", kinds=["news", "blog", "doc"])
+    out = await R.NaverSearch(cfg)("반찬가게 폐기율", 6)
+    assert [p for p, *_ in seen] == ["news.json", "blog.json", "doc.json"]
+    assert seen[0][1] == 2 and seen[0][2] == "id"          # max_results 를 유형 수로 나눠 요청, 키는 헤더로
+    assert [r["source_type"] for r in out] == ["news", "academic"]   # blog 실패분만 빠짐
+
+
+def test_norm_date_understands_naver_formats():
+    assert R.make_result("t", "u", date="Mon, 01 Sep 2026 09:00:00 +0900")["date"] == "2026-09-01"   # 뉴스 pubDate
+    assert R.make_result("t", "u", date="20260901")["date"] == "2026-09-01"                          # 블로그 postdate
+    assert R.make_result("t", "u", date="20261301")["date"] is None                                  # 13월은 날짜 아님

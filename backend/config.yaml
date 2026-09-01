@@ -80,6 +80,14 @@ research:
   max_results_per_query: 6
   max_pages_to_extract: 6        # trafilatura 본문 추출 페이지 수 상한
   max_pages_to_fetch: 6          # 실제로 받아오는 페이지 수 (예전 12 → 6. 본문 실패가 잦으면 8까지)
+  # 네이버 검색 API (RESEARCH_PLAN 3단계). .env 에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 이 있어야 켜진다 —
+  # 없으면 백엔드 목록에서 자동으로 빠지고 예전처럼 ddgs 만 쓴다 (키 없이도 그대로 동작).
+  # 한도: 앱 단위 25,000회/일 합산. kinds 를 늘리면 검색어 1개당 그만큼 요청이 나간다.
+  naver:
+    kinds: ["news", "blog"]      # news | blog | doc(전문자료) | webkr(웹문서)
+    sort: "sim"                  # sim(정확도) | date(최신)
+    timeout: 10
+
   vane:
     # 2026-09-01 끔. Vane 의 SearXNG 는 httpx 로 검색엔진에 붙는데 DuckDuckGo 가 그 지문을 봇으로 보고 캡차를 준다
     # (IP 문제가 아니다 — 같은 curl 을 작업 PC/서버에서 쏘면 둘 다 202). 살아남은 엔진이 Bing 하나뿐이라
