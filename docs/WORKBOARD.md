@@ -21,6 +21,12 @@
   - job id 를 `sessionStorage` 에 보관해 새로고침해도 이어받기 (V6)
 - 건드릴 파일: `frontend/src/api.js`, `frontend/src/App.jsx`. 백엔드는 완성돼 있음 — **수정 금지**.
   응답 스키마는 `backend/main.py:261~284`, `backend/llm/jobs.py` 를 읽고 맞추기.
+- **같이 고칠 버그 (2026-09-02 발견)**: 조사 결과 메모(`researchRef`, `App.jsx:305 ensureResearch`)가
+  문항 id 로만 키가 잡혀 있고 localStorage 에서도 복원돼서, **아이디어를 바꿔도 옛 아이디어의
+  조사 결과를 그대로 재사용**한다 (조사가 아예 생략되거나 엉뚱한 참고자료가 끼어듦).
+  실측: 9/2 아침 생성 34건 동안 `/research` 호출 0회. 아이디어(또는 트랙)가 바뀌면
+  `researchRef`·`researchState` 를 비우도록 수정. 참고: 조사 실패 시 `[]` 를 넣는데 JS 에서
+  빈 배열은 truthy 라 재시도도 영영 안 된다 — 의도인지 확인하고 주석 남기기.
 - 검증: `npm run dev` (:5173) 로 로컬 확인 → `npx vite build` 통과.
 - ⚠️ **`frontend/dist` 재빌드는 즉시 공개 배포다** (nginx 가 dist 를 그대로 서빙).
   개발 중엔 dev 서버로만 확인하고, dist 빌드·반영은 사용자 확인 후.
