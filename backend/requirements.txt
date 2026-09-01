@@ -4,7 +4,7 @@ openai
 pyyaml
 python-dotenv
 httpx
-# 웹 조사 (backend/rag)
+# web research (backend/rag)
 ddgs
 trafilatura
 lxml_html_clean
