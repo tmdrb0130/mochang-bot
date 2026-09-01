@@ -209,19 +209,83 @@ async def extract_facts(client: LLMClient, form: dict, meta: dict, pages: list[d
 
 # ────────────────────────── 5) 참고자료 섹션 ──────────────────────────
 
+# 추출 모델이 값을 못 채우면 None 이 아니라 문자열 "null"·"미상" 등을 내보낼 때가 있다.
+# 파이썬에서 이런 문자열은 참이라 `or` 폴백을 그냥 통과해 "출처: null" 이 프롬프트에 박힌다.
+_EMPTYISH = {"", "null", "none", "nil", "n/a", "na", "unknown", "미상", "없음", "-"}
+
+
+def _clean(v) -> str:
+    """비어 있거나 'null' 같은 자리표시 문자열이면 빈 문자열로 정규화."""
+    s = (v or "")
+    if not isinstance(s, str):
+        s = str(s)
+    return "" if s.strip().lower() in _EMPTYISH else s.strip()
+
+
+def _year_of(fact: dict) -> str:
+    """date 가 비었으면 URL 에서 연도를 건진다.
+
+    조사 모델이 date 를 거의 항상 비워 보내는데, 기사 URL 에는 날짜가 들어 있는 경우가 많다
+    (예: newspim.com/news/view/20250313000298 → 2025). 연도가 없으면 "연도 미상" 같은 말을
+    만들지 말고 빈 문자열을 돌려준다 — 모델이 그 표현을 본문에 그대로 옮겨 쓰기 때문이다.
+    """
+    d = _clean(fact.get("date"))
+    if len(d) >= 4 and d[:4].isdigit():
+        return d[:4]
+
+    url = _clean(fact.get("url"))
+    # 임의의 숫자 id 를 연도로 오인하지 않도록 "연도 + 월(01~12)" 이 이어질 때만 인정한다.
+    #   https://www.newspim.com/news/view/20250313000298  -> 2025 (2025 + 03)
+    #   https://example.kr/2024/07/13/article             -> 2024
+    #   https://example.kr/view/20259999                  -> 인정하지 않음 (99월은 없다)
+    m = re.search(r"(?:^|/)((?:19|20)\d{2})[-/]?(?:0[1-9]|1[0-2])", url)
+    if not m:
+        # /2024/ 처럼 연도만 한 조각으로 들어 있는 경우
+        m = re.search(r"(?:^|/)((?:19|20)\d{2})(?:/|$)", url)
+    return m.group(1) if m else ""
+
+
 def format_references(facts: list[dict]) -> str:
-    """문항 생성 프롬프트에 넣는 [웹 참고자료] 섹션. 비어 있으면 빈 문자열."""
+    """문항 생성 프롬프트에 넣는 [웹 참고자료] 섹션. 비어 있으면 빈 문자열.
+
+    같은 URL 에서 뽑은 사실들은 한 출처 아래로 묶는다. 따로 나열하면 모델이
+    같은 출처를 여러 번 반복 인용한다(실측: 뉴스핌 기사 하나가 3줄로 갈려 3회 인용됨).
+    """
     if not facts:
         return ""
+
+    groups: list[dict] = []
+    by_url: dict[str, dict] = {}
+    for f in facts:
+        url = _clean(f.get("url"))
+        key = url or ("no-url-%d" % len(groups))
+        g = by_url.get(key)
+        if g is None:
+            g = {"url": url,
+                 "pub": _clean(f.get("publisher")) or _clean(f.get("source_title")),
+                 "year": _year_of(f),
+                 "items": []}
+            by_url[key] = g
+            groups.append(g)
+        g["items"].append(f)
+        if not g["year"]:
+            g["year"] = _year_of(f)
+
     lines = [assemble.section_headers().get("references", "[웹 참고자료]")]
-    for i, f in enumerate(facts, 1):
-        year = (f.get("date") or "")[:4] or "연도 미상"
-        pub = f.get("publisher") or f.get("source_title") or "출처 미상"
-        lines.append(f"{i}. {f['fact']} (출처: {pub}, {year})")
-        if f.get("quote"):
-            lines.append(f"   원문: \"{f['quote'][:160]}\"")
-        if f.get("url"):
-            lines.append(f"   URL: {f['url']}")
+    for i, g in enumerate(groups, 1):
+        if g["pub"] and g["year"]:
+            head = f"{i}. {g['year']}년 {g['pub']}"
+        elif g["pub"]:
+            head = f"{i}. {g['pub']} (연도 확인 불가 — 인용할 때 연도를 쓰지 말 것)"
+        else:
+            head = f"{i}. 출처 확인 불가 — 이 항목은 인용하지 말 것"
+        lines.append(head)
+        for f in g["items"]:
+            lines.append(f"   - {f['fact']}")
+            if f.get("quote"):
+                lines.append(f"     원문: \"{f['quote'][:160]}\"")
+        if g["url"]:
+            lines.append(f"   URL: {g['url']}")
     return "\n".join(lines)
 
 

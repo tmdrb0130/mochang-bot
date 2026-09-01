@@ -56,6 +56,17 @@ def load_question(question_id: str) -> tuple[dict, str]:
     return meta, m.group(2).strip()
 
 
+def _is_short_question(question_id: str | None) -> bool:
+    """100자 이내로 끝나는 문항인지(Q1·Q10). 참고자료 삽입 여부를 정할 때 쓴다."""
+    if not question_id:
+        return False
+    try:
+        meta, _ = load_question(question_id)
+    except Exception:
+        return False
+    return int(meta.get("limit", 2000)) <= 100
+
+
 def build_context(form: dict) -> str:
     """지원자 입력 → user 프롬프트."""
     parts = [
@@ -70,6 +81,11 @@ def build_context(form: dict) -> str:
     parts.append(f"지원자 역량·경력: {capability}")
     parts.extend(_answer_sections(form.get("answers") or []))
     refs = form.get("references")
+    if refs and _is_short_question(form.get("question_id")):
+        # Q1·Q10 처럼 90자 안팎으로 끝나는 문항: 인용할 자리가 없는데
+        # 참고자료 1,000자와 "인용하면 출처를 붙이라"는 지시가 붙으면
+        # 한 문장에 통계를 욱여넣게 된다. 아예 넣지 않는다.
+        refs = None
     if refs:
         # 조사 파이프라인(backend/rag/pipeline.py)이 만든 사실 목록 → 참고자료 섹션. 문자열이면 그대로.
         if isinstance(refs, str):
@@ -113,6 +129,14 @@ def _answer_sections(answers: list[dict]) -> list[str]:
 
 def build_prompts(form: dict) -> tuple[str, str, dict]:
     """(system 프롬프트, user 프롬프트, 문항 메타) 반환."""
+    meta_check, _ = load_question(form["question_id"])
+    if meta_check.get("only_business") and not form.get("is_business"):
+        # Q7-1("현재 사업 아이템과 어떻게 다른가")은 기창업자 전용이다.
+        # 프론트는 이미 거르지만(App.jsx QUESTIONS.filter), API 를 직접 부르면 뚫린다.
+        # 막지 않으면 있지도 않은 기존 사업을 지어내서 쓴다.
+        raise PromptNotFound(
+            f"{meta_check['label']} 문항은 현재 사업자에게만 해당합니다 (지원자 창업 여부: 예비창업자).")
+
     system_md = _read("system.md")
     track_md = _read(f"tracks/{form['track']}.md")
     style_md = _read(f"styles/{form['style']}.md")
@@ -128,9 +152,13 @@ def build_prompts(form: dict) -> tuple[str, str, dict]:
 
     if int(meta.get("limit", 2000)) <= 100:
         # Q1·Q10 같은 100자 문항: 스타일(장면 묘사·1인칭 서술)을 적용하면 문장 중간에서 잘린다.
-        # 스타일 섹션 대신 prompts/short_question.md 의 '한 문장' 규칙을 최우선으로 둔다.
+        # 스타일 섹션 대신 prompts/short_question.md 의 '한 문장' 규칙을 쓴다.
+        # 길이는 문항 md 의 min/max 를 우선 쓴다 — 없으면 limit 의 60~90%.
+        # (Q1 60~90, Q10 70~90 처럼 문항마다 다르고, frontmatter 의 target 과 어긋나면 안 된다)
         limit = int(meta["limit"])
-        style_section = render("short_question.md", min=int(limit * 0.6), max=int(limit * 0.9), limit=limit, style=form["style"])
+        lo = int(meta.get("min") or limit * 0.6)
+        hi = int(meta.get("max") or limit * 0.9)
+        style_section = render("short_question.md", min=lo, max=hi, limit=limit, style=form["style"])
     else:
         style_section = f"[글 스타일]\n{style_md}"
 

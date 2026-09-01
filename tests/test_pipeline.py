@@ -109,8 +109,45 @@ async def test_extract_facts_returns_empty_on_bad_json_or_no_pages(form):
 def test_format_references_includes_source_year_and_rules():
     facts = [{"fact": "폐기율 23%", "quote": "폐기율은 평균 23%", "url": "https://k.go.kr/x", "date": "2026-03-01", "publisher": "서울시"}]
     s = P.format_references(facts)
-    assert s.startswith("[웹 참고자료") and "1. 폐기율 23% (출처: 서울시, 2026)" in s and "원문:" in s and "URL: https://k.go.kr/x" in s
+    # 같은 출처 아래 사실을 묶어 보여준다. "출처:" 라는 말은 목록에 쓰지 않는다 —
+    # 모델이 그 문자열을 본문에 그대로 옮겨 쓰기 때문(2026-09-01).
+    assert s.startswith("[웹 참고자료")
+    assert "1. 2026년 서울시" in s
+    assert "- 폐기율 23%" in s
+    assert "원문:" in s and "URL: https://k.go.kr/x" in s
     assert P.format_references([]) == ""
+
+
+def test_format_references_guards_null_like_publisher():
+    """추출 모델이 문자열 'null' 을 내보내도 '출처: null' 이 프롬프트에 들어가면 안 된다."""
+    s = P.format_references([{"fact": "x", "url": "https://a.kr/1", "date": None, "publisher": "null"}])
+    assert "null" not in s.lower().replace("https://", "")
+    assert "인용하지 말 것" in s
+
+
+def test_format_references_takes_year_from_url_when_date_missing():
+    """조사 모델이 date 를 비워도 기사 URL 에 날짜가 있으면 연도를 건진다."""
+    s = P.format_references([{"fact": "x", "url": "https://www.newspim.com/news/view/20250313000298",
+                              "date": None, "publisher": "뉴스핌"}])
+    assert "2025년 뉴스핌" in s
+    assert "연도 미상" not in s
+
+
+def nl_join(lines):
+    return chr(10).join(lines)
+
+
+def test_format_references_groups_same_url():
+    """같은 기사에서 뽑은 사실은 한 출처 아래로 묶는다 (출처 반복 인용 방지)."""
+    facts = [{"fact": "a", "url": "https://n.kr/1", "date": "2025-01-01", "publisher": "뉴스핌"},
+             {"fact": "b", "url": "https://n.kr/1", "date": None, "publisher": "뉴스핌"},
+             {"fact": "c", "url": "https://n.kr/2", "date": "2024-01-01", "publisher": "한겨레"}]
+    s = P.format_references(facts)
+    # 머리말(sections.md)에도 예시로 매체명이 들어가므로 목록 본문만 센다
+    body = nl_join(s.split(chr(10))[1:])
+    assert body.count("뉴스핌") == 1
+    assert "- a" in s and "- b" in s and "- c" in s
+    assert "2. 2024년 한겨레" in s
 
 
 # ── 전체 + 캐시 ──
@@ -128,7 +165,7 @@ async def test_run_research_end_to_end_with_cache(tmp_path, form):
     out = await P.run_research(client, researcher, form, "q2", P.ResearchConfig(max_queries=2), cache=cache, fetch=fetch)
     assert out["queries"] == ["반찬가게 폐기율", "1인 가구 식사"]
     assert out["facts"][0]["fact"] == "폐기율 23%" and out["cached"] is False
-    assert "출처: 서울시, 2026" in out["references"]
+    assert "2026년 서울시" in out["references"]
     assert len(client.calls) == 2                                   # 검색어 1회 + 추출 1회
 
     again = await P.run_research(FakeClient([]), researcher, form, "q2", P.ResearchConfig(), cache=cache, fetch=fetch)
@@ -139,5 +176,16 @@ def test_build_context_injects_references():
     from backend.pipeline import assemble
     ctx = assemble.build_context({"track": "tech", "idea": "x", "references": [
         {"fact": "폐기율 23%", "quote": "q", "url": "https://k.go.kr", "date": "2026-01-01", "publisher": "서울시"}]})
-    assert "[웹 참고자료" in ctx and "폐기율 23% (출처: 서울시, 2026)" in ctx
+    assert "[웹 참고자료" in ctx and "2026년 서울시" in ctx and "- 폐기율 23%" in ctx
     assert "[웹 참고자료" not in assemble.build_context({"track": "tech", "idea": "x"})
+
+
+def test_build_context_skips_references_for_short_questions():
+    """Q1·Q10 처럼 90자로 끝나는 문항에는 참고자료를 넣지 않는다 (인용할 자리가 없다)."""
+    from backend.pipeline import assemble
+    refs = [{"fact": "폐기율 23%", "quote": "q", "url": "https://k.go.kr", "date": "2026-01-01", "publisher": "서울시"}]
+    for qid in ("q1", "q10"):
+        ctx = assemble.build_context({"track": "tech", "idea": "x", "question_id": qid, "references": refs})
+        assert "[웹 참고자료" not in ctx, f"{qid} 에 참고자료가 들어갔다"
+    ctx = assemble.build_context({"track": "tech", "idea": "x", "question_id": "q2", "references": refs})
+    assert "[웹 참고자료" in ctx
