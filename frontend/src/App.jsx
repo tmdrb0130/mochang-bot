@@ -180,36 +180,59 @@ function ResearchPanel({ state }) {
   );
 }
 
+// ───────────────────────── 작업 내용 저장 (새로고침 대비) ─────────────────────────
+// 인테이크 카드·답변·초안은 메모리에만 있어서 새로고침하면 사라졌다.
+// 조사 + 인테이크에 2분 가까이 걸리므로 유실이 크다 → localStorage 에 담아둔다.
+// 브라우저에만 남고 서버로는 안 간다. 다른 아이디어를 입력하면 덮어쓴다.
+const SAVE_KEY = "modoo-writer-state-v1";
+
+function loadSaved() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;                      // 사생활 보호 모드 등에서 접근이 막히면 그냥 저장 없이 동작
+  }
+}
+
+function saveState(data) {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
+  } catch { /* 용량 초과·접근 차단 — 저장만 못 할 뿐 동작에는 지장 없음 */ }
+}
+
 export default function ModooWriter() {
-  const [step, setStep] = useState(0); // 0 입력, 1 생성·선택, 2 제출용 정리
-  const [form, setForm] = useState({
+  const saved = useMemo(() => loadSaved(), []);
+  const [step, setStep] = useState(saved?.step ?? 0); // 0 입력, 1 정보 보충, 2 초안 고르기, 3 제출용 정리
+  const [form, setForm] = useState(saved?.form ?? {
     track: "tech", idea: "", isBusiness: false, currentItem: "", team: "팀원 없음", capability: "",
     field: "",          // Q6 사업 분야 — 사람이 직접 선택
     q10Public: true,    // Q10 공개 여부 — 공개면 AI 생성, 비공개면 고정 문장
     styles: ["logic"], // 기본 1개 (무료 티어 요청 수 절약). 2026-09-01: 논리·근거형이 실호출 품질 최고라 기본으로. 사용자가 더 고를 수 있음.
   });
-  const [texts, setTexts] = useState({});   // texts[qid][styleId] = string
-  const [status, setStatus] = useState({}); // status[qid][styleId] = 'loading' | 'done' | 'error'
+  const [texts, setTexts] = useState(saved?.texts ?? {});   // texts[qid][styleId] = string
+  const [status, setStatus] = useState(saved?.status ?? {}); // status[qid][styleId] = 'loading' | 'done' | 'error'
   const [errors, setErrors] = useState({}); // errors[qid][styleId] = message
-  const [picked, setPicked] = useState({}); // picked[qid] = styleId
+  const [picked, setPicked] = useState(saved?.picked ?? {}); // picked[qid] = styleId
   const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState("");
   // ── 인테이크(정보 보충) ──
-  const [intake, setIntake] = useState(null);      // /intake 결과 { summary, slots, cards, ready }
+  const [intake, setIntake] = useState(saved?.intake ?? null);      // /intake 결과 { summary, slots, cards, ready }
   const [intakeBusy, setIntakeBusy] = useState(false);
-  const [answers, setAnswers] = useState({});      // answers[slot] = { answer: string|string[]|null, unknown: bool }
-  const [cardIdx, setCardIdx] = useState(0);
+  const [answers, setAnswers] = useState(saved?.answers ?? {});      // answers[slot] = { answer: string|string[]|null, unknown: bool }
+  const [cardIdx, setCardIdx] = useState(saved?.cardIdx ?? 0);
   const [regen, setRegen] = useState({});          // regen[slot] = { busy: bool, note: string, error?: string, count: number }
   const [assistOpen, setAssistOpen] = useState({}); // assistOpen[qid] = bool (초안 화면의 "정보 보태기" 패널)
   const [server, setServer] = useState(null); // { ok, model, usage } | { ok:false, error }
   const [models, setModels] = useState([]);   // [{ id, name, note }] — 백엔드 config.yaml 의 목록
-  const [modelUsed, setModelUsed] = useState({}); // modelUsed[qid][styleId] = 실제 응답한 모델 id
+  const [modelUsed, setModelUsed] = useState(saved?.modelUsed ?? {}); // modelUsed[qid][styleId] = 실제 응답한 모델 id
   // ── 웹 조사 ──
   // 생성 전에 문항마다 /research 를 돌려 출처 있는 사실을 모으고, 그걸 references 로 생성에 넘긴다.
   // 조사는 백엔드의 조사 전용 모델(로컬 라마 70B)이 하고, 본문 작성은 llm: 모델(OpenRouter)이 한다.
-  const [researchState, setResearchState] = useState({}); // researchState[qid] = { busy, error, facts, queries, pages, backend }
+  const [researchState, setResearchState] = useState(saved?.researchState ?? {}); // researchState[qid] = { busy, error, facts, queries, pages, backend }
   // 생성 태스크가 즉시 읽어야 해서(setState 는 비동기) 사실은 ref 에도 둔다.
-  const researchRef = useRef({});
+  // 저장본에서 복원할 때 ref 도 같이 채워야 재생성 시 조사를 다시 돌지 않는다
+  const researchRef = useRef(Object.fromEntries(Object.entries(saved?.researchState ?? {}).map(([k, v]) => [k, v?.facts ?? []])));
 
   const refreshHealth = () =>
     api.health()
@@ -234,6 +257,16 @@ export default function ModooWriter() {
     (intake?.cards || [])
       .filter((c) => answers[c.slot] && (answers[c.slot].unknown || answers[c.slot].answer))
       .map((c) => ({ slot: c.slot, label: c.label, answer: answers[c.slot].answer, unknown: !!answers[c.slot].unknown }));
+  // 값이 바뀔 때마다 저장. loading 상태는 저장하지 않는다 — 새로고침 후 영원히 도는 것처럼 보이면 안 되므로.
+  useEffect(() => {
+    const cleanStatus = {};
+    for (const [qid, byStyle] of Object.entries(status)) {
+      const kept = Object.fromEntries(Object.entries(byStyle).filter(([, v]) => v !== "loading"));
+      if (Object.keys(kept).length) cleanStatus[qid] = kept;
+    }
+    saveState({ step, form, texts, status: cleanStatus, picked, intake, answers, cardIdx, modelUsed, researchState });
+  }, [step, form, texts, status, picked, intake, answers, cardIdx, modelUsed, researchState]);
+
   const formForApi = () => ({ ...form, answers: buildAnswers() });
   const answeredCount = Object.values(answers).filter((a) => a && (a.unknown || a.answer)).length;
   // 문항에 연결된 카드. 모델이 question_ids 를 비워 보냈으면 모든 문항에 보여준다.
@@ -650,6 +683,9 @@ export default function ModooWriter() {
               </p>
               <div className="flex gap-2">
                 <button onClick={() => setStep(0)} className="px-3 py-1.5 text-sm rounded-lg border border-slate-300">입력 수정</button>
+                {/* 저장본까지 비우고 처음부터. 새로고침으로는 안 지워지므로 명시적 버튼이 필요하다. */}
+                <button onClick={() => { if (confirm("지금까지 만든 초안과 조사 결과가 모두 지워집니다. 계속할까요?")) { try { localStorage.removeItem(SAVE_KEY); } catch { /* 접근 차단 */ } location.reload(); } }}
+                  className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 text-slate-500">새로 시작</button>
                 <button onClick={() => setStep(3)} disabled={doneCount === 0} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white disabled:bg-slate-300">제출용으로 정리</button>
               </div>
             </div>

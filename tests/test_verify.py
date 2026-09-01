@@ -57,9 +57,11 @@ async def test_verify_text_flips_present_without_real_evidence():
 
     assert out["items"][0]["present"] is True
     assert out["items"][1]["present"] is False and out["items"][1]["evidence"] is None   # 가짜 근거 → 뒤집힘
-    assert out["missing"] == [reqs[1], reqs[2]]
+    # 모델이 판정하지 않은 필수 요소도 누락으로 잡힌다 → reqs[0] 만 present
+    assert out["missing"] == reqs[1:]
     assert out["unsupported_claims"] == ["사장님들은 남은 반찬을 팔 방법이 없어 폐기하고 있었고"]  # 글에 있는 것만
-    assert out["score"] == 33 and out["parse_ok"] is True and out["overall"].startswith("배경은")
+    # 문항 md 의 필수 요소 개수가 바뀌어도 깨지지 않게 계산으로 비교
+    assert out["score"] == round(100 * 1 / len(reqs)) and out["parse_ok"] is True and out["overall"].startswith("배경은")
     assert "[필수 요소]" in client.calls[0]["user"] and "[생성된 글]" in client.calls[0]["user"]
 
 
