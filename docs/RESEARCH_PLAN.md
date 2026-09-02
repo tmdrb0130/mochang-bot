@@ -46,7 +46,7 @@
 | 금리·환율·경기지표 | 한국은행 ECOS API | - | |
 | 정부 창업지원·정책 연계 | K-Startup 조회서비스 (data.go.kr) | 네이버 뉴스 | |
 | 뉴스·산업 동향 | 네이버 뉴스 검색 API | 빅카인즈 → ddgs | 최신순 정렬 |
-| 학술 근거 | 네이버 전문자료 API | KCI → OpenAlex/Semantic Scholar | 네이버는 같은 키 |
+| 학술 근거 | KCI OpenAPI (국내) | OpenAlex → Semantic Scholar (해외, 키 없이 가능) | ~~네이버 전문자료~~ **2026-07-31 종료, 대체 없음** |
 | 특허 (기술 사업) | KIPRIS | - | |
 | 기타 비정형 | 네이버 웹문서/블로그 | ddgs | **ddgs 는 여기서만** |
 
@@ -67,8 +67,18 @@
 
 ## API 한도·제약 (반드시 준수)
 
-- **네이버 검색 API**: 25,000회/일, 앱 단위 공유(뉴스/블로그/전문자료 합산).
-  초과 대응은 다계정이 아니라 **제휴 API 신청**(한도 상향)으로.
+- **네이버 검색 API — NAVER API HUB 기준 (2026-06-25 이관, 2026-09-02 확인)**:
+  - 신청: developers.naver.com **아님**(신규 신청 종료). 네이버클라우드플랫폼 콘솔 > Application Services >
+    NAVER API HUB > Application 등록 > 검색 API. 구 키는 2027-06-30 까지만.
+  - 엔드포인트: `https://naverapihub.apigw.ntruss.com/search/v1/{news|blog|webkr|cafearticle|…}`
+    (구 `openapi.naver.com/v1/search/{kind}.json` — 도메인만 바꾸면 안 됨, 경로도 다름).
+    파라미터는 동일: query, display(1~100), start(1~1000), sort(sim|date).
+  - 헤더: `X-NCP-APIGW-API-KEY-ID`(Client ID) / `X-NCP-APIGW-API-KEY`(Client Secret) — 구 `X-Naver-Client-*` 아님.
+  - 한도: 검색 통합 **월 775,000건**, 키당 **50 RPS**, 초과 시 429. 콘솔에서 일/월 한도와 50/80/100% 알림 설정.
+  - 오류: HTTP 상태 먼저 보고, 본문은 `{"errorCode","errorMessage"}`(API) 와
+    `{"error":{"errorCode","message"}}`(게이트웨이) 두 형태 모두 파싱.
+  - **전문자료(doc)·책·쇼핑은 2026-07-31 종료** — `doc` kind 는 코드에서 제거. 구 openapi 예제 코드 참고 금지.
+  - 초과 대응은 다계정이 아니라 콘솔 한도 상향 신청으로.
 - **data.go.kr**: 개발계정 1,000회/일 → **서비스 오픈 전 운영계정 전환 신청 필수**(최대 10만/일).
   1인 1키 원칙 — 키 복수 발급 우회 금지.
 - **KOSIS**: 자체 키, 일 1만~4만 수준. 구현 시 개발자센터에서 실한도 재확인.

@@ -28,6 +28,13 @@
 - 0단계(검색어 중복도 분석)는 라마 실호출 필요 — 한도 부담 없음, 결과는 RESEARCH_PLAN 에 기록.
 - 3단계 어댑터+mock 테스트는 키 발급 전에 선작업 가능. 실키 연결만 키 이후.
 - 5단계의 프론트 진행 표시는 세션2 V1(큐 전환)과 맞물림 — 인터페이스 바뀌면 여기 공지.
+- 🔴 **3단계 정정 (09:5x, 세션1 웹 검증)** — 네이버 검색 API 가 **NAVER API HUB 로 이관**됐다(2026-06-25).
+  `research.py` `NaverSearch`(`23ad8de`) 는 구 규격이라 실키 연결 전에 고쳐야 한다. 정확한 값은 RESEARCH_PLAN "API 한도" 절:
+  ① `base_url` → `https://naverapihub.apigw.ntruss.com/search/v1`, 경로 `/{kind}` (`.json` 없음)
+  ② 헤더 → `X-NCP-APIGW-API-KEY-ID` / `X-NCP-APIGW-API-KEY` (env 이름 `NAVER_CLIENT_ID/SECRET` 은 그대로)
+  ③ `NAVER_ENDPOINTS` 에서 `doc`(전문자료) 제거 — 2026-07-31 종료. 학술은 KCI → OpenAlex/Semantic Scholar 로 (KCI 키 `KCI_API_KEY`)
+  ④ 오류 본문 2형태(`errorCode` 평면 / `error.errorCode` 중첩) 모두 파싱, 429 는 서킷브레이커 대상
+  ⑤ 한도 상수·주석 25,000/일 → 월 775,000·50 RPS 로. 기존 mock 테스트는 새 규격으로 갱신.
 
 ### 작업 10 상세 — GPU 한계 측정과 워커 상향 (세션3 + 사용자)
 
@@ -125,7 +132,9 @@
   ⚠️ 09-02 08:18 세션2가 문법 검증용 `npx vite build` 로 미검증 작업본을 오배포 → 직전 커밋 빌드로 복구 진행.
   재발 방지: 문법 검증은 `--outDir dist-check` 로 (CLAUDE.md·TEAMWORK 규칙화 완료)
 - [ ] **API 키 발급** (사용자만 가능, 작업 12 3단계 전제 — 상세 한도는 RESEARCH_PLAN 참조):
-  - 네이버 개발자센터(developers.naver.com) 앱 등록 → 검색 API Client ID/Secret (뉴스·블로그·전문자료 공용)
+  - 네이버 → **NAVER API HUB** (ncloud.com 계정 → 콘솔 > Application Services > NAVER API HUB > Application 등록 > 검색 API).
+    developers.naver.com 은 신규 신청 종료. 뉴스·블로그·웹문서 공용, 전문자료는 종료됨. 콘솔에서 한도 알림 설정
+  - KCI OpenAPI (kci.go.kr) — 학술 근거용 키. OpenAlex·Semantic Scholar 는 키 불필요
   - 공공데이터포털(data.go.kr) → 활용신청 → 인증키 (상권정보·K-Startup 포함. **오픈 전 운영계정 전환 필수**)
   - KOSIS(kosis.kr), 한국은행 ECOS(ecos.bok.or.kr), KIPRIS(특허), 빅카인즈 — 각 자체 발급
   - 발급되면 `.env` 에 넣고 (커밋 금지) 세션3에 알리기. 키 복수 발급 우회 금지
@@ -148,6 +157,7 @@
 - 세션3 📌 (`/research`=research_client, `/jobs/research`=client 불일치) 판단: **큐 경로도 `research_client` 로 통일**
   (`main.py:257` 한 줄). 지금은 같은 라마라 결과 동일 — 세션3 다음 작업 때 같이 처리하면 됨.
 - 세션2 다음 배정: **프론트 UX 개선 후보 목록** (구현은 승인 후, 배포 금지).
+- 09:5x 사용자 제보(네이버 API HUB 이관·전문자료 종료) 웹 검증 → 사실. RESEARCH_PLAN·.env.example 정정, 세션3에 `NaverSearch` 규격 수정 지시(작업 12 상세 🔴).
 
 ### 세션2 (프론트)
 
