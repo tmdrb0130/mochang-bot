@@ -52,7 +52,7 @@ class ResearchConfig:
     vectorstore_dir: str = "backend/.vectorstore"
     vectorstore_embed_model: str = "bge-m3"      # Ollama 모델명. 빈 값이면 오프라인 임베딩(품질 없음 — 테스트용)
     vectorstore_ollama_url: str = "http://localhost:11434"
-    vectorstore_min_score: float = 0.8
+    vectorstore_min_score: float = 0.6      # 실측 근거: bge-m3 는 같은 주제 문장끼리도 0.668 (0.8 은 과하다)
     vectorstore_min_hits: int = 5
     vectorstore_max_age_days: int = 730
 
@@ -74,7 +74,7 @@ class ResearchConfig:
             vectorstore_dir=str(vs.get("dir", "backend/.vectorstore")),
             vectorstore_embed_model=str(vs.get("embed_model", "bge-m3")),
             vectorstore_ollama_url=str(vs.get("ollama_url", "http://localhost:11434")),
-            vectorstore_min_score=float(vs.get("min_score", 0.8)),
+            vectorstore_min_score=float(vs.get("min_score", 0.6)),
             vectorstore_min_hits=int(vs.get("min_hits", 5)),
             vectorstore_max_age_days=int(vs.get("max_age_days", 730)),
             cache_ttl=int(rc.get("cache_ttl_seconds", 7 * 24 * 3600)),

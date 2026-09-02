@@ -102,11 +102,12 @@ research:
   # 기본 false: 켜면 페이지마다 임베딩 호출(Ollama bge-m3)이 붙고 backend/.vectorstore/ 에 디스크가 쌓인다.
   # 켜기 전에 `ollama pull bge-m3` 가 끝나 있어야 한다. embed_model 을 비우면 오프라인 임베딩(품질 없음, 테스트용).
   vectorstore:
-    enabled: false
+    enabled: true                # 2026-09-02 세션1 결정 — 지금부터 조사 페이지를 쌓는다 (색인만, 조회는 다음 단계)
     dir: "backend/.vectorstore"
     embed_model: "bge-m3"
     ollama_url: "http://localhost:11434"
-    min_score: 0.8               # 조회 단계에서 쓸 유사도 하한 (지금은 저장만 하므로 미사용)
+    min_score: 0.6               # 조회 단계 유사도 하한. 0.8 은 너무 빡빡했다 —
+                                 # bge-m3 로 같은 주제 문장끼리 재어 보니 0.668 이었다 (세션1 결정: 0.6)
     min_hits: 5
     max_age_days: 730
 

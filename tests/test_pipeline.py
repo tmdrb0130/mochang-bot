@@ -586,3 +586,4 @@ def test_vectorstore_config_is_read_from_yaml():
     assert cfg.vectorstore_enabled and cfg.vectorstore_dir == "x/y" and cfg.vectorstore_embed_model == ""
     assert (cfg.vectorstore_min_score, cfg.vectorstore_min_hits, cfg.vectorstore_max_age_days) == (0.7, 3, 365)
     assert P.ResearchConfig.from_config({}).vectorstore_enabled is False       # 설정이 없으면 꺼짐
+    assert P.ResearchConfig.from_config({}).vectorstore_min_score == 0.6      # 기본 하한 (0.8 은 실측상 과함)
