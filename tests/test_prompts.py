@@ -18,7 +18,7 @@ def test_every_question_md_has_required_sections(qid):
 @pytest.mark.parametrize("relpath", ["system.md", "tracks/tech.md", "tracks/local.md", "styles/story.md", "styles/logic.md",
                                      "styles/plain.md", "extend.md", "intake.md", "intake_regenerate.md", "short_question.md", "sections.md",
                                      "verify.md", "research/queries.md", "research/extract_facts.md",
-                                     "research/followup_queries.md", "q1_structures.md", "process.md", "shorten.md", "outline.md"])
+                                     "research/followup_queries.md", "q1_structures.md", "process.md", "shorten.md", "outline.md", "polish.md", "lengthen.md"])
 def test_prompt_files_exist(relpath):
     assert assemble.read_prompt(relpath)
 
@@ -96,5 +96,22 @@ def test_q4_1_roadmap_follows_plan_build_verify():
 
 def test_q2_requires_real_verification_or_a_plan():
     _, body = assemble.load_question("q2")
-    assert "지어내지 말고" in body and "검증 계획" in body
-    assert "어떤 경우에도 비우지 않습니다" in body      # 근거가 없다고 문단을 통째로 빼면 안 된다
+    assert "검증 계획" in body and "만들어 내면 실격" in body
+    assert "아직 확인하지 못했다" in body               # 근거가 없으면 인정하고 계획을 쓴다
+
+
+def test_q2_has_the_six_paragraph_structure():
+    """작업 26 — 골든 예문 기준 문단 구조. 하는 일 설명은 ⑤ 한 곳뿐이어야 한다."""
+    _, body = assemble.load_question("q2")
+    order = [body.index(m) for m in ("① 겪은 어려움", "② 누가 겪는가", "③ 지금 방식으로는 왜 안 되는가",
+                                     "④ 사람들이 이미", "⑤ 그래서 무엇이 필요한가", "⑥ 확인했거나")]
+    assert order == sorted(order)
+    assert "1,400~1,800자" in body and "한 번만" in body
+    assert "자기소개로 시작하기" in body and "고유한 가치" in body        # 진단표 5·8
+
+
+def test_q2_rules_have_no_field_specific_vocabulary():
+    """일반화 원칙 2 — 규칙 문장에 특정 소재(면접·이력서·레시피 등)가 들어가면 안 된다."""
+    _, body = assemble.load_question("q2")
+    for word in ("면접", "이력서", "레시피", "세탁", "냉장고", "캠핑"):
+        assert word not in body, f"q2.md 에 소재 어휘 '{word}' 가 들어갔다"

@@ -4,14 +4,17 @@ import re
 from ..llm.client import LLMClient, load_config
 from . import assemble
 from . import outline as outline_mod
+from . import polish as polish_mod
 
 _MD_LINE_PREFIX = re.compile(r"^\s*(#{1,6}|\*|-)\s+")
 
 _SENTENCE_ENDS = ("다.", "요.", ".", "!", "?")
 
-# 이렇게 끝나면 "정의형 한 줄" 로 떨어진 것이다 — 짜임을 바꿔 한 번만 다시 생성한다 (작업 15 후속).
+# 이렇게 끝나면 알맹이가 없는 한 줄이다 — 짜임을 바꿔 한 번만 다시 생성한다 (작업 15 후속 → 작업 25 로 조정).
+# 작업 25: **명사 맺음('~하는 서비스')은 이제 허용**한다. 사용자가 싫어한 것은 정의형 자체가 아니라
+# "…를 제공하는 앱입니다" 같은 빈 틀과 "자신감을 얻습니다" 같은 추상 가치어 맺음이었다.
 # 프롬프트로 금지해도 라마가 우회하므로(실호출 25건) 코드에서 걸러 낸다.
-_DEFINITION_ENDING = re.compile("(제공(합니다|하는|하여)|앱입니다|서비스입니다|플랫폼입니다)[ .]*$")
+_DEFINITION_ENDING = re.compile("(제공(합니다|하여|하는 서비스입니다|하는 앱입니다)|자신감을 (얻습니다|줍니다|드립니다)|효율화(합니다|됩니다)|불편을 해소(합니다|해 줍니다)|만족도를 높입니다|편리해집니다|편리하게 (합니다|해 줍니다))[ .]*$")
 
 
 # ── 짧게 끝난 긴 문항 자동 이어쓰기 (작업 18) ──
@@ -19,10 +22,28 @@ _DEFINITION_ENDING = re.compile("(제공(합니다|하는|하여)|앱입니다|�
 # 사용자가 '이어쓰기'를 손으로 누르면 되는 기능이지만, 목표의 70%도 못 채운 글은 사실상 미완성이라
 # 서버가 한 번만 대신 눌러 준다. 모델 호출이 문항당 최대 1회 늘어나므로 config 로 끌 수 있다.
 AUTO_EXTEND_DEFAULTS = {"enabled": True, "min_ratio": 0.7, "min_limit": 500}
+EXTEND_TRIES = 2           # 이어쓰기 최대 횟수 (중복을 지우면 다시 짧아져 한 번으로는 하한을 못 맞춘다)
 
 # ── 짧은 문항 한도 초과 → 압축 재생성 (작업 21) ──
 # Q1·Q10 은 한 문장이라 한도에서 자르면 말이 끊긴 채 사용자에게 간다("…식재료" 처럼).
 # 자르는 대신 "같은 뜻으로 줄여 다시" 를 최대 SHORTEN_TRIES 회 시킨다.
+# ── 생성 후처리 (작업 22) ── 지어낸 근거·이물·1인칭·중복 통계를 코드가 잡는다.
+POLISH_DEFAULTS = {"enabled": True}
+_polish_cfg: dict | None = None
+
+
+def polish_settings(form: dict | None = None) -> dict:
+    global _polish_cfg
+    if form and isinstance(form.get("polish_settings"), dict):
+        return {**POLISH_DEFAULTS, **form["polish_settings"]}
+    if _polish_cfg is None:
+        try:
+            _polish_cfg = dict((load_config().get("generate") or {}).get("polish") or {})
+        except Exception:
+            _polish_cfg = {}
+    return {**POLISH_DEFAULTS, **_polish_cfg}
+
+
 # ── 사업계획 골자 공유 (작업 20) ──
 OUTLINE_DEFAULTS = {"enabled": True, "cache_ttl_seconds": 7 * 24 * 3600}
 _outline_cfg: dict | None = None
@@ -127,18 +148,32 @@ async def generate_one(client: LLMClient, form: dict) -> dict:
     shortened = 0
     if meta["limit"] <= SHORT_LIMIT and len(text) > meta["limit"]:
         text, shortened = await _shorten(client, form, system, user, text, meta)
+    elif meta["limit"] <= SHORT_LIMIT and len(text) < int(meta.get("min") or 0):
+        # 짧은 문항이 하한에 한참 못 미치면 한 번만 늘려 쓴다 (작업 25 — Q10 이 22자로 나온 건이 있었다)
+        text = await _lengthen(client, form, system, user, text, meta)
+
+    # 후처리를 먼저 하고(문장이 지워질 수 있다) 그다음에 분량을 채운다 — 순서가 반대면 채운 뒤 지워져 하한을 밑돈다.
+    polished = {}
+    if polish_settings(form).get("enabled") and text:
+        text, polished = await polish_mod.polish_text(client, text, form)
+        text = postprocess(text, meta["limit"])
 
     auto_extended = False
     settings = auto_extend_settings(form)
-    if needs_extend(text, meta["limit"], settings):
-        # 이어쓰기 1회. 실패하거나 더 짧아지면 원래 글을 그대로 둔다 — 늘리려다 망가뜨리지 않는다.
+    # 이어쓰기 → 중복 제거 → 아직 짧으면 한 번 더 (최대 2회). 되풀이한 문단을 지우고 나면 다시 하한을 밑돌기 때문이다.
+    # 실패하거나 더 짧아지면 원래 글을 그대로 둔다 — 늘리려다 망가뜨리지 않는다.
+    for _ in range(EXTEND_TRIES):
+        if not needs_extend(text, meta["limit"], settings):
+            break
         try:
             out = await extend_one(client, form, text)
-            if len(out.get("text") or "") > len(text):
-                text = out["text"]
-                auto_extended = True
         except Exception:
-            pass
+            break
+        merged, duplicates = polish_mod.dedupe_sentences(out.get("text") or "")
+        if len(merged) <= len(text):
+            break
+        text, auto_extended = merged, True
+        polished["duplicate"] = polished.get("duplicate", 0) + duplicates
     return {
         "question_id": meta["id"],
         "style": form["style"],
@@ -150,7 +185,23 @@ async def generate_one(client: LLMClient, form: dict) -> dict:
         "auto_extended": auto_extended,   # 짧아서 서버가 이어쓰기를 한 번 돌렸는지 (진단용, 필드 추가)
         "shortened": shortened,           # 한도 초과로 줄여 다시 쓴 횟수 (진단용, 필드 추가)
         "outline_used": outline_used,     # 공유 골자를 넣고 썼는지 (진단용, 필드 추가)
+        "polished": polished,             # 후처리로 무엇을 몇 건 고쳤는지 (진단용, 필드 추가)
     }
+
+
+async def _lengthen(client: LLMClient, form: dict, system: str, user: str, text: str, meta: dict) -> str:
+    """짧은 문항이 하한에 못 미치면 한 번만 늘려 쓴다. 더 나빠지면 원문을 쓴다."""
+    target, limit = int(meta.get("min") or 0), int(meta["limit"])
+    instruction = assemble.render("lengthen.md", current=len(text), target=target, limit=limit)
+    try:
+        res = await client.complete(
+            system + "\n\n" + instruction,
+            user + "\n\n" + instruction + "\n" + text,
+            model=form.get("model"))
+    except Exception:
+        return text
+    candidate = postprocess(res.text, limit)
+    return candidate if target <= len(candidate) <= limit else text
 
 
 async def _shorten(client: LLMClient, form: dict, system: str, user: str, text: str, meta: dict) -> tuple[str, int]:

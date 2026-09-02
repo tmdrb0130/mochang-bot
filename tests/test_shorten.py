@@ -42,7 +42,7 @@ def test_cut_at_sentence_end_is_the_last_resort():
 @pytest.mark.asyncio
 async def test_over_limit_answer_is_regenerated_shorter():
     over = "고객에게 " + "가" * 110 + " 알려 줍니다."          # 100자 초과
-    ok = "장 본 것을 잊고 버리던 1인 가구에게 임박한 식재료를 먼저 알려 줍니다."
+    ok = "장 본 것을 잊고 버리던 식재료를 사진 한 장으로 등록하고, 유통기한이 임박한 순서로 알려 주며 남은 재료로 만들 수 있는 요리를 추천하는 살림 도우미"
     client = Client(over, ok)
     out = await generate.generate_one(client, dict(FORM))
 
@@ -76,7 +76,7 @@ async def test_shorten_keeps_the_shortest_candidate():
 
 @pytest.mark.asyncio
 async def test_within_limit_answer_is_untouched():
-    ok = "장 본 것을 잊고 버리던 1인 가구에게 임박한 식재료를 먼저 알려 줍니다."
+    ok = "장 본 것을 잊고 버리던 식재료를 사진 한 장으로 등록하고, 유통기한이 임박한 순서로 알려 주며 남은 재료로 만들 수 있는 요리를 추천하는 살림 도우미"
     client = Client(ok)
     out = await generate.generate_one(client, dict(FORM))
     assert out["shortened"] == 0 and out["text"] == ok and len(client.systems) == 1
@@ -104,3 +104,35 @@ async def test_shorten_survives_model_error():
 
     out = await generate.generate_one(Boom(), dict(FORM))
     assert out["text"] == over and out["shortened"] == generate.SHORTEN_TRIES   # 원문 유지, 잘림 없음
+
+
+# ── 작업 25: 짧은 문항이 하한에 못 미치면 한 번 늘려 쓴다 ──
+
+@pytest.mark.asyncio
+async def test_too_short_answer_is_lengthened_once():
+    """Q10 이 22자로 나온 실측 건 — 하한(60자) 미만이면 기능을 더 넣어 다시 쓴다."""
+    short = "면접에서 자신감을 얻는 방법은 무엇일까요"
+    good = ("이력서를 넣으면 직무에 맞는 면접 질문을 만들어 주고, 답변한 말투와 시선까지 분석해 "
+            "무엇을 고치면 좋을지 알려 드려요.")
+    client = Client(short, good)
+    out = await generate.generate_one(client, {**FORM, "question_id": "q10"})
+
+    assert out["text"] == good and len(client.systems) == 2
+    assert "늘려 쓰기 지시" in client.systems[1] and "60자 이상" in client.systems[1]
+
+
+@pytest.mark.asyncio
+async def test_lengthen_keeps_the_original_when_the_retry_is_still_short():
+    short = "짧은 한 줄입니다."
+    client = Client(short, "여전히 짧다.")
+    out = await generate.generate_one(client, {**FORM, "question_id": "q10"})
+    assert out["text"] == short and len(client.systems) == 2
+
+
+@pytest.mark.asyncio
+async def test_long_questions_are_not_lengthened_this_way():
+    """2,000자 문항의 분량 미달은 작업 18(자동 이어쓰기)이 맡는다 — 여기서 손대면 두 번 늘린다."""
+    client = Client("가" * 300, "쓰이지 않음")
+    out = await generate.generate_one(client, {**FORM, "question_id": "q2",
+                                               "auto_extend": {"enabled": False}})
+    assert out["text"] == "가" * 300 and len(client.systems) == 1

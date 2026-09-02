@@ -37,15 +37,26 @@ def test_settings_come_from_config_and_can_be_overridden():
 
 
 @pytest.mark.asyncio
-async def test_short_answer_is_extended_once():
+async def test_short_answer_is_extended_until_it_reaches_the_floor():
+    """이어쓰기 → 중복 제거 → 아직 짧으면 한 번 더 (최대 2회). 하한을 넘기면 거기서 멈춘다."""
     short, added = "가" * 600, "나" * 900
     client = Client(short, added)
     out = await generate.generate_one(client, dict(FORM))
 
-    assert out["auto_extended"] is True and len(client.systems) == 2
+    # 이어쓰기 한 번에 붙일 수 있는 양이 700자로 제한돼 있어(extend_one 의 room) 두 번 이어쓴다
+    assert out["auto_extended"] is True and len(client.systems) == 3
     assert "이미 작성된 글" in client.systems[1] or "이어" in client.systems[1]   # 이어쓰기 프롬프트로 갔다
     assert out["text"].startswith(short) and len(out["text"]) > len(short)
     assert out["length"] == len(out["text"])
+
+
+@pytest.mark.asyncio
+async def test_extend_stops_after_two_tries():
+    """두 번 이어써도 하한에 못 미치면 거기서 멈춘다 — 호출이 무한정 늘면 안 된다."""
+    client = Client("가" * 300, "나" * 300, "다" * 300, "라" * 300)
+    out = await generate.generate_one(client, dict(FORM))
+    assert len(client.systems) == 3 and out["auto_extended"] is True   # 생성 1 + 이어쓰기 2
+    assert 900 <= len(out["text"]) <= 910                              # 문단 사이 줄바꿈 포함
 
 
 @pytest.mark.asyncio
@@ -84,6 +95,6 @@ async def test_extend_failure_keeps_the_original_text():
 @pytest.mark.asyncio
 async def test_short_question_never_triggers_extend():
     """Q1 은 100자 문항이라 짧아도 이어쓰기를 하지 않는다 (호출이 늘면 안 된다)."""
-    client = Client("빈자리를 미리 알려 줍니다.")
+    client = Client("장 본 것을 잊고 버리던 식재료를 사진 한 장으로 등록하고, 유통기한이 임박한 순서로 알려 주며 남은 재료로 만들 수 있는 요리를 추천하는 살림 도우미")
     out = await generate.generate_one(client, {**FORM, "question_id": "q1", "structure_offset": 0})
     assert out["auto_extended"] is False and len(client.systems) == 1

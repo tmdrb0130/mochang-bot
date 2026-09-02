@@ -254,7 +254,9 @@ _JOB_KINDS = {
     "intake": (IntakeRequest, lambda f: intake.run_intake(client, f)),
     "intake_regenerate": (IntakeRegenerateRequest, lambda f: intake.regenerate_cards(
         client, _regenerate_form(f), f["slots"], f.get("seen") or {}, f.get("note") or "", f.get("keep") or {})),
-    "research": (ResearchRequest, lambda f: research_pipeline.run_research(client, researcher, f, f["question_id"], research_cfg)),
+    # 조사는 조사 전용 클라이언트로 — 동기 /research 엔드포인트와 같게 맞춘다(작업 22).
+    # 지금은 둘 다 같은 로컬 라마라 결과는 같지만, 모델을 나누면 경로마다 조사 품질이 달라진다.
+    "research": (ResearchRequest, lambda f: research_pipeline.run_research(research_client, researcher, f, f["question_id"], research_cfg)),
     "verify": (VerifyRequest, lambda f: verify.verify_text(client, {k: v for k, v in f.items() if k != "text"}, f["question_id"], f["text"])),
 }
 

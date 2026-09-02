@@ -25,6 +25,19 @@ def _isolate_timing():
 
 
 @pytest.fixture(autouse=True)
+def _polish_off(request):
+    """생성 후처리(작업 22)도 기본으로 꺼 둔다 — 켜져 있으면 문장에 흠이 있을 때 호출이 하나 더 붙는다.
+    후처리를 보는 테스트(tests/test_polish.py)는 요청 단위로 직접 켠다."""
+    if request.node.get_closest_marker("polish"):
+        yield
+        return
+    saved = generate._polish_cfg
+    generate._polish_cfg = {"enabled": False}
+    yield
+    generate._polish_cfg = saved
+
+
+@pytest.fixture(autouse=True)
 def _outline_off(request):
     """사업계획 골자(작업 20)는 기본으로 꺼 둔다.
 
