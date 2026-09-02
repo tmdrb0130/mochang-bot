@@ -134,7 +134,11 @@ async def run_level(base_url: str, api_key: str, model: str, n: int, max_tokens:
     samples: list[dict] = []
     sampler = asyncio.create_task(sample_metrics(base_url, stop, samples))
     t0 = time.perf_counter()
-    async with httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout,
+    # httpx 기본 커넥션 풀은 100개다 — 그대로 두면 동시성 100 이상에서 남는 요청이 **클라이언트 쪽**에 줄을 서고,
+    # 서버는 100개만 받은 것을 "서버 한계"로 착각하게 된다 (2026-09-02 150 측정에서 실제로 겪음).
+    # 운영 코드(AsyncOpenAI)는 풀이 1000이라 이 제약이 없다 — 측정기만 맞춰 준다.
+    limits = httpx.Limits(max_connections=n + 20, max_keepalive_connections=n + 20)
+    async with httpx.AsyncClient(base_url=base_url.rstrip("/"), timeout=timeout, limits=limits,
                                  headers={"Authorization": f"Bearer {api_key}"}) as c:
         rows = await asyncio.gather(*(one_call(c, model, max_tokens, messages) for _ in range(n)))
     elapsed = time.perf_counter() - t0
