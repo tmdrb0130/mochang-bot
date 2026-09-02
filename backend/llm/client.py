@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
+import httpx
 import yaml
 from dotenv import load_dotenv
 from openai import APIStatusError, AsyncOpenAI, RateLimitError
@@ -168,8 +169,11 @@ class LLMClient:
             max_per_client=int(config.get("max_jobs_per_client") or 0),
         )
         headers = {"HTTP-Referer": "http://localhost", "X-Title": "modoo-writer"} if self.is_openrouter else {}
+        # timeout: openai 기본은 전체 600초 / **연결 5초**. 2026-09-03 40명 실측에서 요청 폭주 때 SSH 터널(30801) 연결이
+        # 5초를 넘겨 APITimeoutError 3건(→ 인테이크 500) 이 났다. 연결 30초로 늘린다. 읽기 600초는 그대로.
         self._client = AsyncOpenAI(
-            base_url=self.base_url, api_key=c["api_key"], default_headers=headers, max_retries=2
+            base_url=self.base_url, api_key=c["api_key"], default_headers=headers, max_retries=2,
+            timeout=httpx.Timeout(600.0, connect=30.0),
         )
 
     def resolve_model(self, model: str | None) -> str:
