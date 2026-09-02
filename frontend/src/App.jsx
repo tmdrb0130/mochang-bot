@@ -146,6 +146,18 @@ function RegenerateBar({ slot, state, onNote, onRun, compact = false }) {
 }
 
 // ───────────────────────── 컴포넌트 ─────────────────────────
+// KCI(한국학술지인용색인) 이용 조건 — 서비스 화면에 출처를 **항상** 표시해야 한다
+// (docs/RESEARCH_PLAN.md "KCI 이용 준수 사항" 4항). 푸터에 상시 표기하고, 조사 근거 패널의
+// KCI 항목에는 배지를 붙인다. 문구는 한 곳에서만 고치도록 상수로 둔다.
+const KCI_NOTICE = "KCI(한국학술지인용색인) 데이터 활용";
+
+// 이 근거가 KCI 에서 온 것인지. 세션3의 KCI 어댑터가 붙기 전에도(지금은 ddgs 가 kci.go.kr 문서를
+// 물어 오는 경우) 표기가 빠지지 않도록 세 가지를 모두 본다. 어댑터가 source_kind 를 붙이면 첫 조건이 잡는다.
+const isKciFact = (f) =>
+  String(f?.source_kind || "").toLowerCase() === "kci" ||
+  /(^|\.)kci\.go\.kr/i.test(String(f?.url || "").replace(/^https?:\/\//, "").split("/")[0]) ||
+  String(f?.publisher || "").trim().toUpperCase() === "KCI";
+
 // ───────────────────────── 웹 조사 근거 패널 ─────────────────────────
 // 백엔드 /research 결과. 조사는 로컬 라마 70B 가 하고, 이 사실들이 [웹 참고자료] 로 작성 모델에 넘어간다.
 function ResearchPanel({ state, warm = true }) {
@@ -159,6 +171,7 @@ function ResearchPanel({ state, warm = true }) {
   if (state.error) return <div className="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-b border-amber-100">조사 실패 — 참고자료 없이 작성합니다. ({state.error})</div>;
   const facts = state.facts || [];
   if (!facts.length) return <div className="px-4 py-2 text-xs text-slate-500 bg-slate-50 border-b border-slate-200">조사에서 인용할 만한 근거를 못 찾았습니다. 참고자료 없이 작성했습니다.</div>;
+  const hasKci = facts.some(isKciFact);
   return (
     <div className="bg-sky-50 border-b border-sky-100">
       <button onClick={() => setOpen((v) => !v)} className="w-full px-4 py-2 text-xs text-left text-sky-800 hover:bg-sky-100">
@@ -170,6 +183,9 @@ function ResearchPanel({ state, warm = true }) {
             <li key={i}>
               <div>{f.fact}</div>
               <div className="text-slate-500">
+                {isKciFact(f) && (
+                  <span className="mr-1.5 px-1 py-0.5 rounded bg-white border border-sky-300 text-sky-800 text-[10px] align-middle" title={KCI_NOTICE}>KCI</span>
+                )}
                 {f.publisher || f.source_title || "출처 미상"}{f.date ? `, ${String(f.date).slice(0, 4)}` : ""}
                 {f.use_for ? ` · ${f.use_for}` : ""}
                 {f.url && <> · <a href={f.url} target="_blank" rel="noreferrer" className="text-sky-700 underline">원문</a></>}
@@ -177,6 +193,12 @@ function ResearchPanel({ state, warm = true }) {
             </li>
           ))}
         </ol>
+      )}
+      {/* KCI 항목이 섞여 있으면 패널 안에서도 출처를 밝힌다 (준수 사항 4항). 접힌 상태에서도 보인다. */}
+      {hasKci && (
+        <div className="px-4 pb-2 text-[11px] text-sky-800">
+          {KCI_NOTICE} · 논문은 서지정보(제목·저자·연도·학술지)만 인용합니다.
+        </div>
       )}
     </div>
   );
@@ -1006,6 +1028,14 @@ export default function ModooWriter() {
           </div>
         )}
       </main>
+
+      {/* KCI 이용 준수 사항 4항 — 화면 어디에 있든 보이도록 모든 단계 아래에 상시 표시한다. */}
+      <footer className="border-t border-slate-200 mt-12">
+        <div className="max-w-5xl mx-auto px-5 py-4 text-xs text-slate-500 flex flex-wrap gap-x-3 gap-y-1">
+          <span>{KCI_NOTICE}</span>
+          <span className="text-slate-400">학술 근거는 논문 서지정보(제목·저자·연도·학술지)만 인용합니다.</span>
+        </div>
+      </footer>
     </div>
   );
 }
