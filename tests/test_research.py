@@ -121,7 +121,7 @@ async def test_ddgs_backend_uses_monkeypatched_client(monkeypatch):
     assert calls == ["text", "news"]
 
 
-# ── 네이버 검색 API 어댑터 (RESEARCH_PLAN 3단계). 키 없이 mock 으로만 검증 ──
+# ── 네이버 검색 API 어댑터 — NAVER API HUB 규격 (RESEARCH_PLAN 3단계). 키 없이 mock 으로만 검증 ──
 
 def test_naver_config_off_without_keys(monkeypatch):
     monkeypatch.delenv("NAVER_CLIENT_ID", raising=False)
@@ -131,8 +131,10 @@ def test_naver_config_off_without_keys(monkeypatch):
 
     monkeypatch.setenv("NAVER_CLIENT_ID", "id")
     monkeypatch.setenv("NAVER_CLIENT_SECRET", "secret")
-    cfg = R.NaverConfig.from_config({"naver": {"kinds": ["news", "doc", "없는유형"]}})
-    assert cfg.configured and cfg.kinds == ["news", "doc"]                     # 모르는 유형은 버린다
+    cfg = R.NaverConfig.from_config({"naver": {"kinds": ["news", "webkr", "doc", "없는유형"]}})
+    assert cfg.configured and cfg.kinds == ["news", "webkr"]     # doc(2026-07-31 종료)·모르는 유형은 버린다
+    assert cfg.base_url == "https://naverapihub.apigw.ntruss.com/search/v1"
+    assert cfg.headers == {"X-NCP-APIGW-API-KEY-ID": "id", "X-NCP-APIGW-API-KEY": "secret"}
     assert [n for n, _ in R.researcher_from_config({}).backends] == ["naver", "ddgs"]
 
 
@@ -145,26 +147,37 @@ def test_naver_parse_strips_tags_and_normalizes():
     rows = R.NaverSearch(R.NaverConfig(client_id="i", client_secret="s")).parse("news", payload)
     assert rows == [{"title": "1인 가구 식품 폐기 & 낭비", "url": "https://news.co.kr/a",   # 원문 링크 우선
                      "snippet": "본문 요약입니다", "date": "2026-09-01", "source_type": "news"}]
-    assert R.NaverSearch(R.NaverConfig()).parse("doc", {})== []
-    assert R.NaverSearch(R.NaverConfig()).parse("doc", {"items": [{"title": "논문", "link": "https://k.re.kr/1"}]}
-                                                )[0]["source_type"] == "academic"
+    assert R.NaverSearch(R.NaverConfig()).parse("webkr", {}) == []
+    assert R.NaverSearch(R.NaverConfig()).parse("cafearticle", {"items": [{"title": "후기", "link": "https://cafe.naver.com/1"}]}
+                                                )[0]["source_type"] == "cafe"
 
 
-@pytest.mark.asyncio
-async def test_naver_search_requests_each_kind_and_survives_one_failure(monkeypatch):
-    """kinds 마다 요청 1회. 유형 하나가 죽어도 나머지 결과는 살린다."""
-    seen = []
+def test_naver_error_message_reads_both_shapes():
+    """API 쪽 평면 형태와 게이트웨이 쪽 중첩 형태 둘 다 읽는다."""
+    assert R.naver_error_message({"errorCode": "SE01", "errorMessage": "잘못된 검색어"}) == "SE01 잘못된 검색어"
+    assert R.naver_error_message({"error": {"errorCode": "900", "message": "Rate limit"}}) == "900 Rate limit"
+    assert R.naver_error_message({}) == "" and R.naver_error_message("문자열") == ""
 
-    class FakeResponse:
-        def __init__(self, path):
-            self.path = path
 
-        def raise_for_status(self):
-            if "blog" in self.path:
-                raise RuntimeError("500")
+class FakeHubResponse:
+    def __init__(self, path, status=200, body=None):
+        self.path = path
+        self.status_code = status
+        self._body = body
 
-        def json(self):
-            return {"items": [{"title": "T", "link": f"https://x.com/{self.path}", "description": "d"}]}
+    def json(self):
+        if self._body is not None:
+            return self._body
+        return {"items": [{"title": "T", "link": f"https://x.com/{self.path}", "description": "d"}]}
+
+    @property
+    def text(self):
+        return "본문"
+
+
+def fake_hub_client(monkeypatch, seen, statuses=None):
+    """httpx.AsyncClient 를 가로채 요청 경로·파라미터·헤더를 기록하는 가짜 클라이언트."""
+    statuses = statuses or {}
 
     class FakeClient:
         def __init__(self, **kw):
@@ -174,16 +187,59 @@ async def test_naver_search_requests_each_kind_and_survives_one_failure(monkeypa
         async def __aexit__(self, *a): return False
 
         async def get(self, url, params=None):
-            seen.append((url.rsplit("/", 1)[-1], params["display"], self.headers.get("X-Naver-Client-Id")))
-            return FakeResponse(url)
+            path = url.rsplit("/", 1)[-1]
+            seen.append({"url": url, "path": path, "params": params, "headers": dict(self.headers)})
+            status, body = statuses.get(path, (200, None))
+            return FakeHubResponse(path, status, body)
 
     import httpx
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
-    cfg = R.NaverConfig(client_id="id", client_secret="secret", kinds=["news", "blog", "doc"])
+
+
+@pytest.mark.asyncio
+async def test_naver_search_calls_hub_endpoints_with_ncp_headers(monkeypatch):
+    """유형마다 요청 1회. 경로는 /search/v1/{kind} (.json 없음), 인증은 X-NCP-APIGW-* 헤더."""
+    seen = []
+    fake_hub_client(monkeypatch, seen)
+    cfg = R.NaverConfig(client_id="id", client_secret="secret", kinds=["news", "blog", "webkr"])
     out = await R.NaverSearch(cfg)("반찬가게 폐기율", 6)
-    assert [p for p, *_ in seen] == ["news.json", "blog.json", "doc.json"]
-    assert seen[0][1] == 2 and seen[0][2] == "id"          # max_results 를 유형 수로 나눠 요청, 키는 헤더로
-    assert [r["source_type"] for r in out] == ["news", "academic"]   # blog 실패분만 빠짐
+
+    assert [s["path"] for s in seen] == ["news", "blog", "webkr"]
+    assert seen[0]["url"] == "https://naverapihub.apigw.ntruss.com/search/v1/news"
+    assert seen[0]["params"] == {"query": "반찬가게 폐기율", "display": 2, "sort": "sim"}
+    assert seen[0]["headers"] == {"X-NCP-APIGW-API-KEY-ID": "id", "X-NCP-APIGW-API-KEY": "secret"}
+    assert "X-Naver-Client-Id" not in seen[0]["headers"]          # 구 규격 헤더는 쓰지 않는다
+    assert [r["source_type"] for r in out] == ["news", "blog", "web"]
+
+
+@pytest.mark.asyncio
+async def test_naver_search_survives_one_kind_failing(monkeypatch):
+    """유형 하나가 오류를 내도 나머지 결과는 살리고, 오류 본문은 last_error 에 남긴다."""
+    seen = []
+    fake_hub_client(monkeypatch, seen, statuses={"blog": (500, {"errorCode": "SE99", "errorMessage": "서버 오류"})})
+    search = R.NaverSearch(R.NaverConfig(client_id="id", client_secret="s", kinds=["news", "blog", "webkr"]))
+    out = await search("질의", 6)
+    assert [s["path"] for s in seen] == ["news", "blog", "webkr"]   # 500 은 다음 유형을 계속 시도
+    assert [r["source_type"] for r in out] == ["news", "web"]
+    assert "blog: HTTP 500 SE99 서버 오류" in search.last_error
+
+
+@pytest.mark.asyncio
+async def test_naver_search_stops_and_falls_back_on_429(monkeypatch, tmp_path):
+    """429(월 775,000건·50 RPS 초과)면 남은 유형을 더 쏘지 않고, 결과가 없으면 다음 백엔드로 넘긴다."""
+    seen = []
+    fake_hub_client(monkeypatch, seen, statuses={"news": (429, {"error": {"errorCode": "429", "message": "Too Many Requests"}})})
+    search = R.NaverSearch(R.NaverConfig(client_id="id", client_secret="s", kinds=["news", "blog", "webkr"]))
+    with pytest.raises(R.SearchRateLimited):
+        await search("질의", 6)
+    assert [s["path"] for s in seen] == ["news"]                    # blog·webkr 은 아예 안 쏜다
+    assert "429 Too Many Requests" in search.last_error
+
+    # Researcher 는 이 예외를 잡아 ddgs 로 폴백한다
+    good = [R.make_result("결과", "https://ok.com/1", "snip")]
+    r = R.Researcher(backends=[("naver", search), ("ddgs", fake_backend(good))], cache=R.DiskCache(tmp_path))
+    assert await r.search("질의") == good and r.last_backend == "ddgs"
+    assert "naver: SearchRateLimited" in r.last_error
 
 
 def test_norm_date_understands_naver_formats():

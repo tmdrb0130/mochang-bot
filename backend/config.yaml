@@ -92,11 +92,15 @@ research:
   share_idea_research: true
   max_followup_queries: 2        # 문항당 보완 검색어 **상한** (개수 고정 아님. 0 이면 공통 조사만 씀)
   max_followup_pages: 3          # 보완 검색으로 본문을 받아올 페이지 수 상한
-  # 네이버 검색 API (RESEARCH_PLAN 3단계). .env 에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 이 있어야 켜진다 —
-  # 없으면 백엔드 목록에서 자동으로 빠지고 예전처럼 ddgs 만 쓴다 (키 없이도 그대로 동작).
-  # 한도: 앱 단위 25,000회/일 합산. kinds 를 늘리면 검색어 1개당 그만큼 요청이 나간다.
+  # 네이버 검색 API — NAVER API HUB (2026-06-25 이관, RESEARCH_PLAN 3단계).
+  # 키는 ncloud.com 콘솔 > Application Services > NAVER API HUB > Application 등록 > 검색 API 에서 발급하고
+  # .env 의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 에 넣는다 (이름은 이관 전과 동일).
+  # 키가 없으면 백엔드 목록에서 자동으로 빠지고 예전처럼 ddgs 만 쓴다 (키 없이도 그대로 동작).
+  # 한도: 검색 통합 월 775,000건, 키당 50 RPS (초과 429). 일·월 한도와 50/80/100% 알림은 콘솔에서 설정.
+  # kinds 를 늘리면 검색어 1개당 그만큼 요청이 나간다.
   naver:
-    kinds: ["news", "blog"]      # news | blog | doc(전문자료) | webkr(웹문서)
+    kinds: ["news", "blog"]      # news | blog | webkr(웹문서) | cafearticle(카페)
+                                 # doc(전문자료)·책·쇼핑은 2026-07-31 종료 — 학술은 KCI/OpenAlex 로
     sort: "sim"                  # sim(정확도) | date(최신)
     timeout: 10
 
