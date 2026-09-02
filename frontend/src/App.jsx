@@ -474,26 +474,61 @@ export default function ModooWriter() {
   }
 
   // 문항 하나에 대한 조사. 이미 받아온 게 있으면 재사용(백엔드도 7일 디스크 캐시).
+  // 진행 중인 조사 Promise. 카드 단계의 선조사(prefetchResearch)와 생성 단계가 같은 문항을 동시에 요청하면 하나만 돈다.
+  const researchInflight = useRef({});
   async function ensureResearch(qid) {
     dropStaleResearch();
     // 조사는 했지만 인용할 사실이 없었던 문항은 []. JS 에서 빈 배열은 truthy 라 그대로 재사용된다 —
-    // 같은 아이디어로 같은 검색을 또 돌릴 이유가 없으니 의도한 동작이다.
+    // 같은 아이디어면 같은 검색을 또 돌릴 이유가 없으니 의도한 동작이다.
     // 반대로 조사가 "실패"한 경우는 아래 catch 에서 키 자체를 지워두므로 다음 생성 때 다시 시도한다.
     if (researchRef.current[qid]) return researchRef.current[qid];
-    setResearchState((p) => ({ ...p, [qid]: { ...(p[qid] || {}), busy: true, error: "" } }));
-    try {
-      const r = await api.research(formForApi(), qid);
-      researchRef.current[qid] = r.facts || [];
-      setResearchState((p) => ({ ...p, [qid]: { busy: false, error: "", facts: r.facts || [], queries: r.queries || [], pages: r.pages || [], backend: r.backend, cached: r.cached } }));
-      setResearchWarm(true);
-      return researchRef.current[qid];
-    } catch (e) {
-      // 조사가 실패해도 생성은 계속한다 (참고자료 없이 작성).
-      // ref 에는 아무것도 남기지 않는다 → 다음에 생성을 다시 돌리면 조사도 다시 시도한다.
-      setResearchState((p) => ({ ...p, [qid]: { busy: false, error: String(e.message || e), facts: [] } }));
-      delete researchRef.current[qid];
-      return [];
-    }
+    if (researchInflight.current[qid]) return researchInflight.current[qid];
+    const run = (async () => {
+      setResearchState((p) => ({ ...p, [qid]: { ...(p[qid] || {}), busy: true, error: "" } }));
+      try {
+        const r = await api.research(formForApi(), qid);
+        researchRef.current[qid] = r.facts || [];
+        setResearchState((p) => ({ ...p, [qid]: { busy: false, error: "", facts: r.facts || [], queries: r.queries || [], pages: r.pages || [], backend: r.backend, cached: r.cached } }));
+        setResearchWarm(true);
+        return researchRef.current[qid];
+      } catch (e) {
+        // 조사가 실패해도 생성은 계속한다 (참고자료 없이 작성).
+        // ref 에는 아무것도 남기지 않는다 → 다음에 생성을 다시 돌리면 조사도 다시 시도한다.
+        setResearchState((p) => ({ ...p, [qid]: { busy: false, error: String(e.message || e), facts: [] } }));
+        delete researchRef.current[qid];
+        return [];
+      } finally {
+        delete researchInflight.current[qid];
+      }
+    })();
+    researchInflight.current[qid] = run;
+    return run;
+  }
+
+  // 카드에 답하는 1~2분 동안 서버가 놀지 않게, 카드가 뜨는 순간 문항 조사를 뒤에서 시작한다 (2026-09-03).
+  // 조사 캐시 키는 아이디어+문항이라(카드 답은 키에 없음) "초안 만들기" 때 그대로 재사용된다. 실패해도 조용히 — 생성 때 다시 시도한다.
+  function prefetchResearch() {
+    runLimited(activeQuestions.map((q) => () => ensureResearch(q.id).catch(() => [])), RESEARCH_PARALLEL).catch(() => {});
+  }
+
+  // 문항별 파이프라인 (2026-09-03): "조사가 끝난 문항부터 바로 생성". 조사 RESEARCH_PARALLEL 개와 생성 PARALLEL 개가 동시에 돈다 —
+  // 백엔드가 조사 큐와 본문 큐를 나눠 IP 당 제한도 큐별이라 한 사람이 조사 3 + 생성 3 을 가질 수 있다.
+  // 예전(조사 8개 전부 → 생성 8개)엔 첫 초안이 전체 조사가 끝나야 나왔고, 서버는 조사 파도 뒤 생성 파도가 몰렸다.
+  // pairs 가 있으면 그 (문항, 스타일)만 만든다 (generateMissing).
+  async function runPipeline(questions, pairs = null) {
+    const ready = [];
+    let researchDone = false;
+    const research = runLimited(questions.map((q) => () => ensureResearch(q.id).then(() => { ready.push(q); })), RESEARCH_PARALLEL)
+      .finally(() => { researchDone = true; });
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const writers = Array.from({ length: PARALLEL }, async () => {
+      for (;;) {
+        const q = ready.shift();
+        if (!q) { if (researchDone) return; await wait(250); continue; }
+        for (const s of selectedStyles) if (!pairs || pairs.has(`${q.id}|${s.id}`)) await generateOne(q, s);
+      }
+    });
+    await Promise.all([research, ...writers]);
   }
 
   // 생성·이어쓰기·이어받기의 공통 처리. run(opts) 은 { text, model } 을 주는 큐 호출이고,
@@ -574,7 +609,10 @@ export default function ModooWriter() {
       setCardIdx(0);
       setRegen({});
       if (!r.cards?.length) await generateAll();
-      else setStep(1);                // ready 여도 카드(멘토링 등)가 있으면 보여준다 — 건너뛰기 버튼이 있다
+      else {
+        setStep(1);                   // ready 여도 카드(멘토링 등)가 있으면 보여준다 — 건너뛰기 버튼이 있다
+        prefetchResearch();           // 카드에 답하는 동안 문항 조사를 미리 (2026-09-03)
+      }
     } catch {
       setIntake(null);
       await generateAll();           // 인테이크가 실패해도 생성은 막지 않는다
@@ -621,12 +659,8 @@ export default function ModooWriter() {
   async function generateAll() {
     setRunning(true);
     setStep(2);
-    // 조사 → 작성 순서. 조사는 문항당 40~60초 걸리므로 병렬로 돌린다.
-    // 조사는 선택이 아니라 필수 단계다 — 근거 없는 지원서를 만들지 않기 위해.
-    await runLimited(activeQuestions.map((q) => () => ensureResearch(q.id)), RESEARCH_PARALLEL);
-    const tasks = [];
-    for (const q of activeQuestions) for (const s of selectedStyles) tasks.push(() => generateOne(q, s));
-    await runLimited(tasks, PARALLEL);
+    // 조사는 선택이 아니라 필수 단계다 — 근거 없는 지원서를 만들지 않기 위해. 문항별로 조사가 끝나는 대로 바로 쓴다.
+    await runPipeline(activeQuestions);
     setRunning(false);
     refreshHealth();
   }
@@ -643,9 +677,8 @@ export default function ModooWriter() {
     const todo = missingPairs(textsRef.current);
     if (!todo.length) return;
     setRunning(true);
-    const qids = [...new Set(todo.map(([q]) => q.id))];
-    await runLimited(qids.map((qid) => () => ensureResearch(qid)), RESEARCH_PARALLEL);
-    await runLimited(todo.map(([q, s]) => () => generateOne(q, s)), PARALLEL);
+    const qids = new Set(todo.map(([q]) => q.id));
+    await runPipeline(activeQuestions.filter((q) => qids.has(q.id)), new Set(todo.map(([q, s]) => `${q.id}|${s.id}`)));
     setRunning(false);
     refreshHealth();
   }

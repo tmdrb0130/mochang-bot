@@ -6,8 +6,7 @@
 사용자 1명이 하는 일 (App.jsx 와 같은 순서·같은 동시성):
   ① 아이디어·팀원·사업자 여부·역량 입력 → /jobs/intake + 폴링 (웹 조사 포함)  → 카드
   ② 카드마다 다르게 답 (첫 보기 / 둘째 보기+직접 문장 / 모름 / 직접 입력)
-  ③ 문항 8개 조사 /jobs/research + 폴링 (동시 3 = RESEARCH_PARALLEL) → 문항별 facts (실제 웹 검색)
-  ④ 문항 8개 생성 POST /jobs/generate + 폴링 (동시 3 = PARALLEL), 참고자료 주입 → 1,000~2,000자 본문
+  ③+④ 문항별 파이프라인: 조사(/jobs/research, 동시 3)가 끝난 문항부터 바로 생성(/jobs/generate, 동시 3) — 프론트 runPipeline 과 같음
 사용자마다 **아이디어 문장이 다르다** (60개 풀) → 조사 캐시가 안 걸려 검색·본문 추출·사실 추출이 실제로 돈다.
 사용자마다 다른 X-Forwarded-For → IP 당 동시 작업 제한(max_jobs_per_client)이 사용자별로 걸린다.
 
@@ -138,43 +137,59 @@ async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> d
     # ② 카드 답
     answers = pick_answers(cards, i % 4)
     form = {**payload(u), "answers": answers}
-    # ③ 조사 (동기, 동시 3)
-    sem = asyncio.Semaphore(PARALLEL)
+    # ③+④ 문항별 파이프라인 (2026-09-03 프론트 runPipeline 과 같음): 조사 3개 동시, 끝난 문항부터 생성 3개 동시.
     refs: dict[str, list] = {}
-    rec["research"] = {}
+    rec["research"], rec["generate"] = {}, {}
+    ready: list[str] = []
+    research_done = False
 
     async def research(q):
-        async with sem:
-            t = time.time()
-            try:
-                s = await job(c, "research", {**form, "question_id": q}, hdr)
-                res = s.get("result") or {}
-                if s["status"] != "done":
-                    raise RuntimeError(s.get("error") or "job error")
-                facts = res.get("facts") or []
-                refs[q] = facts
-                rec["research"][q] = {"ok": True, "sec": round(time.time() - t, 1), "facts": len(facts), "cached": res.get("cached"),
-                                      "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds")}
-            except Exception as e:
-                refs[q] = []
-                rec["research"][q] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
-    await asyncio.gather(*(research(q) for q in QS))
-    # ④ 생성 (/jobs, 동시 3, 429 면 프론트처럼 재시도)
-    rec["generate"] = {}
+        t = time.time()
+        try:
+            s = await job(c, "research", {**form, "question_id": q}, hdr)
+            res = s.get("result") or {}
+            if s["status"] != "done":
+                raise RuntimeError(s.get("error") or "job error")
+            facts = res.get("facts") or []
+            refs[q] = facts
+            rec["research"][q] = {"ok": True, "sec": round(time.time() - t, 1), "facts": len(facts), "cached": res.get("cached"),
+                                  "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds")}
+        except Exception as e:
+            refs[q] = []
+            rec["research"][q] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
+        ready.append(q)
 
     async def generate(q):
-        async with sem:
-            t = time.time()
-            body = {**form, "question_id": q, "style": "logic", "references": refs.get(q) or []}
-            try:
-                s = await job(c, "generate", body, hdr)
-                text = ((s.get("result") or {}).get("text") or "")
-                rec["generate"][q] = {"ok": s["status"] == "done", "sec": round(time.time() - t, 1), "position": s.get("_position"),
-                                      "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds"), "chars": len(text),
-                                      "error": (s.get("error") or "")[:100] or None}
-            except Exception as e:
-                rec["generate"][q] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
-    await asyncio.gather(*(generate(q) for q in QS))
+        t = time.time()
+        body = {**form, "question_id": q, "style": "logic", "references": refs.get(q) or []}
+        try:
+            s = await job(c, "generate", body, hdr)
+            text = ((s.get("result") or {}).get("text") or "")
+            rec["generate"][q] = {"ok": s["status"] == "done", "sec": round(time.time() - t, 1), "position": s.get("_position"),
+                                  "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds"), "chars": len(text),
+                                  "error": (s.get("error") or "")[:100] or None}
+        except Exception as e:
+            rec["generate"][q] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
+
+    async def research_pool():
+        nonlocal research_done
+        sem = asyncio.Semaphore(PARALLEL)
+
+        async def one(q):
+            async with sem:
+                await research(q)
+        await asyncio.gather(*(one(q) for q in QS))
+        research_done = True
+
+    async def writer():
+        while True:
+            if ready:
+                await generate(ready.pop(0))
+            elif research_done:
+                return
+            else:
+                await asyncio.sleep(0.25)
+    await asyncio.gather(research_pool(), *(writer() for _ in range(PARALLEL)))
     rec["total"] = round(time.time() - t_start - rec["t0"], 1)
     log.append(rec)
     g = rec["generate"]
