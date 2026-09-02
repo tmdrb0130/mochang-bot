@@ -82,3 +82,4 @@
 
 - 프롬프트 md 는 저장 즉시 운영 반영 → **worktree 에서 작업**, 검증 후 반영 (`docs/MVP_PROCESS.md` 4절).
 - 모든 프롬프트 변경은 **`docs/PROMPT_GENERALIZATION.md`** 의 분야 검증 세트로 3개 분야 이상 실호출 통과 후 반영. 규칙 문장에 분야 어휘·골든 예문 금지.
+- 2026-09-02 15:5x 소유권 예외: 세션2 가 `backend/pipeline/postprocess.py`·`tests/test_postprocess.py` 를 신규 소유(작업 22·27). 다른 `backend/**` 는 여전히 세션3.
