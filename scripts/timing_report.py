@@ -119,6 +119,20 @@ def main() -> None:
         for r in errs[-5:]:
             print("  %s  %s  %s" % (r["ts"], r.get("kind") or r.get("path"), (r.get("error") or r.get("status"))))
 
+    # 조사 1회마다 남는 소스별 외부 요청 수(작업 19) + 벡터DB 적중(2026-09-03): vectorstore = 저장 문서 재사용 수,
+    # vectorstore_only = 웹 검색 없이 벡터DB 만으로 끝낸 조사 수
+    src = [r for r in rows if r.get("event") == "sources"]
+    if src:
+        totals: dict[str, int] = {}
+        for r in src:
+            for k, v in r.items():
+                if k not in ("ts", "event", "kind", "question_id") and isinstance(v, (int, float)):
+                    totals[k] = totals.get(k, 0) + int(v)
+        only = totals.get("vectorstore_only", 0)
+        print("\n[외부 소스] 조사 %d건 — 벡터DB 만으로 해결 %d건 (%.0f%%)" % (len(src), only, 100.0 * only / len(src)))
+        for k, v in sorted(totals.items(), key=lambda kv: -kv[1]):
+            print("  %-16s %6d" % (k, v))
+
     print()
 
 
