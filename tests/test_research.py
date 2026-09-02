@@ -88,7 +88,10 @@ def test_vane_build_body_matches_api_shape():
     assert cfg.configured and not R.VaneConfig().configured
 
 
-def test_researcher_from_config_respects_vane_enabled():
+def test_researcher_from_config_respects_vane_enabled(monkeypatch):
+    # .env 에 네이버 키가 있으면 백엔드 목록에 naver 가 끼어든다 — 이 테스트는 vane 만 보므로 키를 지운다.
+    monkeypatch.delenv("NAVER_CLIENT_ID", raising=False)
+    monkeypatch.delenv("NAVER_CLIENT_SECRET", raising=False)
     cfg = {"research": {"vane": {"enabled": False, "chat_provider_id": "a", "embedding_provider_id": "b"}}}
     assert [n for n, _ in R.researcher_from_config(cfg).backends] == ["ddgs"]
     cfg["research"]["vane"]["enabled"] = True
