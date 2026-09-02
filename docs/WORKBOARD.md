@@ -341,6 +341,32 @@
 
 ⏸ **배포(=`npx vite build`)는 승인 대기** — 승인 전까지 `dist` 는 `index-CG-vzjlN.js` 그대로 둔다.
 
+
+- 완료 — **작업 9: 벡터DB 모듈** (`7b2a6e5`). `RAG_PLAN` 5-1절 서명 그대로, **pytest 전체 124 passed, 실호출 0**.
+  - `backend/rag/vectorstore.py` (신규) + `tests/test_vectorstore.py` (신규 18건) + `requirements.txt` 2줄.
+    **`pipeline.py` 등 기존 백엔드 파일은 하나도 안 건드렸다** — 파이프라인 연결은 세션3 몫.
+  - `upsert_pages` 는 `collect_pages` 의 page dict 를 그대로 받는다. url 해시로 upsert(프래그먼트·끝
+    슬래시 무시), 본문 40자 미만이면 색인 안 함(`snippet` 폴백은 있음), 청크 512토큰.
+    메타: `url/title/publisher/date/fetched_at/source_kind/query` — `publisher` 없으면 도메인
+    (`pipeline.py:271` 과 같은 규칙), `source_kind` 는 검색 결과의 `source_type` 을 옮긴 것.
+    메타는 임베딩 본문에서 제외했다(제목·URL 이 섞이면 유사도가 주제가 아니라 형식에 끌린다).
+  - `query` 는 같은 문서의 청크를 **최고점 하나로 합쳐** 페이지 목록으로 준다. 신선도 컷은
+    `date` 가 `max_age_days`(기본 730) 초과면 제외, **날짜를 모르는 문서는 남긴다**.
+  - **📢 세션3 참고 — 고정 서명 외에 추가한 것 3개** (서명 변경 아님, 안 써도 그만):
+    ① `indexed_urls() -> set[str]` — `collect_pages(skip_urls=…)` 에 바로 넘길 수 있다.
+    ② `ollama_embedding(model_name="bge-m3", base_url=…)` — 운영용. **지연 import 라 Ollama 없어도
+       모듈 import 는 된다.** `VectorStore(persist_dir, embed_model=ollama_embedding())` 로 넘기면 됨.
+    ③ `query()` 결과에 `from_vectorstore: True` — 웹에서 새로 받은 페이지와 구분용.
+  - `embed_model=None` 기본값은 `OfflineEmbedding`(글자 2-gram 해시 + L2 정규화). LlamaIndex
+    `MockEmbedding` 을 안 쓴 이유: 모든 문장에 같은 벡터를 줘서 유사도가 항상 1.0 → `min_score`
+    동작을 테스트로 지킬 수 없다. **운영에서는 반드시 `embed_model` 을 넘겨야 한다** (안 넘기면 조회 품질이 없다).
+  - ⚠️ **공유 `.venv` 에 패키지를 설치했다** — `llama-index-core 0.14.24`,
+    `llama-index-embeddings-ollama 0.10.0` + 의존성 45개(numpy·aiohttp·sqlalchemy·nltk 등).
+    `setuptools 65.5.0 → 84.0.0` 만 업그레이드됐고 pydantic·httpx·fastapi 는 그대로다.
+    설치 직후 기존 테스트 106건 통과를 먼저 확인했다. 다른 PC 는 `pip install -r requirements-dev.txt` 필요.
+  - 아직 안 한 것(세션3 소관): `config.yaml research.vectorstore.{enabled,min_score,min_hits,max_age_days}`
+    설정 항목, `collect_pages` 연결, `asyncio.to_thread` 래핑. Ollama 실호출(`ollama pull bge-m3`) 검증도 미수행.
+
 ### 세션3 (백엔드)
 
 - 시작 — 작업 2(V4), 작업 6 백엔드 몫, 작업 12 1단계.
