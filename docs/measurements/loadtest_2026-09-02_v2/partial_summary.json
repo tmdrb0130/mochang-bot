@@ -1,0 +1,31 @@
+{
+ "duration_min": 13,
+ "users": 55,
+ "intake": {
+  "n": 55,
+  "queued_p50": 0.0,
+  "queued_p95": 47.9,
+  "queued_max": 48.9,
+  "run_p50": 97.9,
+  "run_p95": 258.0,
+  "run_max": 293.7
+ },
+ "research": {
+  "n": 67,
+  "queued_p50": 43.7,
+  "queued_p95": 685.0,
+  "queued_max": 753.9,
+  "run_p50": 15.9,
+  "run_p95": 760.3,
+  "run_max": 883.3
+ },
+ "generate": {
+  "n": 7,
+  "queued_p50": 223.8,
+  "queued_p95": 612.7,
+  "queued_max": 612.7,
+  "run_p50": 475.1,
+  "run_p95": 624.9,
+  "run_max": 624.9
+ }
+}
