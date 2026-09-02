@@ -534,7 +534,8 @@ async def test_vectorstore_is_off_by_default(tmp_path, monkeypatch):
     researcher = R.Researcher(backends=[("fake", lambda q, n: _aret(fake_results("https://a.co.kr/1")))],
                               cache=R.DiskCache(tmp_path))
     _, pages = await P.collect_pages(researcher, ["q"], cfg, fetch=make_fetch({"https://a.co.kr/1": PAGE_TEXT}))
-    assert pages and opened == [cfg]         # 물어는 보되 None 이라 아무 일도 안 한다
+    # 조회·색인 두 군데서 물어보지만 None 이라 저장소를 열지도, 임베딩을 부르지도 않는다
+    assert pages and opened and all(c is cfg for c in opened)
 
 
 @pytest.mark.asyncio
@@ -587,3 +588,133 @@ def test_vectorstore_config_is_read_from_yaml():
     assert (cfg.vectorstore_min_score, cfg.vectorstore_min_hits, cfg.vectorstore_max_age_days) == (0.7, 3, 365)
     assert P.ResearchConfig.from_config({}).vectorstore_enabled is False       # 설정이 없으면 꺼짐
     assert P.ResearchConfig.from_config({}).vectorstore_min_score == 0.6      # 기본 하한 (0.8 은 실측상 과함)
+
+
+# ── 작업 9 조회 단계: 쌓아 둔 자료로 웹 검색을 대신하거나 보탠다 ──
+
+class QueryStore:
+    """벡터DB 대역 — 미리 정한 적중을 돌려주고, is_sufficient 는 min_score/min_hits 로 판정."""
+
+    def __init__(self, hits, min_score=0.6, min_hits=2, fail=False):
+        self.hits = hits
+        self.min_score = min_score
+        self.min_hits = min_hits
+        self.fail = fail
+        self.queries = []
+        self.indexed = []
+
+    def query(self, text, k=8):
+        if self.fail:
+            raise RuntimeError("조회 실패")
+        self.queries.append(text)
+        return list(self.hits)
+
+    def is_sufficient(self, hits):
+        return sum(1 for h in hits if float(h.get("score", 0)) >= self.min_score) >= self.min_hits
+
+    def upsert_pages(self, pages):
+        self.indexed.append([p["url"] for p in pages])
+        return len(pages)
+
+
+def hit(url, score, text=PAGE_TEXT):
+    return {"url": url, "title": f"쌓아둔 {url}", "publisher": "서울시", "date": "2026-03-01",
+            "source_type": "news", "text": text, "from_vectorstore": True, "score": score}
+
+
+def searching_researcher(tmp_path, calls, results):
+    async def backend(query, n):
+        calls.append(query)
+        return results
+    return R.Researcher(backends=[("fake", backend)], cache=R.DiskCache(tmp_path))
+
+
+@pytest.mark.asyncio
+async def test_enough_stored_pages_skip_web_search_entirely(tmp_path, monkeypatch):
+    """적중이 충분하면 그 조사에서 외부 요청은 0건이 된다."""
+    store = QueryStore([hit("https://a.co.kr/1", 0.81), hit("https://b.co.kr/2", 0.75)])
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: store)
+    calls, fetched = [], []
+
+    async def fetch(url, timeout=15):
+        fetched.append(url)
+        return PAGE_TEXT
+
+    cfg = P.ResearchConfig(max_pages_to_extract=6, vectorstore_enabled=True)
+    researcher = searching_researcher(tmp_path, calls, fake_results("https://web.co.kr/1"))
+    unique, pages = await P.collect_pages(researcher, ["1인 가구 통계", "식품 폐기"], cfg, fetch=fetch)
+
+    assert calls == [] and fetched == [] and unique == []          # 검색 0, fetch 0
+    assert [p["url"] for p in pages] == ["https://a.co.kr/1", "https://b.co.kr/2"]
+    assert all(p["from_vectorstore"] for p in pages) and pages[0]["text"] == PAGE_TEXT
+    assert store.queries == ["1인 가구 통계", "식품 폐기"]           # 검색어마다 한 번씩 조회
+    assert store.indexed == []                                     # 다시 색인하지 않는다
+
+
+@pytest.mark.asyncio
+async def test_partial_hits_are_reused_and_web_fills_the_rest(tmp_path, monkeypatch):
+    """모자라면 웹 검색을 하되, 쌓아 둔 문서는 다시 받지 않고 근거로 같이 쓴다."""
+    store = QueryStore([hit("https://a.co.kr/1", 0.9)], min_hits=3)     # 1건뿐 → 부족
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: store)
+    calls, fetched = [], []
+
+    async def fetch(url, timeout=15):
+        fetched.append(url)
+        return PAGE_TEXT
+
+    web = fake_results("https://a.co.kr/1", "https://new.co.kr/2")      # 첫 건은 이미 가진 문서
+    cfg = P.ResearchConfig(max_pages_to_extract=4, vectorstore_enabled=True)
+    researcher = searching_researcher(tmp_path, calls, web)
+    _, pages = await P.collect_pages(researcher, ["질의"], cfg, fetch=fetch)
+
+    assert calls == ["질의"]                                        # 웹 검색은 했고
+    assert fetched == ["https://new.co.kr/2"]                       # 이미 가진 문서는 다시 안 받는다
+    urls = [p["url"] for p in pages]
+    assert urls[0] == "https://a.co.kr/1" and "https://new.co.kr/2" in urls
+    assert store.indexed == [["https://new.co.kr/2"]]               # 새로 받은 것만 색인
+
+
+@pytest.mark.asyncio
+async def test_low_score_hits_are_not_reused(tmp_path, monkeypatch):
+    """유사도가 하한 미만이면 근거로 쓰지 않는다 — 엉뚱한 주제가 끼어들면 안 된다."""
+    store = QueryStore([hit("https://old.co.kr/1", 0.31)], min_hits=1, min_score=0.6)
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: store)
+    calls = []
+    cfg = P.ResearchConfig(max_pages_to_extract=4, vectorstore_enabled=True, vectorstore_min_score=0.6)
+    researcher = searching_researcher(tmp_path, calls, fake_results("https://web.co.kr/1"))
+    _, pages = await P.collect_pages(researcher, ["질의"], cfg, fetch=make_fetch({"https://web.co.kr/1": PAGE_TEXT}))
+
+    assert calls == ["질의"]                                        # 부족하니 웹 검색
+    assert [p["url"] for p in pages] == ["https://web.co.kr/1"]     # 점수 낮은 적중은 버림
+
+
+@pytest.mark.asyncio
+async def test_query_failure_falls_back_to_web_search(tmp_path, monkeypatch):
+    """조회가 죽어도 조사는 그대로 간다."""
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: QueryStore([], fail=True))
+    calls = []
+    cfg = P.ResearchConfig(max_pages_to_extract=2, vectorstore_enabled=True)
+    researcher = searching_researcher(tmp_path, calls, fake_results("https://web.co.kr/1"))
+    _, pages = await P.collect_pages(researcher, ["질의"], cfg, fetch=make_fetch({"https://web.co.kr/1": PAGE_TEXT}))
+    assert calls == ["질의"] and [p["url"] for p in pages] == ["https://web.co.kr/1"]
+
+
+@pytest.mark.asyncio
+async def test_use_for_search_off_keeps_indexing_only(tmp_path, monkeypatch):
+    """use_for_search: false 면 조회는 안 하고 색인만 한다 (이전 단계 동작)."""
+    store = QueryStore([hit("https://a.co.kr/1", 0.99)])
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: store)
+    calls = []
+    cfg = P.ResearchConfig(max_pages_to_extract=2, vectorstore_enabled=True, vectorstore_use_for_search=False)
+    researcher = searching_researcher(tmp_path, calls, fake_results("https://web.co.kr/1"))
+    _, pages = await P.collect_pages(researcher, ["질의"], cfg, fetch=make_fetch({"https://web.co.kr/1": PAGE_TEXT}))
+
+    assert store.queries == [] and calls == ["질의"]
+    assert [p["url"] for p in pages] == ["https://web.co.kr/1"]
+    assert store.indexed == [["https://web.co.kr/1"]]
+
+
+def test_reuse_page_shape_matches_collect_pages_output():
+    p = P.reuse_page(hit("https://a.co.kr/1", 0.7))
+    assert set(p) >= {"url", "title", "date", "text", "source_type", "from_snippet", "from_vectorstore"}
+    assert p["from_snippet"] is False and p["from_vectorstore"] is True and p["score"] == 0.7

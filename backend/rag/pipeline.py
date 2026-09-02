@@ -53,6 +53,8 @@ class ResearchConfig:
     vectorstore_embed_model: str = "bge-m3"      # Ollama 모델명. 빈 값이면 오프라인 임베딩(품질 없음 — 테스트용)
     vectorstore_ollama_url: str = "http://localhost:11434"
     vectorstore_min_score: float = 0.6      # 실측 근거: bge-m3 는 같은 주제 문장끼리도 0.668 (0.8 은 과하다)
+    # 쌓인 자료로 웹 검색을 대신할지 (RAG_PLAN 5절). 적중이 충분하면 그 조사에서는 외부 요청이 0건이 된다.
+    vectorstore_use_for_search: bool = True
     vectorstore_min_hits: int = 5
     vectorstore_max_age_days: int = 730
 
@@ -75,6 +77,7 @@ class ResearchConfig:
             vectorstore_embed_model=str(vs.get("embed_model", "bge-m3")),
             vectorstore_ollama_url=str(vs.get("ollama_url", "http://localhost:11434")),
             vectorstore_min_score=float(vs.get("min_score", 0.6)),
+            vectorstore_use_for_search=bool(vs.get("use_for_search", True)),
             vectorstore_min_hits=int(vs.get("min_hits", 5)),
             vectorstore_max_age_days=int(vs.get("max_age_days", 730)),
             cache_ttl=int(rc.get("cache_ttl_seconds", 7 * 24 * 3600)),
@@ -236,6 +239,42 @@ async def index_pages(pages: list[dict], cfg: ResearchConfig) -> int:
         return 0
 
 
+def reuse_page(hit: dict) -> dict:
+    """벡터DB 적중을 collect_pages 의 page dict 모양으로. 본문이 이미 있으므로 fetch 하지 않는다."""
+    return {
+        "url": hit.get("url", ""),
+        "title": hit.get("title", ""),
+        "date": hit.get("date"),
+        "snippet": "",
+        "source_type": hit.get("source_type") or "vectorstore",
+        "text": hit.get("text", ""),
+        "from_snippet": False,
+        "from_vectorstore": True,
+        "score": hit.get("score"),
+    }
+
+
+async def query_vector_store(store, queries: list[str], cfg: ResearchConfig) -> list[dict]:
+    """검색어마다 벡터DB 를 조회해 URL 기준으로 합친다 (같은 문서는 최고 점수 하나). 실패하면 빈 목록.
+
+    조회는 로컬 임베딩 호출이라 외부 요청이 아니다 — 웹 검색·fetch 를 줄이는 것이 목적이다."""
+    try:
+        rows = await asyncio.gather(*(asyncio.to_thread(store.query, q, cfg.max_pages_to_extract)
+                                      for q in queries))
+    except Exception:
+        return []
+    best: dict[str, dict] = {}
+    for group in rows:
+        for hit in group or []:
+            url = hit.get("url", "")
+            if not url:
+                continue
+            cur = best.get(url)
+            if cur is None or float(hit.get("score", 0)) > float(cur.get("score", 0)):
+                best[url] = hit
+    return sorted(best.values(), key=lambda h: -float(h.get("score", 0)))
+
+
 async def _no_fetch() -> str:
     """fetch 자리에 끼우는 빈 코루틴 — 정형 API 결과는 HTTP 로 받아올 페이지가 없다."""
     return ""
@@ -267,6 +306,20 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
 
     skip_urls: 이미 다른 조사에서 본문을 받아온 URL — 다시 받지 않는다 (요청 절약).
     max_pages: 이번 호출에서 쓸 페이지 수 상한 (기본 cfg.max_pages_to_extract)."""
+    want = cfg.max_pages_to_extract if max_pages is None else max_pages
+    store = get_vector_store(cfg)
+
+    # ① 이미 쌓아 둔 자료부터 본다. 충분하면 웹 검색·fetch 를 아예 하지 않는다 (RAG_PLAN 5절).
+    reuse: list[dict] = []
+    if store is not None and cfg.vectorstore_use_for_search and queries:
+        reuse = await query_vector_store(store, queries, cfg)
+        if reuse and store.is_sufficient(reuse):
+            return [], [reuse_page(h) for h in reuse[:want]]
+
+    # ② 모자라면 웹 검색을 하되, 쌓아 둔 문서는 다시 받지 않고 근거로 같이 쓴다.
+    kept = [h for h in reuse if float(h.get("score", 0)) >= cfg.vectorstore_min_score][: max(1, want // 2)]
+    skip_urls = set(skip_urls or ()) | {h.get("url", "") for h in kept}
+
     all_results: list[dict] = []
     for q in queries:
         rows = await researcher.search(q, cfg.max_results_per_query)
@@ -279,21 +332,20 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
         if k and k not in seen and k not in skip:
             seen.add(k)
             unique.append(r)
-    want = cfg.max_pages_to_extract if max_pages is None else max_pages
     budget = cfg.max_pages_to_fetch or cfg.max_pages_to_extract      # 받아올 페이지 수 (본문 실패 대비 여유 포함)
     ranked = _cap_by_domain(rank_results(unique), cfg.max_pages_per_domain)
     ranked = ranked[: min(budget, want) if max_pages is not None else budget]
     # 정형 API 결과(no_fetch)는 받아올 페이지가 없다 — snippet 이 이미 사실 문장이라 그대로 본문으로 쓴다.
     texts = await asyncio.gather(*(_no_fetch() if r.get("no_fetch") else fetch(r["url"], cfg.fetch_timeout)
                                    for r in ranked))
-    pages = []
+    pages = [reuse_page(h) for h in kept]        # 쌓아 둔 문서를 먼저 채우고 남는 자리만 웹에서
     for r, t in zip(ranked, texts):
         body = t or r.get("snippet") or ""
         if len(body) >= MIN_BODY_CHARS:
             pages.append({**r, "text": body, "from_snippet": not bool(t)})
         if len(pages) >= want:
             break
-    await index_pages(pages, cfg)          # 벡터DB 축적 (기본 꺼짐)
+    await index_pages([p for p in pages if not p.get("from_vectorstore")], cfg)   # 새로 받아온 것만 색인
     return unique, pages
 
 
