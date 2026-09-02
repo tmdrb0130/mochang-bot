@@ -1,0 +1,195 @@
+{
+ "summary": "20-30대 직장인·가족 캠핑객을 위한 캠핑장 빈자리 실시간 알림과 당일 취소분 할인 예약 서비스",
+ "slots": [
+  {
+   "id": "customer",
+   "label": "대상 고객",
+   "status": "weak",
+   "known": "20-30대 직장인·가족 캠핑객"
+  },
+  {
+   "id": "problem",
+   "label": "해결할 불편",
+   "status": "weak",
+   "known": "캠핑장 빈자리 예약의 어려움"
+  },
+  {
+   "id": "alternative",
+   "label": "지금의 대안",
+   "status": "missing",
+   "known": null
+  },
+  {
+   "id": "solution",
+   "label": "제품·서비스 형태",
+   "status": "known",
+   "known": "캠핑장 빈자리 실시간 알림과 당일 취소분 할인 예약 서비스"
+  },
+  {
+   "id": "revenue",
+   "label": "수익 방식",
+   "status": "missing",
+   "known": null
+  },
+  {
+   "id": "first_step",
+   "label": "첫 6개월 행동",
+   "status": "missing",
+   "known": null
+  },
+  {
+   "id": "evidence",
+   "label": "직접 확인한 근거",
+   "status": "missing",
+   "known": null
+  },
+  {
+   "id": "capability",
+   "label": "관련 경험·역량",
+   "status": "missing",
+   "known": null
+  },
+  {
+   "id": "mentoring",
+   "label": "책임멘토에게 받고 싶은 도움",
+   "status": "missing",
+   "known": null
+  }
+ ],
+ "cards": [
+  {
+   "slot": "problem",
+   "label": "해결할 불편",
+   "type": "single",
+   "question": "캠핑객이 겪는 가장 큰 불편은 무엇인가요?",
+   "why": "Q2 배경과 Q3-1 차별점의 출발점입니다.",
+   "question_ids": [
+    "q2",
+    "q3_1"
+   ],
+   "options": [
+    {
+     "label": "캠핑장 예약의 어려움",
+     "hint": "캠핑장 예약 시스템의 한계",
+     "source": ""
+    },
+    {
+     "label": "캠핑 관련 정보의 부족",
+     "hint": "캠핑에 관한 정보를 찾기 어려움",
+     "source": ""
+    },
+    {
+     "label": "캠핑 시설의 질 낮음",
+     "hint": "캠핑 시설의 환경과 청결이 떨어짐",
+     "source": ""
+    }
+   ]
+  },
+  {
+   "slot": "revenue",
+   "label": "수익 방식",
+   "type": "single",
+   "question": "캠핑장 빈자리 실시간 알림과 당일 취소분 할인 예약 서비스의 수익 모델은 무엇인가요?",
+   "why": "Q3-2 수익 문항의 핵심입니다.",
+   "question_ids": [
+    "q3_2"
+   ],
+   "options": [
+    {
+     "label": "수수료 기반",
+     "hint": "캠핑장 예약 시 수수료를 부과",
+     "source": ""
+    },
+    {
+     "label": "광고 수익",
+     "hint": "캠핑 관련 광고를 통해 수익",
+     "source": ""
+    },
+    {
+     "label": "프리미엄 서비스",
+     "hint": "추가 기능을 제공하는 프리미엄 서비스를 판매",
+     "source": ""
+    }
+   ]
+  },
+  {
+   "slot": "alternative",
+   "label": "지금의 대안",
+   "type": "multi",
+   "question": "캠핑객은 현재 어떻게 캠핑장을 예약하고 있나요?",
+   "why": "경쟁 서비스와의 차별화를 위해 필요합니다.",
+   "question_ids": [
+    "q3_1"
+   ],
+   "options": [
+    {
+     "label": "인터넷 검색",
+     "hint": "검색 엔진을 통해 캠핑장을 찾음",
+     "source": ""
+    },
+    {
+     "label": "word of mouth",
+     "hint": "지인 또는 지인 지인 추천",
+     "source": ""
+    },
+    {
+     "label": "캠핑장 직접 방문",
+     "hint": "직접 방문하여 예약 또는 문의",
+     "source": ""
+    }
+   ]
+  },
+  {
+   "slot": "mentoring",
+   "label": "책임멘토에게 받고 싶은 도움",
+   "type": "multi",
+   "question": "어떤 멘토링이 필요한가요?",
+   "why": "실제 사업을 진행하는 데 필요한 지식과 자원입니다.",
+   "question_ids": [
+    "q4_2"
+   ],
+   "options": [
+    {
+     "label": "시장 분석",
+     "hint": "타겟 마켓과 경쟁 서비스에 대한 분석",
+     "source": ""
+    },
+    {
+     "label": "제품 개발",
+     "hint": "서비스 개발과 기술적인 문제 해결",
+     "source": ""
+    },
+    {
+     "label": "마케팅 전략",
+     "hint": "효과적인 마케팅 방법에 대한 조언",
+     "source": ""
+    }
+   ]
+  }
+ ],
+ "missing": [
+  "alternative",
+  "revenue",
+  "first_step",
+  "evidence",
+  "capability",
+  "mentoring"
+ ],
+ "weak": [
+  "customer",
+  "problem"
+ ],
+ "ready": false,
+ "model": "casperhansen/llama-3.3-70b-instruct-awq",
+ "research": {
+  "facts": [],
+  "queries": [
+   "캠핑장 예약 서비스",
+   "캠핑객 불편사항 조사",
+   "캠핑 산업 시장 규모 2025",
+   "캠핑 예약 수수료 현황"
+  ],
+  "backend": "naver",
+  "cached": false
+ }
+}
