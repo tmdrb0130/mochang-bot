@@ -3,6 +3,8 @@
 조립 순서: system + track + question + style (+ 나중에 RAG 참고자료) → system 프롬프트
 지원자 입력(아이디어·창업여부·역량·팀원) → user 프롬프트
 """
+import hashlib
+import itertools
 import re
 from pathlib import Path
 
@@ -17,6 +19,25 @@ _FRONTMATTER = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.S)
 
 class PromptNotFound(Exception):
     pass
+
+# ── Q1 문장 짜임 회전 (작업 15 후속) ──
+# 라마는 "넷 중 골라 써라" 같은 선택형·금지형 지시를 지키지 못한다(실호출 25건 확인) — 그래서 코드가 **하나만**
+# 골라 넣는다. 문구는 여전히 md 에만 있고(q1_structures.md), 코드는 어느 것을 넣을지만 정한다.
+STRUCTURES_FILE = "q1_structures.md"
+_STRUCT_SEP = re.compile("^-{3,}$", re.M)
+_rotation = itertools.count()          # 요청마다 한 칸씩 — 같은 아이디어를 다시 눌러도 다른 짜임이 나온다
+
+
+def structures() -> list[str]:
+    """q1_structures.md 를 '---' 줄로 나눈 짜임 목록."""
+    return [b.strip() for b in _STRUCT_SEP.split(_read(STRUCTURES_FILE)) if b.strip()]
+
+
+def pick_structure(idea: str, offset: int) -> str:
+    """아이디어 해시 + 회전값으로 짜임 하나를 고른다. 아이디어가 다르면 시작점이 다르고, 요청마다 한 칸씩 돈다."""
+    items = structures()
+    base = int(hashlib.sha1((idea or "").encode("utf-8")).hexdigest()[:8], 16)
+    return items[(base + int(offset)) % len(items)]
 
 
 def _read(relpath: str) -> str:
@@ -141,6 +162,12 @@ def build_prompts(form: dict) -> tuple[str, str, dict]:
     track_md = _read(f"tracks/{form['track']}.md")
     style_md = _read(f"styles/{form['style']}.md")
     meta, question_body = load_question(form["question_id"])
+    structure_offset = form.get("structure_offset")
+    if "{structure}" in question_body:
+        # 회전값은 요청마다 하나씩 소비한다. 재생성(generate_one)은 meta 로 받은 값에 +1 해서 다른 짜임을 부른다.
+        structure_offset = next(_rotation) if structure_offset is None else int(structure_offset)
+        question_body = question_body.replace("{structure}", pick_structure(form.get("idea", ""), structure_offset))
+    meta = {**meta, "structure_offset": structure_offset}
 
     question_section = "\n".join([
         "[작성 문항]",
