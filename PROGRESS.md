@@ -67,7 +67,8 @@
 - **서버→huggingface.co 차단(20 B/s)**, hf-mirror.com·ModelScope 4.5 MB/s. 파드 안 huggingface_hub 는 미러를 거부(FileMetadataError)
   → 호스트에서 curl 3병렬로 `/opt/llm-models/qwen3.8-27b-fp8/` 에 직접 받아 경로로 로드 (20:59~22:31, 81파일 크기 전부 일치).
 - GPU 고정: k8s 자원 요청 대신 `NVIDIA_VISIBLE_DEVICES=<GPU2 UUID>` (GPU0 은 다른 사람 Docker 가 점유). 파드 안 nvidia-smi 로 GPU2 만 보임 확인.
-- 함정 3개: ① 파일 목록을 Windows 에서 만들어 `` 이 URL 에 섞임 → curl 전부 거부 ② `pkill -f` 패턴이 내 SSH 명령줄에 매칭돼 세션 3번 끊김 → `pgrep -x`
+- 함정 3개: ① 파일 목록을 Windows 에서 만들어 `
+` 이 URL 에 섞임 → curl 전부 거부 ② `pkill -f` 패턴이 내 SSH 명령줄에 매칭돼 세션 3번 끊김 → `pgrep -x`
   ③ **서버의 `vllm/vllm-openai:latest` 태그가 사라져 있어(kubelet 이미지 GC) kubelet 이 도커허브에서 8.8 GB 를 다시 받으려다 100 B/s 에 멈춤 →
   kubelet 이 새 파드를 하나도 못 만드는 상태**(기본 런타임 테스트 파드도 ContainerCreating). `ss -K` 로 그 TCP 연결을 끊자 즉시 풀림. 이미지는 digest 로 고정.
 - `--kv-cache-dtype fp8` 은 뺐다 (미보정 스케일 경고). 로드 5초, 엔진 초기화 183초, GPU2 88 GB(가중치 28 + KV).
@@ -89,7 +90,34 @@
 
 → Qwen 이 속도·분량·구조 모두 우위. 지어냄은 양쪽 다 있어 refine ②(입력에 없는 수치·경험 삭제)가 계속 필요.
 
-**전환 준비**: `backend/config.yaml.qwen` (llm·models·research.llm 세 블록만 다름). 사용자 결정 후 `config.yaml` 을 라마 백업(`config.yaml.llama.bak`)으로 두고 교체 → `nssm restart mochang-api`.
+**전환 (사용자 결정 00:1x, 실행 완료)**: `config.yaml` = Qwen(본문+조사), 라마는 `config.yaml.llama.bak`. `scripts/switch_model.py llama|qwen` + `nssm restart` 로 왕복.
+
+### 40명 전체 흐름 부하 실측 (`scripts/live_load_test.py` — 인테이크→카드 답→문항 8개 실조사→생성, 사용자마다 다른 아이디어·IP)
+
+| | 1차 (조사 워커 6) | **2차 (조사 워커 24)** |
+|---|---|---|
+| 벽시계 | 29분 | **22분** |
+| 사용자 1명 전체 p50 / 최대 | 27분 49초 / 29분 | **21분 28초 / 22분** |
+| ① 인테이크(동기) 성공 | 2/40 (38건 600s=nginx 상한 초과) | 17/40 (23건 600s 초과). 서버 실측 중앙 11분 4초, 최대 17분 |
+| ② 문항 조사(동기, 320) | 306 성공, p50 115s, p95 503s | **320 성공, p50 17s, p95 42s** |
+| ③ 문항 생성(큐, 320) | 320 성공, 대기 p50 106s, 실행 94~99s, 체감 p50 208s·p95 309s | 320 성공, 대기 p50 124s, 실행 94s, 체감 p50 215s·p95 330s |
+| 긴 문항 글자 | 1,543자 (1,000 미만 4) | 1,552자 (1,000 미만 2) |
+| 서버 최고 | API 대기 73, vLLM 44, KV 34%, preempt 0 | API 대기 98, vLLM 52, KV 39%, preempt 0 |
+| 조사 LLM 호출 큐 대기 | 중앙 2분 36초 (988건) | **중앙 9초** (643건) |
+
+원본: `docs/measurements/2026-09-02_load40_qwen.json`, `2026-09-03_load40b_qwen_rw24.json`.
+
+읽기:
+- 조사 워커 상향으로 문항 조사는 해결(115s→17s). **인테이크는 여전히 11분** — 조사 LLM 대기는 9초뿐인데, 인테이크 안의 호출(검색어 1 + 페이지 추출 6 + 카드 생성 1)이
+  GPU 를 생성 320건과 나눠 쓰느라 호출당 1~1.5분(p90 실행 1분 34초)씩 걸리고, 카드 생성은 본문 큐(생성이 채움)에서 최대 3분 47초 대기.
+  즉 **GPU 총량이 한계**: 40명 = LLM 호출 ~1,000건 ≈ 20분치 GPU 시간. 워커를 어떻게 나눠도 총 시간은 못 줄이고, 누가 먼저 받느냐만 바뀐다.
+- APITimeoutError 1건 (00:26, 연결 30초 반영 전 코드? 재시작 후라 반영됨 — 재발 시 확인).
+
+다음 손잡이 (효과 순): ① GPU1 의 라마를 내리고 **Qwen 2번째 복제본**(같은 Service, replicas 2) → 처리량 2배 (사용자 결정 필요)
+② vLLM `--scheduling-policy priority` + 요청 `priority` 로 인테이크·조사 호출을 생성보다 먼저 → 카드가 1~2분에 나오고 생성이 대기(순번 표시)를 흡수
+③ 프론트 인테이크·조사를 `/jobs` 로 (600s 절벽 제거, 순번 표시).
+
+**전환 준비(기록)**: `backend/config.yaml.qwen` (llm·models·research.llm 세 블록만 다름). 사용자 결정 후 `config.yaml` 을 라마 백업(`config.yaml.llama.bak`)으로 두고 교체 → `nssm restart mochang-api`.
 라마 파드는 그대로 두어 언제든 되돌릴 수 있다.
 
 ## 다음 순서
