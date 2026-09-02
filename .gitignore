@@ -25,6 +25,7 @@ backend/.usage.json
 
 # 조사 결과 캐시
 backend/.cache/
+backend/.vectorstore/
 .pytest_cache/
 backend/.timing.jsonl
 backend/.timing.jsonl.1
