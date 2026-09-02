@@ -1,16 +1,21 @@
-"""실서비스 부하 테스트 — 사용자 N명이 동시에 신청서를 만드는 상황을 흉내내고 사용자 체감 대기·서버 지표를 기록한다.
+"""실서비스 부하 테스트 — 사용자 N명이 **프론트와 똑같은 전체 흐름**으로 동시에 신청서를 만드는 상황.
 
-    .venv/Scripts/python scripts/live_load_test.py --users 50                    # 기본 50명, 문항 8개씩
-    .venv/Scripts/python scripts/live_load_test.py --users 50 --json out.json    # 원본 저장
+    .venv/Scripts/python scripts/live_load_test.py --users 40 --json docs/measurements/load40.json
+    .venv/Scripts/python scripts/live_load_test.py --users 60 --json docs/measurements/load60.json
 
-흉내내는 것 (프론트 흐름과 같게):
-  - 사용자마다 다른 X-Forwarded-For → 백엔드의 IP 당 동시 작업 제한(max_jobs_per_client, 기본 3)이 사용자별로 걸린다.
-  - 사용자 1명 = 문항 8개를 최대 3개씩 동시에 /jobs/generate 로 제출 → 폴링 (프론트와 같은 경로).
-  - 참고자료는 시작 전에 문항별 /jobs/research 1회로 받아 모두에게 같은 것을 준다 (실사용과 같은 프롬프트 길이).
-  - 5초마다 /api/health 큐 상태 + vLLM /metrics(running·waiting·KV 사용률·preemption)을 샘플링한다.
-결과: 문항 단위 대기(queued)·실행(run)·총(total) p50/p95, 사용자 단위(8문항 완료) p50/p95, 실패 수, 서버 지표 최고치.
+사용자 1명이 하는 일 (App.jsx 와 같은 순서·같은 동시성):
+  ① 아이디어·팀원·사업자 여부·역량 입력 → POST /intake (동기, 웹 조사 포함)  → 카드
+  ② 카드마다 다르게 답 (첫 보기 / 둘째 보기+직접 문장 / 모름 / 직접 입력)
+  ③ 문항 8개 조사 POST /research (동기, 동시 3 = RESEARCH_PARALLEL) → 문항별 facts (실제 웹 검색)
+  ④ 문항 8개 생성 POST /jobs/generate + 폴링 (동시 3 = PARALLEL), 참고자료 주입 → 1,000~2,000자 본문
+사용자마다 **아이디어 문장이 다르다** (60개 풀) → 조사 캐시가 안 걸려 검색·본문 추출·사실 추출이 실제로 돈다.
+사용자마다 다른 X-Forwarded-For → IP 당 동시 작업 제한(max_jobs_per_client)이 사용자별로 걸린다.
 
-⚠️ 공유 GPU 서버에 실부하를 건다. 사용자 승인 후 한가한 시간에.
+기록: 단계별(인테이크·조사·생성) 성공/실패·소요 p50/p95, 문항 대기(queued)/실행(run), 사용자 1명 전체 완료 시간,
+      5초마다 API 큐(running/queued)·vLLM(running/waiting/KV/preemption). 본문 글자 수 분포.
+서버 쪽 단계별 시간은 backend/.timing.jsonl → scripts/timing_report.py --last N 으로 같이 본다.
+
+⚠️ 공유 GPU 서버·외부 검색 API 에 실부하를 건다. 사용자 승인 후에만.
 """
 from __future__ import annotations
 
@@ -28,63 +33,144 @@ sys.stdout.reconfigure(encoding="utf-8")
 B = "https://www.bustartup.kr:50001/api"
 VLLM_METRICS = "http://localhost:30801/metrics"       # 이 PC 의 SSH 터널 (Qwen). 라마면 30800
 QS = ["q1", "q2", "q3_1", "q3_2", "q4_1", "q4_2", "q8", "q10"]
-IDEA = {"track": "tech", "is_business": False, "current_item": "", "team": "팀원 없음", "capability": "웹 개발 3년, 리액트·파이썬",
-        "idea": "자취하는 20대는 배달 음식이 지겨운데 요리는 부담스럽다. 동네 반찬가게와 연결해 그날 남은 반찬을 저녁 7시 이후 할인 꾸러미로 예약·수령하는 앱을 만들고 싶다.",
-        "answers": [{"slot": "revenue", "label": "수익 방식", "answer": "꾸러미 판매액의 15% 수수료", "unknown": False},
-                    {"slot": "alternative", "label": "지금의 대안", "answer": "배달앱 또는 편의점 도시락", "unknown": False},
-                    {"slot": "first_step", "label": "첫 6개월 행동", "answer": "우리 동네 반찬가게 3곳과 수기 예약으로 2주 시범 운영", "unknown": False}]}
+PARALLEL = 3                                          # App.jsx PARALLEL / RESEARCH_PARALLEL
+
+# ── 아이디어 풀: 15개 분야 × 변형 4 = 60명 (문장이 전부 달라 조사 캐시가 안 걸린다) ──
+BASE_IDEAS = [
+    ("반찬 꾸러미", "자취하는 20대는 배달 음식이 지겨운데 요리는 부담스럽다. 동네 반찬가게와 연결해 그날 남은 반찬을 저녁 7시 이후 할인 꾸러미로 예약·수령하는 앱을 만들고 싶다."),
+    ("딸기 농장 체험", "겨울철 딸기 농장에 가족 단위 체험객이 오지만 예약·결제가 전화뿐이라 놓치는 손님이 많다. 인근 농가 6곳을 묶어 체험 시간대 예약과 수확 딸기 택배 주문을 한 번에 받는 서비스."),
+    ("경단녀 돌봄", "경력이 끊긴 보육교사 출신 여성이 동네에서 시간제 돌봄을 맡고, 맞벌이 부모가 앱으로 당일 오후 돌봄을 예약하는 플랫폼. 자격증과 신원을 확인한 사람만 등록한다."),
+    ("캠핑장 빈자리", "주말 캠핑장은 예약이 꽉 차는데 당일 취소분은 그냥 비어 있다. 취소분을 실시간으로 알려주고 당일 할인 예약까지 이어주는 앱."),
+    ("헬스장 유휴", "직장인이 점심시간에 회사 근처 헬스장 빈 자리를 실시간으로 확인하고 30분 단위로 예약해 운동하는 서비스. 헬스장은 유휴 시간을 판다."),
+    ("동네 세탁", "1인 가구는 이불·운동화처럼 큰 빨래를 맡길 곳이 마땅치 않다. 동네 세탁소가 저녁에 수거해 이틀 뒤 문 앞에 두는 정기 구독 세탁 서비스."),
+    ("주차 공유", "상가·교회·회사의 비는 주차공간을 시간 단위로 빌려주는 지역 기반 플랫폼. 소유주는 유휴 시간을 팔고 운전자는 목적지 근처에서 바로 예약한다."),
+    ("반려견 산책", "장시간 집을 비우는 직장인 반려인을 위해 검증된 동네 산책 도우미를 시간 단위로 매칭하는 앱. 산책 경로와 사진을 실시간으로 보낸다."),
+    ("어르신 약 관리", "혼자 사는 어르신이 약 먹는 시간을 놓치는 일이 잦다. 약통에 붙이는 센서와 자녀 앱을 연결해 복용 여부를 알려주고, 놓치면 전화를 거는 서비스."),
+    ("농산물 직거래", "소농은 판로가 없어 도매상에 헐값에 넘긴다. 같은 시군 소비자에게 주 1회 제철 채소 꾸러미를 정기 배송하는 지역 직거래 서비스."),
+    ("소상공인 SNS", "동네 식당 사장님은 인스타그램에 올릴 사진과 글을 만들 시간이 없다. 메뉴 사진만 찍으면 게시글·해시태그를 자동으로 만들어 예약 발행하는 도구."),
+    ("중고 교재", "대학생은 한 학기 쓴 전공 교재를 되팔 곳이 마땅치 않다. 같은 학교·같은 과목 기준으로 교재를 사고파는 캠퍼스 안 중고 교재 장터."),
+    ("공유 주방", "배달 전문 초보 창업자는 주방 임대료가 부담이다. 심야에 비는 식당 주방을 시간 단위로 빌려주는 공유 주방 예약 서비스."),
+    ("외국인 행정", "한국에 온 유학생·근로자는 출입국·은행·휴대폰 개통 서류가 어렵다. 모국어로 절차를 안내하고 필요 서류를 체크리스트로 만들어 주는 앱."),
+    ("동네 공방 클래스", "퇴근 후 취미를 찾는 30대는 동네 공방 원데이 클래스 정보를 찾기 어렵다. 반경 2km 안 공방의 당일·주말 빈 자리를 모아 예약하는 서비스."),
+]
+VARIANTS = [
+    ("", "팀원 없음", "대학에서 경영학 전공, 카페 아르바이트 2년", False, ""),
+    (" 우선 천안 지역 대학가에서 시작해 반응을 보고 넓히려 한다.", "2명", "웹 개발 3년, 리액트·파이썬. 팀원은 디자이너", False, ""),
+    (" 40대 이상 이용자도 쉽게 쓰도록 전화 접수를 병행할 생각이다.", "3명 이상", "같은 업종에서 5년 근무, 거래처 30곳 확보", True, "같은 분야 오프라인 매장 3년 운영, 월 매출 2천만 원"),
+    (" 첫 달에는 지인 20명에게 무료로 써 보게 하고 불편을 모을 계획이다.", "팀원 없음", "컴퓨터공학 3학년, 앱 개발 동아리 활동", False, ""),
+]
+
+
+SALT = ""   # --salt: 아이디어 끝에 붙여 조사 캐시(7일)를 피한다 — 같은 아이디어로 재측정할 때 이전 실행의 캐시가 결과를 왜곡하지 않게
+
+
+def make_user(i: int) -> dict:
+    name, idea = BASE_IDEAS[i % len(BASE_IDEAS)]
+    extra, team, cap, biz, cur = VARIANTS[(i // len(BASE_IDEAS)) % len(VARIANTS)]
+    return {"name": f"{name}#{i}", "track": "tech", "idea": idea + extra + SALT, "team": team, "capability": cap,
+            "is_business": biz, "current_item": cur}
+
+
+def pick_answers(cards: list[dict], mode: int) -> list[dict]:
+    """카드마다 다르게: 첫 보기 / 둘째 보기+직접 문장 / 모름 / 직접 입력 (mentoring 은 보기 2개)."""
+    out = []
+    for i, card in enumerate(cards):
+        opts = card.get("options") or []
+        k = (i + mode) % 4
+        if card.get("slot") == "mentoring" and len(opts) >= 2:
+            ans = opts[0]["label"] + ", " + opts[1]["label"]
+        elif k == 0 and opts:
+            ans = opts[0]["label"]
+        elif k == 1 and len(opts) > 1:
+            ans = opts[1]["label"] + " — 제가 직접 겪어 본 것입니다"
+        elif k == 2:
+            out.append({"slot": card["slot"], "label": card["label"], "answer": "", "unknown": True})
+            continue
+        else:
+            ans = "아직 정하지 못했지만 첫 달 안에 10명에게 물어볼 계획입니다"
+        out.append({"slot": card["slot"], "label": card["label"], "answer": ans, "unknown": False})
+    return out
 
 
 def pct(xs, p):
-    if not xs:
-        return None
-    xs = sorted(xs)
-    return round(xs[min(len(xs) - 1, int(len(xs) * p))], 1)
+    xs = sorted(x for x in xs if x is not None)
+    return round(xs[min(len(xs) - 1, int(len(xs) * p))], 1) if xs else None
 
 
-async def poll(c: httpx.AsyncClient, jid: str) -> dict:
-    while True:
-        await asyncio.sleep(2.5)
-        s = (await c.get(f"{B}/jobs/{jid}")).json()
-        if s["status"] in ("done", "error"):
-            return s
+def payload(u: dict) -> dict:
+    return {k: v for k, v in u.items() if k != "name"}
 
 
-async def research_all(c: httpx.AsyncClient) -> dict:
-    refs = {}
-    for q in QS:
-        r = await c.post(f"{B}/jobs/research", json={**IDEA, "question_id": q})
-        s = await poll(c, r.json()["job_id"])
-        refs[q] = ((s.get("result") or {}).get("facts") or []) if s["status"] == "done" else []
-    return refs
+async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> dict:
+    u = make_user(i)
+    hdr = {"X-Forwarded-For": f"10.99.{i // 250}.{i % 250 + 1}"}
+    rec = {"user": i, "name": u["name"], "t0": round(time.time() - t_start, 1)}
+    # ① 인테이크 (동기 — 프론트와 같음)
+    t = time.time()
+    try:
+        r = await c.post(f"{B}/intake", json=payload(u), headers=hdr, timeout=600)
+        r.raise_for_status()
+        it = r.json()
+        cards = it.get("cards") or []
+        rec["intake"] = {"ok": True, "sec": round(time.time() - t, 1), "cards": len(cards), "research_facts": len((it.get("research") or {}).get("facts") or [])}
+    except Exception as e:
+        cards = []
+        rec["intake"] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
+    # ② 카드 답
+    answers = pick_answers(cards, i % 4)
+    form = {**payload(u), "answers": answers}
+    # ③ 조사 (동기, 동시 3)
+    sem = asyncio.Semaphore(PARALLEL)
+    refs: dict[str, list] = {}
+    rec["research"] = {}
 
+    async def research(q):
+        async with sem:
+            t = time.time()
+            try:
+                r = await c.post(f"{B}/research", json={**form, "question_id": q}, headers=hdr, timeout=600)
+                r.raise_for_status()
+                facts = r.json().get("facts") or []
+                refs[q] = facts
+                rec["research"][q] = {"ok": True, "sec": round(time.time() - t, 1), "facts": len(facts), "cached": r.json().get("cached")}
+            except Exception as e:
+                refs[q] = []
+                rec["research"][q] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
+    await asyncio.gather(*(research(q) for q in QS))
+    # ④ 생성 (/jobs, 동시 3, 429 면 프론트처럼 재시도)
+    rec["generate"] = {}
 
-async def one_question(c: httpx.AsyncClient, user: int, q: str, refs: list, sem: asyncio.Semaphore, rows: list, t_start: float):
-    async with sem:                                     # 사용자당 동시 3문항 (프론트 동작)
-        headers = {"X-Forwarded-For": f"10.99.{user // 250}.{user % 250 + 1}"}
-        body = {**IDEA, "question_id": q, "style": "logic", "references": refs}
-        t0 = time.time()
-        for attempt in range(30):                        # 429(동시 작업 초과)면 프론트처럼 잠시 뒤 재시도
-            r = await c.post(f"{B}/jobs/generate", json=body, headers=headers)
-            if r.status_code != 429:
-                break
-            await asyncio.sleep(3)
-        if r.status_code != 200:
-            rows.append({"user": user, "q": q, "status": f"http {r.status_code}", "total": round(time.time() - t0, 1)})
-            return
-        j = r.json()
-        s = await poll(c, j["job_id"])
-        rows.append({"user": user, "q": q, "status": s["status"], "position": j.get("position"),
-                     "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds"), "total": round(time.time() - t0, 1),
-                     "t_submit": round(t0 - t_start, 1), "chars": len(((s.get("result") or {}).get("text") or "")),
-                     "error": (s.get("error") or "")[:100] or None})
-
-
-async def one_user(c, user, refs, rows, t_start):
-    sem = asyncio.Semaphore(3)
-    t0 = time.time()
-    await asyncio.gather(*(one_question(c, user, q, refs[q], sem, rows, t_start) for q in QS))
-    return round(time.time() - t0, 1)
+    async def generate(q):
+        async with sem:
+            t = time.time()
+            body = {**form, "question_id": q, "style": "logic", "references": refs.get(q) or []}
+            try:
+                for _ in range(40):
+                    r = await c.post(f"{B}/jobs/generate", json=body, headers=hdr, timeout=60)
+                    if r.status_code != 429:
+                        break
+                    await asyncio.sleep(3)
+                r.raise_for_status()
+                j = r.json()
+                while True:
+                    await asyncio.sleep(2.5)
+                    s = (await c.get(f"{B}/jobs/{j['job_id']}", timeout=60)).json()
+                    if s["status"] in ("done", "error"):
+                        break
+                text = ((s.get("result") or {}).get("text") or "")
+                rec["generate"][q] = {"ok": s["status"] == "done", "sec": round(time.time() - t, 1), "position": j.get("position"),
+                                      "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds"), "chars": len(text),
+                                      "error": (s.get("error") or "")[:100] or None}
+            except Exception as e:
+                rec["generate"][q] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
+    await asyncio.gather(*(generate(q) for q in QS))
+    rec["total"] = round(time.time() - t_start - rec["t0"], 1)
+    log.append(rec)
+    g = rec["generate"]
+    print(f"  #{i:>2} {u['name']:<14} 완료 {rec['total']:>6.0f}s | 인테이크 {rec['intake'].get('sec')}s {'✓' if rec['intake']['ok'] else '✗'} 카드 {rec['intake'].get('cards', 0)}"
+          f" | 조사 ✓{sum(1 for v in rec['research'].values() if v['ok'])}/8 facts {sum(v.get('facts', 0) for v in rec['research'].values())}"
+          f" | 생성 ✓{sum(1 for v in g.values() if v['ok'])}/8 글자 {statistics.mean([v['chars'] for q, v in g.items() if v.get('chars') and q not in ('q1', 'q10')] or [0]):.0f}", flush=True)
+    return rec
 
 
 async def sampler(stop: asyncio.Event, samples: list):
@@ -109,44 +195,56 @@ async def sampler(stop: asyncio.Event, samples: list):
             await asyncio.sleep(5)
 
 
+def summarize(users: int, recs: list, samples: list, wall: int) -> dict:
+    it = [r["intake"] for r in recs]
+    rs = [v for r in recs for v in r["research"].values()]
+    gs = [v for r in recs for v in r["generate"].values()]
+    gl = [v for r in recs for q, v in r["generate"].items() if q not in ("q1", "q10")]
+    ok_g = [v for v in gs if v["ok"]]
+    base_pre = next((s.get("preempt") for s in samples if s.get("preempt") is not None), 0) or 0
+    mx = lambda k: max((s.get(k) or 0) for s in samples) if samples else 0
+    out = {
+        "users": users, "wall_s": wall,
+        "intake": {"ok": sum(1 for x in it if x["ok"]), "fail": sum(1 for x in it if not x["ok"]), "p50": pct([x["sec"] for x in it], .5), "p95": pct([x["sec"] for x in it], .95),
+                   "cards_avg": round(statistics.mean([x.get("cards", 0) for x in it]), 1), "errors": [x.get("error") for x in it if not x["ok"]][:3]},
+        "research": {"ok": sum(1 for x in rs if x["ok"]), "fail": sum(1 for x in rs if not x["ok"]), "p50": pct([x["sec"] for x in rs], .5), "p95": pct([x["sec"] for x in rs], .95),
+                     "facts_avg": round(statistics.mean([x.get("facts", 0) for x in rs if x["ok"]] or [0]), 1), "errors": [x.get("error") for x in rs if not x["ok"]][:3]},
+        "generate": {"ok": len(ok_g), "fail": len(gs) - len(ok_g), "queued_p50": pct([x.get("queued") for x in ok_g], .5), "queued_p95": pct([x.get("queued") for x in ok_g], .95),
+                     "run_p50": pct([x.get("run") for x in ok_g], .5), "run_p95": pct([x.get("run") for x in ok_g], .95),
+                     "total_p50": pct([x["sec"] for x in ok_g], .5), "total_p95": pct([x["sec"] for x in ok_g], .95), "total_max": max([x["sec"] for x in ok_g] or [0]),
+                     "long_chars_avg": round(statistics.mean([x["chars"] for x in gl if x.get("chars")] or [0])), "long_under_1000": sum(1 for x in gl if x.get("chars") and x["chars"] < 1000),
+                     "errors": [x.get("error") for x in gs if not x["ok"]][:3]},
+        "user_total": {"p50": pct([r["total"] for r in recs], .5), "p95": pct([r["total"] for r in recs], .95), "max": max(r["total"] for r in recs)},
+        "server_peak": {"api_running": mx("api_running"), "api_queued": mx("api_queued"), "vllm_running": mx("vllm_running"), "vllm_waiting": mx("vllm_waiting"),
+                        "kv_perc": round(mx("kv_perc") * 100), "preemptions": round(mx("preempt") - base_pre)},
+    }
+    return out
+
+
 async def main(users: int, out: str | None):
-    async with httpx.AsyncClient(timeout=60) as c:
+    async with httpx.AsyncClient(timeout=60, limits=httpx.Limits(max_connections=400, max_keepalive_connections=100)) as c:
         h = (await c.get(f"{B}/health")).json()
-        print(f"대상 {B} | 모델 {h['model']} | 워커 {h['queue']['max_workers']} | IP당 동시 {h['queue']['max_per_client']}")
-        print("참고자료 준비(문항 8개 조사, 캐시되면 빠름)…")
-        refs = await research_all(c)
-        print("  facts:", {q: len(v) for q, v in refs.items()})
-        rows, samples = [], []
+        print(f"대상 {B} | 모델 {h['model']} | 워커 {h['queue']['max_workers']} | IP당 동시 {h['queue']['max_per_client']} | 사용자 {users}명 (아이디어 전부 다름)")
+        recs, samples = [], []
         stop = asyncio.Event()
         smp = asyncio.create_task(sampler(stop, samples))
         t_start = time.time()
-        print(f"{users}명 동시 시작 — 각자 문항 8개(동시 3)…")
-        user_totals = await asyncio.gather(*(one_user(c, u, refs, rows, t_start) for u in range(users)))
+        await asyncio.gather(*(run_user(c, i, recs, t_start) for i in range(users)))
         stop.set()
         await smp
     wall = round(time.time() - t_start)
-    ok = [r for r in rows if r["status"] == "done"]
-    bad = [r for r in rows if r["status"] != "done"]
-    long = [r for r in ok if r["q"] not in ("q1", "q10")]
-    base = samples[0].get("preempt", 0) if samples else 0
-    print(f"\n═══ 결과: {users}명 × 8문항 = {len(rows)}건, 벽시계 {wall}s")
-    print(f"성공 {len(ok)} · 실패 {len(bad)} {[(r['q'], r['status'], r.get('error')) for r in bad[:5]]}")
-    print(f"문항 대기(queued)  p50 {pct([r['queued'] for r in ok if r['queued'] is not None], .5)}s  p95 {pct([r['queued'] for r in ok if r['queued'] is not None], .95)}s")
-    print(f"문항 실행(run)     p50 {pct([r['run'] for r in ok if r['run'] is not None], .5)}s  p95 {pct([r['run'] for r in ok if r['run'] is not None], .95)}s  (긴 문항만 p50 {pct([r['run'] for r in long if r['run'] is not None], .5)}s)")
-    print(f"문항 총 체감(total) p50 {pct([r['total'] for r in ok], .5)}s  p95 {pct([r['total'] for r in ok], .95)}s  최대 {max(r['total'] for r in ok) if ok else '-'}s")
-    print(f"사용자 8문항 완료   p50 {pct(list(user_totals), .5)}s  p95 {pct(list(user_totals), .95)}s  최대 {max(user_totals)}s")
-    print(f"서버 최고치: API running {max((s.get('api_running') or 0) for s in samples)} · API queued {max((s.get('api_queued') or 0) for s in samples)}"
-          f" · vLLM running {max((s.get('vllm_running') or 0) for s in samples)} · vLLM waiting {max((s.get('vllm_waiting') or 0) for s in samples)}"
-          f" · KV 최고 {max((s.get('kv_perc') or 0) for s in samples) * 100:.0f}% · preemption +{(max((s.get('preempt') or 0) for s in samples) - base):.0f}")
-    print(f"긴 문항 평균 글자 {statistics.mean([r['chars'] for r in long]) if long else 0:.0f}")
+    s = summarize(users, recs, samples, wall)
+    print("\n═══ 요약 " + json.dumps(s, ensure_ascii=False, indent=1))
     if out:
-        json.dump({"users": users, "wall": wall, "rows": rows, "samples": samples, "user_totals": user_totals}, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        json.dump({"summary": s, "users": recs, "samples": samples}, open(out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
         print("저장:", out)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--users", type=int, default=50)
+    ap.add_argument("--users", type=int, default=40)
     ap.add_argument("--json")
+    ap.add_argument("--salt", default="", help="아이디어 끝에 붙일 문구 (조사 캐시 회피용, 예: ' 2차 측정')")
     a = ap.parse_args()
+    SALT = a.salt
     asyncio.run(main(a.users, a.json))
