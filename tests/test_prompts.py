@@ -18,7 +18,7 @@ def test_every_question_md_has_required_sections(qid):
 @pytest.mark.parametrize("relpath", ["system.md", "tracks/tech.md", "tracks/local.md", "styles/story.md", "styles/logic.md",
                                      "styles/plain.md", "extend.md", "intake.md", "intake_regenerate.md", "short_question.md", "sections.md",
                                      "verify.md", "research/queries.md", "research/extract_facts.md",
-                                     "research/followup_queries.md", "q1_structures.md", "process.md"])
+                                     "research/followup_queries.md", "q1_structures.md", "process.md", "shorten.md"])
 def test_prompt_files_exist(relpath):
     assert assemble.read_prompt(relpath)
 
