@@ -94,7 +94,10 @@ async def job(c, base, kind, body, log, user, tag):
 
 async def one_user(i, field, idea, cap, base, log, start_delay):
     await asyncio.sleep(start_delay)
-    async with httpx.AsyncClient(verify=False, timeout=900) as c:
+    # 같은 PC 에서 N명을 흉내 내면 IP 가 하나라 max_per_client(3) 에 전부 걸린다 → 사용자마다 다른 X-Forwarded-For 를 붙인다.
+    # nginx 는 $proxy_add_x_forwarded_for 로 뒤에 실제 IP 를 덧붙이고, 백엔드는 첫 항목을 클라이언트 키로 쓴다.
+    fake_ip = f"10.77.{i // 250}.{i % 250 + 1}"
+    async with httpx.AsyncClient(verify=False, timeout=900, headers={"X-Forwarded-For": fake_ip}) as c:
         base_body = {"track": "tech", "idea": idea, "is_business": False, "current_item": "", "team": "팀원 없음", "capability": cap}
         t0 = time.time()
         try:
