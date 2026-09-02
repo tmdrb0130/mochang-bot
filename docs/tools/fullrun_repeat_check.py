@@ -43,11 +43,12 @@ for qa,qb in itertools.combinations(QS,2):
         for b in S[qb]:
             gb=grams(b); j=len(ga&gb)/max(1,len(ga|gb))
             if j>=0.5: dup.append((qa,qb,round(j,2),a[:70],b[:70])); per[qa]+=1; per[qb]+=1
-nums=re.findall(r"\d[\d,.]*\s*(?:%|억|만|명|개|원|배)", " ".join(texts.values()))
+# 통계 인용 반복만 센다 — 백분율·금액·억/만 단위. "1명·6개" 같은 일반 수량은 제외 (2026-09-02 세션3 지적)
+nums=re.findall(r"\d[\d,.]*\s*(?:%|퍼센트|억|천만|만\s*원|원|배|만\s*명|만\s*가구)", " ".join(texts.values()))
 from collections import Counter
 print("=== 소요 ===");[print(l) for l in log]
 print("=== 문항별 글자수 / 문장수 / 타 문항과 유사문장 수 ===")
 for q in QS: print(q, len(texts[q]), len(S[q]), per[q])
 print("=== 유사 문장 쌍 (Jaccard>=0.5) 총", len(dup), "===")
 for d in sorted(dup,key=lambda x:-x[2])[:15]: print(d)
-print("=== 3회 이상 반복된 수치 ===", [(k,v) for k,v in Counter(nums).items() if v>=3])
+print("=== 3회 이상 반복된 통계 수치(%·금액·억/만) ===", [(k,v) for k,v in Counter(nums).items() if v>=3])
