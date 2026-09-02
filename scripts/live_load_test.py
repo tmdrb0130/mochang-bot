@@ -60,6 +60,7 @@ VARIANTS = [
 ]
 
 
+THINK = 45  # --think: 카드에 답하는 사람 시간(초). 이 동안 선조사가 돈다. 0 이면 1~3차와 같은 조건
 SALT = ""   # --salt: 아이디어 끝에 붙여 조사 캐시(7일)를 피한다 — 같은 아이디어로 재측정할 때 이전 실행의 캐시가 결과를 왜곡하지 않게
 
 
@@ -181,15 +182,26 @@ async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> d
         await asyncio.gather(*(one(q) for q in QS))
         research_done = True
 
+    first_draft = {"t": None}
+
     async def writer():
         while True:
             if ready:
                 await generate(ready.pop(0))
+                if first_draft["t"] is None:
+                    first_draft["t"] = round(time.time() - t_start - rec["t0"], 1)
             elif research_done:
                 return
             else:
                 await asyncio.sleep(0.25)
-    await asyncio.gather(research_pool(), *(writer() for _ in range(PARALLEL)))
+
+    async def writers_after_think():
+        # 카드에 답하는 사람 시간(THINK 초) — 그동안 선조사(research_pool)가 뒤에서 돈다 (프론트 prefetchResearch 와 같음).
+        await asyncio.sleep(THINK if cards else 0)
+        rec["think"] = THINK if cards else 0
+        await asyncio.gather(*(writer() for _ in range(PARALLEL)))
+    await asyncio.gather(research_pool(), writers_after_think())
+    rec["first_draft"] = first_draft["t"]          # 시작부터 첫 문항 초안이 도착하기까지 (인테이크·카드 시간 포함)
     rec["total"] = round(time.time() - t_start - rec["t0"], 1)
     log.append(rec)
     g = rec["generate"]
@@ -241,6 +253,7 @@ def summarize(users: int, recs: list, samples: list, wall: int) -> dict:
                      "long_chars_avg": round(statistics.mean([x["chars"] for x in gl if x.get("chars")] or [0])), "long_under_1000": sum(1 for x in gl if x.get("chars") and x["chars"] < 1000),
                      "errors": [x.get("error") for x in gs if not x["ok"]][:3]},
         "user_total": {"p50": pct([r["total"] for r in recs], .5), "p95": pct([r["total"] for r in recs], .95), "max": max(r["total"] for r in recs)},
+        "first_draft": {"p50": pct([r.get("first_draft") for r in recs], .5), "p95": pct([r.get("first_draft") for r in recs], .95), "think_s": recs[0].get("think")},
         "server_peak": {"api_running": mx("api_running"), "api_queued": mx("api_queued"), "vllm_running": mx("vllm_running"), "vllm_waiting": mx("vllm_waiting"),
                         "kv_perc": round(mx("kv_perc") * 100), "preemptions": round(mx("preempt") - base_pre)},
     }
@@ -271,6 +284,8 @@ if __name__ == "__main__":
     ap.add_argument("--users", type=int, default=40)
     ap.add_argument("--json")
     ap.add_argument("--salt", default="", help="아이디어 끝에 붙일 문구 (조사 캐시 회피용, 예: ' 2차 측정')")
+    ap.add_argument("--think", type=int, default=45, help="카드에 답하는 사람 시간(초). 선조사 효과 측정용. 1~3차 조건은 0")
     a = ap.parse_args()
     SALT = a.salt
+    THINK = a.think
     asyncio.run(main(a.users, a.json))
