@@ -336,10 +336,15 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
     if store is not None and cfg.vectorstore_use_for_search and queries:
         reuse = await query_vector_store(store, queries, cfg)
         if reuse and store.is_sufficient(reuse):
+            # 벡터DB 만으로 해결 — 소스 카운터에 남겨 "조사 N건 중 웹 검색을 대체한 M건" 을 timing_report 로 볼 수 있게 (2026-09-03)
+            timing.count("vectorstore_only")
+            timing.count("vectorstore", len(reuse[:want]))
             return [], [reuse_page(h) for h in reuse[:want]]
 
     # ② 모자라면 웹 검색을 하되, 쌓아 둔 문서는 다시 받지 않고 근거로 같이 쓴다.
     kept = [h for h in reuse if float(h.get("score", 0)) >= cfg.vectorstore_min_score][: max(1, want // 2)]
+    if kept:
+        timing.count("vectorstore", len(kept))       # 웹 검색과 섞어 쓴 저장 문서 수
     skip_urls = set(skip_urls or ()) | {h.get("url", "") for h in kept}
 
     all_results: list[dict] = []
