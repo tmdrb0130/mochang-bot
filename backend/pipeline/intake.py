@@ -116,7 +116,8 @@ def _normalize(parsed: dict) -> dict:
 
 
 async def run_intake(client: LLMClient, form: dict) -> dict:
-    system = assemble.read_prompt("intake.md")
+    system = assemble.process_block() + "\n\n" + assemble.read_prompt("intake.md")
+
     user = assemble.build_context(form)
     res = await client.complete(system, user, model=form.get("model"))
     try:
@@ -159,7 +160,8 @@ def _regenerate_prompt(slots: list[str], seen: dict[str, list[str]], keep: dict[
                             keep=lines(lambda s: [o["label"] for o in keep.get(s, [])]),
                             seen=lines(lambda s: [str(x).strip() for x in (seen.get(s) or []) if str(x).strip()]),
                             note=note.strip() or "(없음)")
-    return assemble.read_prompt("intake.md") + "\n\n" + extra
+    return assemble.process_block() + "\n\n" + assemble.read_prompt("intake.md") + "\n\n" + extra
+
 
 
 async def regenerate_cards(client: LLMClient, form: dict, slots: list[str],

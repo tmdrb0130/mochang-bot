@@ -50,6 +50,13 @@ def _read(relpath: str) -> str:
 read_prompt = _read  # 다른 모듈(intake 등)에서 쓰는 공개 이름
 
 
+def process_block() -> str:
+    """창업교육 MVP 8단계 프레임 (process.md). system 프롬프트와 인테이크에 같은 블록을 한 번씩 넣는다.
+
+    문항별로 '어느 단계를 다루는 글인지'는 각 문항 md 의 [프로세스 위치] 절이 말한다 (docs/MVP_PROCESS.md 2절)."""
+    return _read("process.md")
+
+
 def section_headers() -> dict:
     """prompts/sections.md frontmatter — user 프롬프트 섹션 머리말 문구. 코드에 한국어 문구를 박지 않기 위함."""
     m = _FRONTMATTER.match(_read("sections.md"))
@@ -191,6 +198,7 @@ def build_prompts(form: dict) -> tuple[str, str, dict]:
 
     system = "\n\n".join([
         system_md,
+        process_block(),
         f"[지원 트랙 지침]\n{track_md}",
         question_section,
         style_section,
