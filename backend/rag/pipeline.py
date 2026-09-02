@@ -15,6 +15,7 @@ import json
 import re
 from dataclasses import dataclass
 
+from .. import timing
 from ..llm.client import LLMClient
 from ..pipeline import assemble
 from .research import DiskCache, Researcher, domain
@@ -203,6 +204,7 @@ async def fetch_page(url: str, timeout: int = 15) -> str:
         return ""
     import httpx
     import trafilatura
+    timing.count("fetch")          # 성공·실패 무관하게 '나간 요청' 을 센다
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
                                      headers={"User-Agent": "Mozilla/5.0 (modoo-writer research)"}) as c:
@@ -591,6 +593,7 @@ async def run_research(client: LLMClient, researcher: Researcher, form: dict, qu
         "followup_queries": queries if cfg.share_idea_research else [],   # 이 문항에서만 추가로 검색한 것
         "shared_facts_used": shared_used,        # facts 중 공통 조사에서 물려받은 개수
     }
+    out["sources"] = timing.flush_counts(kind="research", question_id=question_id) or {}
     cache.set(key, [out])
     return out
 
@@ -650,5 +653,6 @@ async def run_idea_research(client: LLMClient, researcher: Researcher, form: dic
         "references": format_references(facts),
         "cached": False,
     }
+    out["sources"] = timing.flush_counts(kind="idea_research") or {}
     cache.set(key, [out])
     return out

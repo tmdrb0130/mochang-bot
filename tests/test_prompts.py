@@ -11,14 +11,14 @@ def test_every_question_md_has_required_sections(qid):
     meta, body = assemble.load_question(qid)
     for key in ("id", "label", "title", "limit", "target"):
         assert key in meta, f"{qid}.md frontmatter 에 {key} 없음"
-    for section in ("[문항 의도]", "[프로세스 위치]", "[필수 요소]", "[권장 요소]", "[피할 것]"):
+    for section in ("[문항 의도]", "[프로세스 위치]", "[골자 사용 규칙]", "[필수 요소]", "[권장 요소]", "[피할 것]"):
         assert section in body, f"{qid}.md 에 {section} 없음"
 
 
 @pytest.mark.parametrize("relpath", ["system.md", "tracks/tech.md", "tracks/local.md", "styles/story.md", "styles/logic.md",
                                      "styles/plain.md", "extend.md", "intake.md", "intake_regenerate.md", "short_question.md", "sections.md",
                                      "verify.md", "research/queries.md", "research/extract_facts.md",
-                                     "research/followup_queries.md", "q1_structures.md", "process.md", "shorten.md"])
+                                     "research/followup_queries.md", "q1_structures.md", "process.md", "shorten.md", "outline.md"])
 def test_prompt_files_exist(relpath):
     assert assemble.read_prompt(relpath)
 

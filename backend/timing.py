@@ -39,6 +39,29 @@ def log(event: str, **fields) -> None:
         pass          # 계측 때문에 서비스가 멈추면 안 된다
 
 
+# ── 소스별 외부 호출 카운터 (작업 19) ──
+# 어떤 소스로 요청이 몇 번 나갔는지 우리 로그로 보기 위한 것. 지금은 네이버·공공데이터 사용량을
+# 각 콘솔에서만 볼 수 있어 한도 대비 사용률을 우리가 알 수 없었다.
+_counts: dict[str, int] = {}
+
+
+def count(source: str, n: int = 1) -> None:
+    """외부 요청 1건 기록. 소스 이름: naver·ddgs·vane·kosis·ecos·kstartup·sangkwon·kci·fetch"""
+    if not source:
+        return
+    _counts[source] = _counts.get(source, 0) + int(n)
+
+
+def flush_counts(**fields) -> dict:
+    """쌓인 카운터를 한 줄로 남기고 비운다 (조사 1회가 끝날 때 호출). 남긴 값을 돌려준다."""
+    if not _counts:
+        return {}
+    snapshot = dict(_counts)
+    _counts.clear()
+    log("sources", **fields, **snapshot)
+    return snapshot
+
+
 def job_done(job) -> None:
     """JobQueue.on_done 에 물리는 콜백. 대기 시간과 실행 시간을 나눠 기록한다."""
     started, created, finished = job.started, job.created, job.finished

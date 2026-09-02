@@ -3,6 +3,7 @@ import re
 
 from ..llm.client import LLMClient, load_config
 from . import assemble
+from . import outline as outline_mod
 
 _MD_LINE_PREFIX = re.compile(r"^\s*(#{1,6}|\*|-)\s+")
 
@@ -22,6 +23,24 @@ AUTO_EXTEND_DEFAULTS = {"enabled": True, "min_ratio": 0.7, "min_limit": 500}
 # ── 짧은 문항 한도 초과 → 압축 재생성 (작업 21) ──
 # Q1·Q10 은 한 문장이라 한도에서 자르면 말이 끊긴 채 사용자에게 간다("…식재료" 처럼).
 # 자르는 대신 "같은 뜻으로 줄여 다시" 를 최대 SHORTEN_TRIES 회 시킨다.
+# ── 사업계획 골자 공유 (작업 20) ──
+OUTLINE_DEFAULTS = {"enabled": True, "cache_ttl_seconds": 7 * 24 * 3600}
+_outline_cfg: dict | None = None
+
+
+def outline_settings(form: dict | None = None) -> dict:
+    """config.yaml generate.outline 설정. form 의 outline_settings 가 있으면 그것을 우선(테스트용)."""
+    global _outline_cfg
+    if form and isinstance(form.get("outline_settings"), dict):
+        return {**OUTLINE_DEFAULTS, **form["outline_settings"]}
+    if _outline_cfg is None:
+        try:
+            _outline_cfg = dict((load_config().get("generate") or {}).get("outline") or {})
+        except Exception:
+            _outline_cfg = {}
+    return {**OUTLINE_DEFAULTS, **_outline_cfg}
+
+
 SHORT_LIMIT = 100          # 이 한도 이하를 '짧은 문항' 으로 본다
 SHORTEN_TRIES = 2
 SHORTEN_MARGIN = 15        # 목표를 한도보다 이만큼 낮게 잡아 여유를 둔다
@@ -82,6 +101,15 @@ def postprocess(text: str, limit: int) -> str:
 
 
 async def generate_one(client: LLMClient, form: dict) -> dict:
+    # 사업계획 골자 — 아이디어당 1회 만들어 문항 9개가 공유한다. 캐시에 있으면 모델 호출 0회.
+    outline_used = isinstance(form.get("outline"), dict) and any(form["outline"].values())
+    settings = outline_settings(form)
+    if settings.get("enabled") and not outline_used:
+        got = await outline_mod.get_outline(client, form, ttl=int(settings.get("cache_ttl_seconds", 604800)))
+        if got and any(got.values()):
+            form = {**form, "outline": got}
+            outline_used = True
+
     system, user, meta = assemble.build_prompts(form)
     res = await client.complete(system, user, model=form.get("model"))
     text = postprocess(res.text, meta["limit"])
@@ -121,6 +149,7 @@ async def generate_one(client: LLMClient, form: dict) -> dict:
         "retried": retried,          # 정의형 맺음이라 다시 생성했는지 (진단용, 필드 추가)
         "auto_extended": auto_extended,   # 짧아서 서버가 이어쓰기를 한 번 돌렸는지 (진단용, 필드 추가)
         "shortened": shortened,           # 한도 초과로 줄여 다시 쓴 횟수 (진단용, 필드 추가)
+        "outline_used": outline_used,     # 공유 골자를 넣고 썼는지 (진단용, 필드 추가)
     }
 
 

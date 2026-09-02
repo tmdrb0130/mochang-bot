@@ -9,9 +9,9 @@ from backend.rag import opendata as O
 
 def fake_get_json(mapping, calls=None):
     """URL 에 들어 있는 조각으로 응답을 고르는 가짜 _get_json."""
-    async def _get(url, params, timeout=15):
+    async def _get(url, params, timeout=15, source=""):
         if calls is not None:
-            calls.append({"url": url, "params": params})
+            calls.append({"url": url, "params": params, "source": source})
         for frag, value in mapping.items():
             if frag in url:
                 if isinstance(value, Exception):

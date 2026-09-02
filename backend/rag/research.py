@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Any, Callable, Awaitable
 from urllib.parse import urlparse
 
+from .. import timing
+from .breaker import Breaker
+
 CACHE_DIR = Path(__file__).resolve().parents[1] / ".cache" / "research"
 DEFAULT_TTL = 7 * 24 * 3600
 
@@ -168,6 +171,7 @@ class VaneSearch:
     async def __call__(self, query: str, max_results: int = 8) -> list[dict]:
         import httpx
         async with httpx.AsyncClient(timeout=self.cfg.timeout) as client:
+            timing.count("vane")
             r = await client.post(self.cfg.base_url.rstrip("/") + "/api/search", json=self.build_body(query))
             r.raise_for_status()
             return self.parse(r.json())[:max_results]
@@ -292,6 +296,7 @@ class NaverSearch:
             for kind in self.cfg.kinds:
                 path = NAVER_ENDPOINTS[kind][0]
                 try:
+                    timing.count("naver")
                     r = await client.get(f"{self.cfg.base_url.rstrip('/')}/{path}",
                                          params={"query": query, "display": per_kind,
                                                  "sort": self.cfg.sort_for(kind)})
@@ -329,6 +334,7 @@ class DDGSearch:
 
     def _sync(self, query: str, max_results: int) -> list[dict]:
         from ddgs import DDGS
+        timing.count("ddgs")
         out: list[dict] = []
         with DDGS() as d:
             for r in d.text(query, region=self.region, max_results=max_results):
@@ -355,9 +361,11 @@ class Researcher:
 
     def __init__(self, backends: list[tuple[str, SearchFn]] | None = None, cache: DiskCache | None = None,
                  vane: VaneConfig | None = None, naver: NaverConfig | None = None,
-                 extras: list[tuple[str, SearchFn]] | None = None):
+                 extras: list[tuple[str, SearchFn]] | None = None, breaker: Breaker | None = None):
         # extras: 폴백 사슬이 아니라 **항상 같이 물어보는** 소스 (정형 API). 결과는 웹 검색 결과 앞에 붙는다.
         self.extras = extras or []
+        # 연속 실패하는 소스는 일정 시간 건너뛴다 (RESEARCH_PLAN 5단계). None 이면 제한 없음.
+        self.breaker = breaker
         if backends is None:
             backends = []
             if vane and vane.configured:
@@ -384,16 +392,30 @@ class Researcher:
         extra_rows: list[dict] = []
         errors: list[str] = []
         for name, fn in self.extras:
+            if self.breaker and self.breaker.is_open(name):
+                errors.append(f"{name}: 연속 실패로 쉬는 중")
+                continue
             try:
                 extra_rows.extend(await fn(query, max_results))
+                if self.breaker:
+                    self.breaker.record(name, ok=True)
             except Exception as e:      # 정형 소스가 죽어도 웹 검색은 그대로 간다
                 errors.append(f"{name}: {type(e).__name__}: {str(e)[:120]}")
+                if self.breaker:
+                    self.breaker.record(name, ok=False)
 
         for name, fn in self.backends:
+            if self.breaker and self.breaker.is_open(name):
+                errors.append(f"{name}: 연속 실패로 쉬는 중")
+                continue
             try:
                 results = await fn(query, max_results)
+                if self.breaker:
+                    self.breaker.record(name, ok=True)
             except Exception as e:  # 백엔드 하나가 죽어도 다음으로
                 errors.append(f"{name}: {type(e).__name__}: {str(e)[:120]}")
+                if self.breaker:
+                    self.breaker.record(name, ok=False)
                 continue
             if results:
                 self.last_backend = name
@@ -424,9 +446,11 @@ def researcher_from_config(config: dict) -> Researcher:
     ) if vane_cfg.get("enabled", False) else None
     cache = DiskCache(ttl=int(rc.get("cache_ttl_seconds", DEFAULT_TTL)))
     from .opendata import OpenDataConfig, OpenDataSources, build_sources     # 순환 import 방지용 지연 import
+    bc = rc.get("breaker") or {}
+    breaker = Breaker(fails=int(bc.get("fails", 3)), cooldown=float(bc.get("cooldown_seconds", 300)))
     sources = build_sources(OpenDataConfig.from_config(rc))
-    extras = [("opendata", OpenDataSources(sources))] if sources else []
-    return Researcher(vane=vane, naver=NaverConfig.from_config(rc), cache=cache, extras=extras)
+    extras = [("opendata", OpenDataSources(sources, breaker=breaker))] if sources else []
+    return Researcher(vane=vane, naver=NaverConfig.from_config(rc), cache=cache, extras=extras, breaker=breaker)
 
 
 def today_iso() -> str:

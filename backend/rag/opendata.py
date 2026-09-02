@@ -24,6 +24,8 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from .. import timing
+from .breaker import Breaker
 from .research import make_result
 
 DEFAULT_TIMEOUT = 15
@@ -68,8 +70,10 @@ def stat_result(title: str, url: str, snippet: str, date=None, source_type: str 
     return row
 
 
-async def _get_json(url: str, params: dict, timeout: int = DEFAULT_TIMEOUT):
+async def _get_json(url: str, params: dict, timeout: int = DEFAULT_TIMEOUT, source: str = ""):
+    """정형 API 한 번 조회. source 를 주면 외부 호출 카운터에 남는다 (작업 19)."""
     import httpx
+    timing.count(source)
     async with httpx.AsyncClient(timeout=timeout) as c:
         r = await c.get(url, params=params)
         r.raise_for_status()
@@ -103,14 +107,14 @@ class KosisStats:
     async def tables(self, query: str, count: int = 3) -> list[dict]:
         data = await _get_json(KOSIS_SEARCH, {
             "method": "getList", "apiKey": self.api_key, "format": "json", "jsonVD": "Y",
-            "searchNm": query, "startCount": 1, "resultCount": count}, self.timeout)
+            "searchNm": query, "startCount": 1, "resultCount": count}, self.timeout, "kosis")
         return data if isinstance(data, list) else []
 
     async def values(self, org_id: str, tbl_id: str) -> list[dict]:
         data = await _get_json(KOSIS_DATA, {
             "method": "getList", "apiKey": self.api_key, "format": "json", "jsonVD": "Y",
             "orgId": org_id, "tblId": tbl_id, "objL1": "ALL", "itmId": "ALL",
-            "prdSe": "Y", "newEstPrdCnt": 1}, self.timeout)
+            "prdSe": "Y", "newEstPrdCnt": 1}, self.timeout, "kosis")
         if isinstance(data, dict):                      # {"err": "31", "errMsg": "...셀 초과..."}
             self.last_error = f"KOSIS {data.get('err')}: {data.get('errMsg', '')[:80]}"
             return []
@@ -179,7 +183,7 @@ class EcosKeyStats:
 
     async def indicators(self) -> list[dict]:
         if self._cache is None:
-            data = await _get_json(ECOS_KEYSTAT.format(key=self.api_key), {}, self.timeout)
+            data = await _get_json(ECOS_KEYSTAT.format(key=self.api_key), {}, self.timeout, "ecos")
             self._cache = ((data or {}).get("KeyStatisticList") or {}).get("row") or []
         return self._cache
 
@@ -229,7 +233,7 @@ class KStartupSearch:
         kw = self.keyword(query)
         data = await _get_json(KSTARTUP_URL, {
             "serviceKey": self.api_key, "page": 1, "perPage": self.max_items, "returnType": "json",
-            "cond[biz_pbanc_nm::LIKE]": kw}, self.timeout)
+            "cond[biz_pbanc_nm::LIKE]": kw}, self.timeout, "kstartup")
         out = []
         for item in (data or {}).get("data") or []:
             name = str(item.get("biz_pbanc_nm") or item.get("intg_pbanc_biz_nm") or "").strip()
@@ -262,7 +266,7 @@ class SangKwonStats:
     async def upjong(self) -> list[dict]:
         if self._upjong is None:
             data = await _get_json(f"{SDSC_BASE}/largeUpjongList", {
-                "serviceKey": self.api_key, "numOfRows": 100, "pageNo": 1, "type": "json"}, self.timeout)
+                "serviceKey": self.api_key, "numOfRows": 100, "pageNo": 1, "type": "json"}, self.timeout, "sangkwon")
             self._upjong = ((data or {}).get("body") or {}).get("items") or []
         return self._upjong
 
@@ -284,7 +288,7 @@ class SangKwonStats:
             return []
         data = await _get_json(f"{SDSC_BASE}/storeListInUpjong", {
             "serviceKey": self.api_key, "divId": "indsLclsCd", "key": hit.get("indsLclsCd"),
-            "numOfRows": 1, "pageNo": 1, "type": "json"}, self.timeout)
+            "numOfRows": 1, "pageNo": 1, "type": "json"}, self.timeout, "sangkwon")
         body = (data or {}).get("body") or {}
         total = body.get("totalCount")
         if not total:
@@ -336,6 +340,7 @@ class KciSearch:
 
     async def fetch(self, term: str) -> str:
         import httpx
+        timing.count("kci")
         async with httpx.AsyncClient(timeout=self.timeout) as c:
             r = await c.get(KCI_SEARCH, params={"apiCode": "articleSearch", "key": self.api_key,
                                                 "title": term, "displayCount": 10, "page": 1})
@@ -422,22 +427,29 @@ def build_sources(cfg: OpenDataConfig, env: dict | None = None) -> list[tuple[st
 class OpenDataSources:
     """검색어에 맞는 정형 소스만 골라 병렬로 물어본다. 실패한 소스는 조용히 건너뛴다(웹 검색이 본류다)."""
 
-    def __init__(self, sources: list[tuple[str, object]]):
+    def __init__(self, sources: list[tuple[str, object]], breaker: Breaker | None = None):
         self.sources = sources
+        self.breaker = breaker            # 연속 실패한 소스는 쉬게 한다 (RESEARCH_PLAN 5단계)
         self.last_errors: dict[str, str] = {}
         self.last_used: list[str] = []
 
     async def __call__(self, query: str, max_results: int = 4) -> list[dict]:
-        picked = [(n, fn) for n, fn in self.sources if triggered(n, query)]
+        picked = [(n, fn) for n, fn in self.sources
+                  if triggered(n, query) and not (self.breaker and self.breaker.is_open(n))]
         self.last_errors, self.last_used = {}, [n for n, _ in picked]
         if not picked:
             return []
 
         async def one(name, fn):
             try:
-                return await fn(query, max_results)
+                rows = await fn(query, max_results)
+                if self.breaker:
+                    self.breaker.record(name, ok=True)
+                return rows
             except Exception as e:
                 self.last_errors[name] = f"{type(e).__name__}: {str(e)[:120]}"
+                if self.breaker:
+                    self.breaker.record(name, ok=False)
                 return []
 
         results = await asyncio.gather(*(one(n, fn) for n, fn in picked))

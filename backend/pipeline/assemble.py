@@ -95,6 +95,24 @@ def _is_short_question(question_id: str | None) -> bool:
     return int(meta.get("limit", 2000)) <= 100
 
 
+# 문항마다 인용할 참고자료를 나눠 준다 (작업 20 실측에서 드러난 반복의 주범).
+# 2단계(공통 조사 공유) 뒤로 문항 9개가 **같은 facts 목록**을 받는데 프롬프트는 "인용하라"고 하니
+# 같은 통계 문장이 문항마다 그대로 반복됐다 (실측: 'foodtoday … 7.2%' 가 한 신청서에서 9번).
+# 문항별로 다른 구간을 주면 각 문항이 다른 근거를 인용한다. 0 이면 예전처럼 전부 준다.
+FACTS_PER_QUESTION = 2
+FACT_SLOT = {"q2": 0, "q3_1": 1, "q3_2": 2, "q4_1": 3, "q4_2": 4, "q8": 5, "q7_1": 6}
+
+
+def references_for(refs, question_id: str | None, per: int = FACTS_PER_QUESTION):
+    """이 문항이 인용할 참고자료만. 목록을 문항 순번만큼 밀어서 per 개씩 준다."""
+    if not isinstance(refs, list) or per <= 0 or len(refs) <= per:
+        return refs
+    slot = FACT_SLOT.get(str(question_id or ""), 0)
+    start = (slot * per) % len(refs)
+    picked = (refs + refs)[start:start + per]         # 목록 끝을 넘어가면 앞에서 이어 받는다
+    return picked
+
+
 def build_context(form: dict) -> str:
     """지원자 입력 → user 프롬프트."""
     parts = [
@@ -108,6 +126,16 @@ def build_context(form: dict) -> str:
     capability = form.get("capability") or "(입력 없음 — 아이디어 설명에서 유추 가능한 범위만 언급하고 지어내지 말 것)"
     parts.append(f"지원자 역량·경력: {capability}")
     parts.extend(_answer_sections(form.get("answers") or []))
+    outline = form.get("outline")
+    if isinstance(outline, dict) and any(outline.values()):
+        # 사업계획 골자 (작업 20) — 문항 9개가 같은 사실을 쓰게 하는 공유 메모.
+        # 짧은 문항(Q1·Q10)에는 고객·해결책 두 줄만 넣는다.
+        from .outline import format_outline, slice_for
+        # 이 문항이 맡은 항목만 보여 준다 — 골자 전체를 주면 라마가 남의 몫까지 그대로 옮겨 적는다.
+        mine = slice_for(outline, form.get("question_id"))
+        body = format_outline(mine, short=_is_short_question(form.get("question_id")))
+        if body:
+            parts.append(section_headers().get("outline", "[사업계획 골자]") + "\n" + body)
     refs = form.get("references")
     if refs and _is_short_question(form.get("question_id")):
         # Q1·Q10 처럼 90자 안팎으로 끝나는 문항: 인용할 자리가 없는데
@@ -119,6 +147,7 @@ def build_context(form: dict) -> str:
         if isinstance(refs, str):
             parts.append(refs)
         else:
+            refs = references_for(refs, form.get("question_id"))
             from ..rag.pipeline import format_references
             section = format_references(refs)
             if section:
