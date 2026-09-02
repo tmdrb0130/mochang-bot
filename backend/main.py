@@ -5,6 +5,8 @@
            /jobs/{kind} (제출) · /jobs/{id} (폴링) · /jobs (큐 상태)
 Q6(사업 분야)·Q10 공개 여부는 사람이 프론트에서 직접 고른다 — AI 호출 없음.
 """
+import asyncio
+import logging
 import time
 from contextlib import asynccontextmanager
 
@@ -16,6 +18,7 @@ from pydantic import BaseModel
 from .llm.client import (RESEARCH_USAGE_PATH, LLMClient, LLMError, RateLimited,
                          load_config, research_client_config)
 from .llm.jobs import TooManyJobs
+from . import storage as storage_mod
 from . import timing
 from .pipeline import assemble, generate, intake, verify
 from .rag import pipeline as research_pipeline
@@ -34,15 +37,31 @@ research_client = (
 researcher = researcher_from_config(config)
 research_cfg = research_pipeline.ResearchConfig.from_config(config)
 
+# 아이디어 입력·생성 초안 저장소 (backend/storage.py). 기본 SQLite, config.yaml storage / MOCHANG_DATABASE_URL 로 전환.
+storage = storage_mod.Storage.from_config(config)
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await client.queue.start()      # 워커 N개 기동 (config.yaml max_workers)
     if research_client is not client:
         await research_client.queue.start()
+    try:
+        await asyncio.to_thread(storage.init)
+    except Exception as e:          # DB 를 못 열어도 서비스는 뜬다 — 저장만 꺼진다
+        logging.getLogger("mochang.storage").warning("저장소를 열 수 없어 저장을 끕니다 (%s): %s", storage.url, e)
+        storage.enabled = False
     yield
     await client.queue.stop()
     if research_client is not client:
         await research_client.queue.stop()
+    storage.close()
+
+
+async def _persisted(kind: str, form: dict, coro, owner: str | None):
+    """작업 결과를 돌려주기 전에 DB 에 남긴다. 저장 실패는 storage.record 가 삼킨다 — 결과는 항상 그대로 나간다."""
+    result = await coro
+    await storage.record(kind, form, result, owner)
+    return result
 
 
 app = FastAPI(title="modoo-writer backend", lifespan=lifespan)
@@ -101,6 +120,7 @@ class GenerateRequest(BaseModel):
     model: str | None = None  # /models 목록 중 하나. 없으면 config.yaml 기본 모델
     answers: list[dict] | None = None  # 인테이크 카드 답변 [{slot,label,answer,unknown}] — 프롬프트에 사실/가정으로 주입
     references: list[dict] | None = None  # /research 가 돌려준 facts — [웹 참고자료] 섹션으로 주입
+    draft_id: str | None = None  # 신청서 한 벌을 묶는 키(프론트 생성 UUID). 없으면 track|idea 해시로 묶어 저장 (storage.py)
 
 
 @app.get("/health")
@@ -132,6 +152,7 @@ class IntakeRequest(BaseModel):
     team: str = "팀원 없음"
     capability: str = ""
     model: str | None = None
+    draft_id: str | None = None
 
 
 async def _with_idea_research(form: dict) -> dict:
@@ -151,13 +172,13 @@ async def _with_idea_research(form: dict) -> dict:
 
 
 @app.post("/intake")
-async def intake_endpoint(req: IntakeRequest):
+async def intake_endpoint(req: IntakeRequest, request: Request):
     """웹 조사(라마) → 슬롯별 확인/부족 판정 + 부족한 슬롯의 '보기 고르기' 카드 생성.
     보기는 조사로 확인된 사실에 근거해 만들어지고, 근거가 있으면 보기마다 source 가 붙는다.
     ready=True 면 프론트는 카드 단계를 건너뛰고 바로 생성."""
     form = req.model_dump()
     found = await _with_idea_research(form)
-    out = await intake.run_intake(client, form)
+    out = await _persisted("intake", form, intake.run_intake(client, form), _client_key(request))
     out["research"] = {"facts": found.get("facts") or [], "queries": found.get("queries") or [],
                        "backend": found.get("backend"), "cached": found.get("cached"),
                        **({"error": found["error"]} if found.get("error") else {})}
@@ -197,6 +218,7 @@ class ResearchRequest(BaseModel):
     capability: str = ""
     model: str | None = None
     answers: list[dict] | None = None
+    draft_id: str | None = None
 
 
 @app.post("/research")
@@ -211,9 +233,10 @@ async def research_endpoint(req: ResearchRequest):
 
 
 @app.post("/generate")
-async def generate_endpoint(req: GenerateRequest):
+async def generate_endpoint(req: GenerateRequest, request: Request):
+    form = req.model_dump()
     try:
-        return await generate.generate_one(client, req.model_dump())
+        return await _persisted("generate", form, generate.generate_one(client, form), _client_key(request))
     except assemble.PromptNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -223,12 +246,12 @@ class ExtendRequest(GenerateRequest):
 
 
 @app.post("/extend")
-async def extend_endpoint(req: ExtendRequest):
+async def extend_endpoint(req: ExtendRequest, request: Request):
     """기존 글 뒤에 새 근거·사례·계획만 이어 쓰고, 합친 전체 글을 반환."""
     form = req.model_dump()
     current = form.pop("current")
     try:
-        return await generate.extend_one(client, form, current)
+        return await _persisted("extend", form, generate.extend_one(client, form, current), _client_key(request))
     except assemble.PromptNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -286,8 +309,10 @@ async def submit_job(kind: str, body: dict, request: Request):
         raise HTTPException(status_code=404, detail=f"알 수 없는 작업 종류: {kind}")
     model_cls, runner = _JOB_KINDS[kind]
     form = model_cls(**body).model_dump()
+    owner = _client_key(request)
     try:
-        job = client.queue.submit(lambda: runner(form), kind=kind, owner=_client_key(request))
+        # 결과가 나오면 DB 에 남기고(아이디어·초안, storage.py) 그대로 job.result 가 된다
+        job = client.queue.submit(lambda: _persisted(kind, form, runner(form), owner), kind=kind, owner=owner)
     except TooManyJobs as e:
         raise HTTPException(status_code=429, detail=str(e),
                             headers={"Retry-After": "10"})
@@ -307,6 +332,17 @@ async def get_job(job_id: str):
 async def queue_stats(request: Request):
     """큐 전체 상태 + 이 클라이언트(IP)가 지금 점유 중인 작업 수(your_active). 기존 필드는 그대로."""
     return {**client.queue.stats(), "your_active": client.queue.active_for(_client_key(request))}
+
+
+@app.get("/drafts/{draft_id}")
+async def get_draft(draft_id: str):
+    """저장된 초안 한 벌: 입력(아이디어·인테이크 답) + 문항별 생성 이력(오래된 것부터).
+    draft_id 는 프론트가 만든 UUID(추측 불가) 또는 서버가 매긴 해시. 목록 조회는 두지 않는다 — 인증이 없어 남의 아이디어가
+    보이면 안 되므로 운영자는 scripts/drafts_report.py 로 본다."""
+    row = await asyncio.to_thread(storage.get_draft, draft_id) if storage.enabled else None
+    if row is None:
+        raise HTTPException(status_code=404, detail="저장된 초안이 없습니다.")
+    return row
 
 
 @app.post("/generate/dry-run")

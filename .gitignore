@@ -28,6 +28,8 @@ backend/.cache/
 backend/.vectorstore/
 .pytest_cache/
 backend/.timing.jsonl
+# 아이디어·초안 DB (로컬 전용)
+backend/.data/
 backend/.timing.jsonl.1
 backend/prompts.backup-*
 *.before-fix

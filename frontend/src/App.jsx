@@ -248,6 +248,9 @@ function migrate(saved) {
     ...saved.form,
     track: TRACKS[saved.form.track] ? saved.form.track : "tech",
     styles: styles.length ? styles : [styleIds[0]],
+    // 초안 id 가 생기기 전 저장본 — 지금 아이디어로 새 초안을 연다
+    draftId: saved.form.draftId || api.newDraftId(),
+    draftIdea: saved.form.draftIdea ?? saved.form.idea ?? "",
   };
   // 고른 초안이 사라진 스타일이면 선택을 비운다 (남은 스타일의 초안이 있으면 그게 보이고, 없으면 다시 생성하면 된다)
   saved.picked = Object.fromEntries(Object.entries(saved.picked || {}).filter(([, sid]) => styleIds.includes(sid)));
@@ -262,6 +265,30 @@ const JOBS_KEY = "modoo-writer-jobs-v1";
 // 조사 결과를 재사용해도 되는 범위. 이 값이 달라지면 이전 조사는 다른 아이디어의 것이므로 버린다.
 // (2026-09-02 버그: 문항 id 로만 캐시해서 아이디어를 바꿔도 옛 조사를 그대로 재사용했다.)
 const researchSignature = (form) => `${form?.track || ""}|${(form?.idea || "").trim()}`;
+
+// ── 초안 id (서버 저장의 묶음 키) ──
+// 아이디어를 조금 고치면(오타·문장 추가) 같은 초안이고, 완전히 다른 아이디어를 쓰면 새 초안이다.
+// 판정은 글자 2-gram 겹침 비율(공통 ÷ 짧은 쪽) — 한국어라 단어 분리 없이 쓸 수 있고, 덧붙이기에는 1.0 에 가깝고
+// 전혀 다른 글에는 0.1~0.2 대라 0.5 로 가른다. 비교 기준(draftIdea)은 id 를 만들 때와 인테이크를 시작할 때의 아이디어.
+const DRAFT_SAME_THRESHOLD = 0.5;
+function bigrams(text) {
+  const t = (text || "").replace(/\s+/g, "");
+  const out = new Set();
+  for (let i = 0; i + 1 < t.length; i++) out.add(t.slice(i, i + 2));
+  return out;
+}
+function ideaSimilarity(a, b) {
+  const A = bigrams(a), B = bigrams(b);
+  if (!A.size || !B.size) return 1;          // 빈 칸에서 시작·비우는 중 — 같은 초안으로 본다
+  let common = 0;
+  for (const g of A) if (B.has(g)) common++;
+  return common / Math.min(A.size, B.size);
+}
+// form 변경을 적용하면서 아이디어가 기준과 많이 달라졌으면 새 초안 id 를 매긴다. 서버에는 보내는 순간에만 반영된다.
+function withDraft(next) {
+  if (next.draftId && ideaSimilarity(next.idea, next.draftIdea) >= DRAFT_SAME_THRESHOLD) return next;
+  return { ...next, draftId: api.newDraftId(), draftIdea: next.idea || "" };
+}
 
 function loadJobs() {
   try {
@@ -289,6 +316,8 @@ export default function ModooWriter() {
     field: "",          // Q6 사업 분야 — 사람이 직접 선택
     q10Public: true,    // Q10 공개 여부 — 공개면 AI 생성, 비공개면 고정 문장
     styles: ["logic"], // 기본 1개 (무료 티어 요청 수 절약). 2026-09-01: 논리·근거형이 실호출 품질 최고라 기본으로. 사용자가 더 고를 수 있음.
+    draftId: api.newDraftId(),   // 서버 저장 묶음 키 (withDraft 가 아이디어가 확 바뀌면 새로 매김)
+    draftIdea: "",
   });
   const [texts, setTexts] = useState(saved?.texts ?? {});   // texts[qid][styleId] = string
   const [status, setStatus] = useState(saved?.status ?? {}); // status[qid][styleId] = 'loading' | 'done' | 'error'
@@ -509,6 +538,8 @@ export default function ModooWriter() {
   // 1) 아이디어 읽기(인테이크) → 충분하면 바로 생성, 부족하면 카드 단계로
   async function startIntake() {
     setIntakeBusy(true);
+    // 지금 제출하는 아이디어가 이 초안의 기준이 된다 — 이후 편집은 이 글과 비교해 같은 초안인지 가른다
+    setForm((f) => ({ ...f, draftIdea: f.idea }));
     try {
       const r = await api.intake(form);
       setIntake(r);
@@ -699,7 +730,7 @@ export default function ModooWriter() {
               <section>
                 <h2 className="font-semibold mb-1">아이디어를 설명해 주세요</h2>
                 <p className="text-xs text-slate-500 mb-2">누구의 어떤 불편을, 무엇으로, 어떻게 해결하는지. 생각난 계기가 있으면 같이 적어주세요. 길수록 초안이 좋아집니다.</p>
-                <textarea value={form.idea} onChange={(e) => setForm({ ...form, idea: e.target.value })} rows={8}
+                <textarea value={form.idea} onChange={(e) => setForm(withDraft({ ...form, idea: e.target.value }))} rows={8}
                   placeholder="예) 자취하는 20대는 배달 음식이 지겨운데 요리는 부담스럽다. 동네 반찬가게와 연결해 그날 남은 반찬을 저녁 7시 이후 할인 꾸러미로 예약·수령하는 앱을 만들고 싶다. 내가 직접 반찬가게 사장님께 여쭤보니 매일 20~30%가 폐기된다고 했다…"
                   className="w-full p-3 rounded-lg border border-slate-300 focus:border-indigo-600 focus:outline-none text-sm leading-relaxed" />
                 <div className="text-xs text-slate-400 text-right">

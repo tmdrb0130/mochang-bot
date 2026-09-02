@@ -9,6 +9,8 @@ import pytest
 #    운영 지표(대기 시간·소스 사용량)를 못 읽게 된다. backend.timing 을 import 하기 전에 경로를 바꾼다.
 _TEST_TIMING = Path(tempfile.gettempdir()) / "mochang-test-timing.jsonl"
 os.environ["MOCHANG_TIMING_LOG"] = str(_TEST_TIMING)
+# ② 저장소 격리 — 테스트가 backend/.data/mochang.sqlite 에 가짜 초안을 쌓지 않게 임시 DB 를 쓴다 (backend.main 이 읽는다).
+os.environ["MOCHANG_DATABASE_URL"] = "sqlite:///" + Path(tempfile.mkdtemp(prefix="mochang-test-db-")).joinpath("t.sqlite").as_posix()
 
 from backend import timing            # noqa: E402  (환경변수를 먼저 세팅해야 한다)
 from backend.pipeline import generate  # noqa: E402

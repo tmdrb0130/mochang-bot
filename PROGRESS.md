@@ -1,3 +1,44 @@
+# PROGRESS — 2026-09-02 저녁 (아이디어·초안 DB 저장, 작업 40)
+
+> 이 절이 최신. 같은 날 낮·전날 기록은 아래에 그대로 둠.
+
+## 한 것
+
+사용자가 입력한 아이디어(+인테이크 답)와 문항별 생성 초안을 **서버 DB 에 저장**하기 시작했다. 지금까지는 브라우저 localStorage 에만
+있었고 서버는 아무것도 남기지 않았다 (작업 결과는 메모리 큐에 500건만 잠깐).
+
+- `backend/storage.py` — SQLAlchemy Core. 테이블 `drafts`(초안 한 벌: 아이디어·트랙·팀·역량·인테이크 답 JSON·IP·요청 수)
+  + `generations`(문항별 생성문: question_id·kind generate/extend·text·글자수·모델·meta JSON) + `schema_meta`(버전).
+  기본 **SQLite WAL** `backend/.data/mochang.sqlite`(gitignore). `config.yaml storage.url` / 환경변수 `MOCHANG_DATABASE_URL` 에
+  PostgreSQL URL 을 주면 코드 수정 없이 전환 (수백 명 규모 대비 — 사용자 지시).
+- 연결: `main.py _persisted()` — `/jobs/{kind}` 전부 + 동기 `/intake`·`/generate`·`/extend`. 결과가 나온 뒤 스레드에서 저장하고
+  결과는 그대로 반환. **저장 실패는 삼킨다**(timing.py 와 같은 원칙) — DB 를 못 열면 서비스는 뜨고 저장만 꺼진다.
+- 묶는 키 `draft_id`: 요청 스키마에 선택 필드로 추가. 없으면 `track|idea` 해시로 묶는다 → 구 프론트로도 동작.
+- **프론트** (`api.js newDraftId`·`toPayload draft_id`, `App.jsx withDraft`): form 에 `draftId`·`draftIdea` 를 두고 모든 요청에 실어 보낸다.
+  **아이디어를 조금 고치면 같은 초안, 완전히 다르면 새 초안** (사용자 규칙) — 글자 2-gram 겹침 비율(공통 ÷ 짧은 쪽) 0.5 문턱.
+  실측: 오타 수정 0.95 · 문장 덧붙임 1.00 · 절반 삭제 1.00 → 유지 / 다른 아이디어 0.19·0.12·0.06 → 새 id. 기준 글은 id 생성 시점과
+  인테이크 시작 시점의 아이디어. 옛 localStorage 저장본은 `migrate()` 가 id 를 부여. "처음부터" 는 저장본을 지우므로 자연히 새 id.
+- `GET /drafts/{draft_id}` 조회(초안 + 생성 이력). 목록 API 는 일부러 안 둠(인증 없음). 운영자는 `scripts/drafts_report.py`
+  (`--last N` / `--id` / `--dump out.jsonl`).
+- 테스트 `tests/test_storage.py` 6건 (upsert·동시 첫 요청 9건 경쟁·실패 삼킴·설정 우선순위·/jobs→DB→/drafts 한 바퀴).
+  `conftest.py` 가 `MOCHANG_DATABASE_URL` 을 임시 파일로 돌려 운영 DB 오염 방지. **390 passed**.
+
+실호출: 없음 (mock). 스크립트는 임시 DB 로 스모크만.
+
+## 결정
+
+- **저장 사실을 사용자에게 고지하지 않는다** (사용자, 9/2 저녁): 동의 단계가 UX 를 늘려 이탈률을 높인다. `config.yaml storage` 주석에 기록.
+- DB 는 SQLite 로 시작, PostgreSQL 은 URL 교체로. 근거: 쓰기량이 문항당 1행(초당 1건 미만)이라 병목은 DB 가 아니라 GPU(동시 42) — 수백 명도 SQLite WAL 이 충분.
+  다만 서버를 2대 이상으로 늘리는 순간 파일 DB 는 공유가 안 되므로 그때 PostgreSQL.
+
+## 다음 순서
+
+1. 운영 반영: `mochang-api` 재시작 (+ 서버 venv `pip install -r backend/requirements.txt`) **+ 프론트 dist 재빌드·배포 승인** (draft_id 전송은 빌드해야 반영).
+   재시작 후 `scripts/drafts_report.py` 로 첫 행 확인.
+2. 보존 기간·삭제 정책은 미정 — 쌓이는 양을 보고 결정 (문항당 2KB, 하루 100명이면 약 2MB/일).
+
+---
+
 # PROGRESS — 2026-09-01 저녁 세션 (라마 전환 · 공개 배포 · 부하 진단)
 
 > 이 절이 최신. 같은 날 낮 세션 기록은 아래에 그대로 둠.

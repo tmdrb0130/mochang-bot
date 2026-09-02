@@ -130,7 +130,8 @@ http://localhost:5173 을 열면 화면 상단에 `모델: minimax/minimax-m3:fr
 ```
 mochang-bot/
 ├── backend/                    # Python · FastAPI
-│   ├── main.py                 #   API: /health /models /intake /intake/regenerate /generate /extend /research /verify /jobs
+│   ├── main.py                 #   API: /health /models /intake /intake/regenerate /generate /extend /research /verify /jobs /drafts
+│   ├── storage.py              #   아이디어·초안 DB (SQLAlchemy, 기본 SQLite WAL) — 요청이 끝날 때 입력·생성문을 남김
 │   ├── config.yaml             #   LLM 연결 설정 (base_url / api_key / model) — 여기만 바꾸면 모델 교체
 │   ├── llm/client.py           #   OpenAI 호환 클라이언트 (OpenRouter · Ollama · vLLM · LiteLLM 공용)
 │   ├── llm/jobs.py             #   동시성 층: asyncio.Queue + 워커 N개(max_workers), 429 백오프, 작업 ID 폴링
@@ -231,6 +232,7 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 | `POST /jobs/{kind}` | 위 작업들을 비동기로 제출 → `{job_id, position}` (kind: generate·extend·intake·intake_regenerate·research·verify) |
 | `GET /jobs/{id}` | `{status, position, result, error}` 폴링 |
 | `GET /jobs` | 큐 상태 (워커 수, 대기, 실행 중) |
+| `GET /drafts/{draft_id}` | 저장된 초안 한 벌 — 입력(아이디어·인테이크 답) + 문항별 생성 이력. 모든 요청은 끝날 때 `backend/storage.py` 가 DB 에 남긴다 (기본 SQLite `backend/.data/mochang.sqlite`, `config.yaml storage.url`/`MOCHANG_DATABASE_URL` 로 PostgreSQL 전환). 목록 조회는 없음 — 운영자는 `scripts/drafts_report.py` |
 | `POST /generate/dry-run` | 조립된 프롬프트만 반환 (프롬프트 튜닝용) |
 
 ---

@@ -91,6 +91,15 @@ auto_extend:
   min_ratio: 0.7
   min_limit: 500
 
+# ── 아이디어·초안 저장소 (backend/storage.py) ──
+# 요청이 끝날 때마다 입력(아이디어·인테이크 답)과 문항별 생성문을 DB 에 남긴다. 모델 호출 없음, 실패해도 서비스에 영향 없음.
+# 기본은 SQLite(WAL) 한 파일. 규모가 커져 PostgreSQL 로 옮길 때는 url 만 바꾼다 (환경변수 MOCHANG_DATABASE_URL 이 우선).
+#   예) url: "postgresql+psycopg://user:pw@host/mochang"   ← pip install psycopg 뒤
+# 사용자 고지 없이 저장한다 (2026-09-02 사용자 결정: 동의 단계가 이탈률을 높임). 읽기: scripts/drafts_report.py
+storage:
+  enabled: true
+  url: "sqlite:///backend/.data/mochang.sqlite"
+
 # 한 클라이언트(IP)가 동시에 진행할 수 있는 작업 수 (POST /jobs/{kind}). 초과하면 429.
 # 인증이 없어 IP 로 구분한다 — 한 명이 문항 9개를 연달아 눌러 큐를 독점하는 것을 막는다.
 # 0 이면 무제한. 프론트가 문항 여러 개를 동시에 돌릴 수 있으므로 너무 낮추지 말 것.

@@ -12,7 +12,17 @@ export function toPayload(form) {
     capability: form.capability || "",
     ...(form.model ? { model: form.model } : {}),
     ...(form.answers?.length ? { answers: form.answers } : {}),
+    // 신청서 한 벌을 묶는 키 — 서버가 아이디어·인테이크 답·문항별 초안을 이 id 로 저장한다 (backend/storage.py).
+    ...(form.draftId ? { draft_id: form.draftId } : {}),
   };
+}
+
+/** 초안 id. 서버 형식 [A-Za-z0-9_-]{8,64}. randomUUID 가 없는 오래된 브라우저·http 환경은 시각+난수로 대신. */
+export function newDraftId() {
+  try {
+    if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  } catch { /* 비보안 컨텍스트 */ }
+  return `d${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 async function request(path, options) {
