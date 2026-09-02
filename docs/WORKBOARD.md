@@ -398,6 +398,21 @@
   - 아직 안 한 것(세션3 소관): `config.yaml research.vectorstore.{enabled,min_score,min_hits,max_age_days}`
     설정 항목, `collect_pages` 연결, `asyncio.to_thread` 래핑. Ollama 실호출(`ollama pull bge-m3`) 검증도 미수행.
 
+
+- **공개 배포 (사용자 승인, 2026-09-02)** — `npx vite build` 로 `frontend/dist` 갱신.
+  **새 번들: `index-vkBBBKoM.js` / `index-Da5jo6yn.css`** (이전 `index-CG-vzjlN.js` → 교체됨).
+  배포 내용은 `c1dd0e4` (UX 개선 A2~A5 + B1~B4). 빌드 전 워킹트리에 프론트 미커밋 변경 없음,
+  `frontend/.env` 없음(= `.env.production` 의 `VITE_API_BASE=/api` 로 빌드됨) 확인 후 실행.
+  - 공개 URL 확인: `https://bustartup.kr:50001/` 이 `assets/index-vkBBBKoM.js` 를 참조 → nginx 가 새 번들 서빙 중.
+  - 번들 문자열 검증 — 들어간 것: `차례를 기다리는 중`(A3) · `남은 N개 계속 만들기`(A2) ·
+    `아이디어 공통 조사부터`(A4) · `복사 안 됨`(B4) · `서버와 연결이 끊겼어요`(B1).
+    빠진 것(0건): `uvicorn`(B1 제거 확인) · `로컬 분야` · `스토리텔링형`(작업 11 유지 확인).
+  - `frontend/dist` 는 `frontend/.gitignore` 로 추적 제외라 **커밋할 산출물은 없다** (배포 = 파일 교체).
+  - ⏸ 남은 브라우저 확인은 이제 공개 URL 에서 하면 된다: A2(생성 중 F5 → 나머지 문항까지 이어서 생성),
+    A3(진입 직후 대기 카드), A4(첫 문항 문구), B2(모델이 드롭다운 아닌 글자).
+  - 📌 세션1/세션3: 워커 36+9(`054a51f`)는 **아직 운영 미반영** — `mochang-api` 재시작이 필요하다.
+    이번 배포는 프론트 정적 파일만 바꾼 것이라 백엔드는 그대로다.
+
 ### 세션3 (백엔드)
 
 - 시작 — 작업 2(V4), 작업 6 백엔드 몫, 작업 12 1단계.
