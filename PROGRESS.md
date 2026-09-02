@@ -44,6 +44,22 @@
 - DB 는 SQLite 로 시작, PostgreSQL 은 URL 교체로. 근거: 쓰기량이 문항당 1행(초당 1건 미만)이라 병목은 DB 가 아니라 GPU(동시 42) — 수백 명도 SQLite WAL 이 충분.
   다만 서버를 2대 이상으로 늘리는 순간 파일 DB 는 공유가 안 되므로 그때 PostgreSQL.
 
+## 같은 저녁 추가 2건 (사용자 실사용 중 발견)
+
+**① 서버 크래시 → "조사 실패 (502)"** — 20:34:36 사용자의 인테이크 조사 중 `python.exe` 가 `etree.cp311-win_amd64.pyd`(lxml 6.1.2) 액세스 위반
+(0xc0000005)으로 죽음. 이벤트 로그상 **오늘 처음**. NSSM 이 5초 뒤 자동 재시작했고 그 사이 `/research` 가 연결 거부 → nginx 502.
+파이썬 예외가 아니라 잡을 수 없고, 추출이 스레드 여러 개(EXTRACT_CONCURRENCY 3 × 조사 워커 6)에서 동시에 돌던 상황.
+- 처방: `backend/rag/extract_proc.py` — trafilatura 추출을 **spawn 프로세스 풀(3)** 에서 돌린다. 워커가 죽으면 그 페이지만 `""`, 풀 재생성,
+  API·큐·진행 중 작업은 살아남는다. 페이지당 30초 상한. `MOCHANG_EXTRACT_ISOLATION=0` 이면 예전 스레드 방식(테스트 기본).
+- 검증: `tests/test_extract_proc.py` — 워커를 `os._exit(1)` 로 죽여도 예외 없이 `""` 반환 + 다음 호출 정상(실제 spawn). 운영 조건 스모크: 첫 호출(풀 기동) 수 초, 이후 수십 ms.
+- 근본 원인(lxml 스레드 안전성 vs 특정 페이지)은 미확정 — 재발하면 `C:\logs\mochang-api.err*.log` 와 Application 이벤트 로그(모듈명) 확인.
+
+**② 배포해도 열어 둔 탭에 새 기능이 안 먹음** (사용자: "사람이 새로고침 해야만 적용되는 건 이상하다") — `App.jsx` 에 새 배포 감지 추가:
+1분마다·탭이 다시 보일 때 `/` 를 `no-store` 로 받아 번들 이름(`index-XXXX.js`)이 지금 것과 다르면, 생성·인테이크가 안 도는 순간에 새로고침.
+초안은 localStorage, 진행 작업은 sessionStorage 라 잃는 것 없음. **이번 배포부터 적용** — 지금 열려 있는 탭은 한 번은 손으로 새로고침해야 한다.
+
+`pytest` **392 passed**, dist-check 통과.
+
 ## 다음 순서
 
 1. 운영 반영: `mochang-api` 재시작 (+ 서버 venv `pip install -r backend/requirements.txt`) **+ 프론트 dist 재빌드·배포 승인** (draft_id 전송은 빌드해야 반영).

@@ -55,6 +55,7 @@ async def lifespan(_: FastAPI):
     if research_client is not client:
         await research_client.queue.stop()
     storage.close()
+    research_pipeline.extract_proc.shutdown()   # 본문 추출 프로세스 풀 정리
 
 
 async def _persisted(kind: str, form: dict, coro, owner: str | None):

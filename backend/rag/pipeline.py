@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from .. import timing
 from ..llm.client import LLMClient
 from ..pipeline import assemble
+from . import extract_proc
 from .research import DiskCache, Researcher, domain
 
 MAX_PAGE_CHARS = 6000
@@ -210,7 +211,6 @@ async def fetch_page(url: str, timeout: int = 15) -> str:
     if not url or url.lower().split("?")[0].endswith(SKIP_EXT):
         return ""
     import httpx
-    import trafilatura
     timing.count("fetch")          # 성공·실패 무관하게 '나간 요청' 을 센다
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
@@ -221,8 +221,8 @@ async def fetch_page(url: str, timeout: int = 15) -> str:
             html = r.text
     except Exception:
         return ""
-    text = await asyncio.to_thread(trafilatura.extract, html, include_comments=False, include_tables=True,
-                                   favor_precision=True)
+    # 추출은 별도 프로세스에서 (extract_proc) — lxml 이 C 레벨에서 죽어도 API 프로세스는 살아남는다.
+    text = await extract_proc.extract(html, include_comments=False, include_tables=True, favor_precision=True)
     return (text or "")[:MAX_PAGE_CHARS]
 
 

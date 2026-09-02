@@ -366,6 +366,31 @@ export default function ModooWriter() {
       .then((h) => setServer(h))
       .catch((e) => setServer({ ok: false, error: String(e.message || e) }));
 
+  // ── 새 배포 자동 적용 ──
+  // 브라우저는 처음 받은 JS 를 탭을 닫을 때까지 쓴다. 재빌드(배포) 뒤에도 열어 둔 탭은 옛 코드라 새 기능이 안 먹는다.
+  // → 1분마다(그리고 탭이 다시 보일 때) index.html 을 새로 받아 번들 이름이 바뀌었는지 보고, 생성·인테이크가 도는 중이 아니면
+  //   조용히 새로고침한다. 초안·답변은 localStorage, 진행 중 작업은 sessionStorage 에 있어 새로고침해도 이어진다.
+  const reloadWhenIdleRef = useRef(false);
+  useEffect(() => {
+    if (import.meta.env.DEV) return undefined;          // 개발 서버는 번들 이름이 없다
+    const current = [...document.scripts].map((s) => s.src).find((src) => /\/assets\/index-[\w-]+\.js/.test(src));
+    if (!current) return undefined;
+    const check = async () => {
+      try {
+        const html = await (await fetch(`/?_=${Date.now()}`, { cache: "no-store" })).text();
+        const m = html.match(/\/assets\/index-[\w-]+\.js/);
+        if (m && !current.endsWith(m[0])) reloadWhenIdleRef.current = true;
+      } catch { /* 서버 재시작 중 등 — 다음 번에 */ }
+    };
+    const timer = setInterval(check, 60_000);
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+  }, []);
+  useEffect(() => {
+    if (reloadWhenIdleRef.current && !running && !intakeBusy) location.reload();
+  });
+
   useEffect(() => {
     refreshHealth();
     api.models()
