@@ -120,6 +120,12 @@
 **전환 준비(기록)**: `backend/config.yaml.qwen` (llm·models·research.llm 세 블록만 다름). 사용자 결정 후 `config.yaml` 을 라마 백업(`config.yaml.llama.bak`)으로 두고 교체 → `nssm restart mochang-api`.
 라마 파드는 그대로 두어 언제든 되돌릴 수 있다.
 
+## 부하 테스트 1~4차와 최적화 — **`docs/LOAD_TEST_2026-09-03.md`** (회차별 조건·수치·판단 근거·최종 설정)
+
+요약: 40명 동시 전체 흐름 29분(실패 38) → 22분 → 20분(실패 0) → 21분(조사 체감 2.6초). 최종: Qwen + vLLM 우선순위 + 본문 40/조사 40 워커 +
+인테이크·조사 작업 큐 + 프론트 파이프라인·선조사. **GPU 1장 총량(≈40명 20분)이 상한** — 다음은 GPU1 라마를 내리고 Qwen 복제본 2개(사용자 결정).
+테스트 DB 비움(01:5x). `timing_report` 에 벡터DB 적중 절 추가(재시작 후 반영).
+
 ## 다음 순서
 
 1. 운영 반영: `mochang-api` 재시작 (+ 서버 venv `pip install -r backend/requirements.txt`) **+ 프론트 dist 재빌드·배포 승인** (draft_id 전송은 빌드해야 반영).

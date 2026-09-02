@@ -1,0 +1,8534 @@
+{
+ "summary": {
+  "users": 40,
+  "wall_s": 1259,
+  "intake": {
+   "ok": 40,
+   "fail": 0,
+   "p50": 404.1,
+   "p95": 587.6,
+   "cards_avg": 5.9,
+   "errors": []
+  },
+  "research": {
+   "ok": 320,
+   "fail": 0,
+   "p50": 2.6,
+   "p95": 5.3,
+   "facts_avg": 5.1,
+   "errors": []
+  },
+  "generate": {
+   "ok": 320,
+   "fail": 0,
+   "queued_p50": 156.9,
+   "queued_p95": 212.7,
+   "run_p50": 105.3,
+   "run_p95": 181.6,
+   "total_p50": 253.2,
+   "total_p95": 336.7,
+   "total_max": 377.3,
+   "long_chars_avg": 1564,
+   "long_under_1000": 2,
+   "errors": []
+  },
+  "user_total": {
+   "p50": 1207.5,
+   "p95": 1252.8,
+   "max": 1254.2
+  },
+  "first_draft": {
+   "p50": 626.6,
+   "p95": 885.8,
+   "think_s": 45
+  },
+  "server_peak": {
+   "api_running": 40,
+   "api_queued": 80,
+   "vllm_running": 65.0,
+   "vllm_waiting": 7.0,
+   "kv_perc": 37,
+   "preemptions": 0
+  }
+ },
+ "users": [
+  {
+   "user": 10,
+   "name": "소상공인 SNS#10",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 365.6,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 363.7,
+    "research_facts": 5
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.7
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.7
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.7
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.8
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.8
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 55.7,
+     "position": 0,
+     "queued": 0.0,
+     "run": 55.3,
+     "chars": 68,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 157.0,
+     "position": 0,
+     "queued": 0.0,
+     "run": 156.5,
+     "chars": 1503,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 164.6,
+     "position": 0,
+     "queued": 0.0,
+     "run": 162.9,
+     "chars": 1587,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 202.5,
+     "position": 25,
+     "queued": 116.3,
+     "run": 84.6,
+     "chars": 1526,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 238.1,
+     "position": 64,
+     "queued": 156.8,
+     "run": 81.1,
+     "chars": 1419,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 293.9,
+     "position": 61,
+     "queued": 159.0,
+     "run": 133.0,
+     "chars": 1457,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 309.6,
+     "position": 78,
+     "queued": 209.4,
+     "run": 98.4,
+     "chars": 878,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 198.1,
+     "position": 78,
+     "queued": 193.7,
+     "run": 2.1,
+     "chars": 77,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 466.4,
+   "total": 1011.4
+  },
+  {
+   "user": 15,
+   "name": "반찬 꾸러미#15",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 337.6,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 336.1,
+    "research_facts": 5
+   },
+   "research": {
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.7
+    },
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.7
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.7,
+     "run": 0.6
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.9
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.9,
+     "run": 0.5
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.7
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.7
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 88.6,
+     "position": 0,
+     "queued": 0.0,
+     "run": 87.9,
+     "chars": 68,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 195.2,
+     "position": 0,
+     "queued": 0.0,
+     "run": 194.2,
+     "chars": 1432,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 197.5,
+     "position": 0,
+     "queued": 0.0,
+     "run": 195.1,
+     "chars": 1413,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 248.1,
+     "position": 31,
+     "queued": 126.5,
+     "run": 119.3,
+     "chars": 1557,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 250.9,
+     "position": 63,
+     "queued": 161.1,
+     "run": 87.5,
+     "chars": 1466,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 258.4,
+     "position": 63,
+     "queued": 160.8,
+     "run": 97.3,
+     "chars": 1664,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 301.8,
+     "position": 79,
+     "queued": 195.7,
+     "run": 103.7,
+     "chars": 1354,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 192.6,
+     "position": 77,
+     "queued": 184.3,
+     "run": 5.8,
+     "chars": 68,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 471.2,
+   "total": 1023.7
+  },
+  {
+   "user": 21,
+   "name": "주차 공유#21",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 360.4,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 358.7,
+    "research_facts": 4
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.2
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 71.1,
+     "position": 0,
+     "queued": 0.0,
+     "run": 68.9,
+     "chars": 72,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 177.5,
+     "position": 0,
+     "queued": 0.0,
+     "run": 176.6,
+     "chars": 1658,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 218.0,
+     "position": 0,
+     "queued": 0.0,
+     "run": 215.5,
+     "chars": 1805,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 248.1,
+     "position": 37,
+     "queued": 144.4,
+     "run": 102.5,
+     "chars": 1772,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 263.5,
+     "position": 62,
+     "queued": 165.9,
+     "run": 95.6,
+     "chars": 1453,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 294.3,
+     "position": 70,
+     "queued": 189.8,
+     "run": 103.0,
+     "chars": 1698,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 304.1,
+     "position": 79,
+     "queued": 194.4,
+     "run": 109.2,
+     "chars": 1818,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 190.2,
+     "position": 75,
+     "queued": 181.2,
+     "run": 8.0,
+     "chars": 81,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 476.5,
+   "total": 1036.6
+  },
+  {
+   "user": 1,
+   "name": "딸기 농장 체험#1",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 378.9,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 377.6,
+    "research_facts": 2
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.5
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.1
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.1
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.9
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.3
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 76.2,
+     "position": 0,
+     "queued": 0.0,
+     "run": 76.2,
+     "chars": 67,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 169.7,
+     "position": 0,
+     "queued": 0.0,
+     "run": 168.5,
+     "chars": 1502,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 177.3,
+     "position": 1,
+     "queued": 0.0,
+     "run": 175.9,
+     "chars": 1773,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 255.8,
+     "position": 46,
+     "queued": 158.5,
+     "run": 96.0,
+     "chars": 1553,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 251.6,
+     "position": 66,
+     "queued": 166.5,
+     "run": 83.9,
+     "chars": 1588,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 279.0,
+     "position": 66,
+     "queued": 174.4,
+     "run": 102.7,
+     "chars": 1458,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 192.4,
+     "position": 75,
+     "queued": 182.0,
+     "run": 10.3,
+     "chars": 68,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 308.7,
+     "position": 78,
+     "queued": 212.7,
+     "run": 95.4,
+     "chars": 1512,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 500.2,
+   "total": 1064.7
+  },
+  {
+   "user": 24,
+   "name": "농산물 직거래#24",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 362.8,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 359.9,
+    "research_facts": 7
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.4
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.4
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.4
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 73.6,
+     "position": 0,
+     "queued": 0.0,
+     "run": 71.7,
+     "chars": 80,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 179.5,
+     "position": 0,
+     "queued": 0.0,
+     "run": 178.7,
+     "chars": 1597,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 202.4,
+     "position": 0,
+     "queued": 0.0,
+     "run": 202.1,
+     "chars": 1037,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 228.0,
+     "position": 37,
+     "queued": 139.5,
+     "run": 86.3,
+     "chars": 1466,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 301.2,
+     "position": 64,
+     "queued": 167.4,
+     "run": 131.9,
+     "chars": 1609,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 294.5,
+     "position": 70,
+     "queued": 201.5,
+     "run": 92.8,
+     "chars": 1463,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 294.3,
+     "position": 79,
+     "queued": 193.3,
+     "run": 100.9,
+     "chars": 1632,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 187.4,
+     "position": 70,
+     "queued": 175.5,
+     "run": 11.7,
+     "chars": 61,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 481.4,
+   "total": 1075.9
+  },
+  {
+   "user": 22,
+   "name": "반려견 산책#22",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 347.1,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 344.9,
+    "research_facts": 2
+   },
+   "research": {
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 2,
+     "cached": false,
+     "queued": 1.9,
+     "run": 2.1
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 2,
+     "cached": false,
+     "queued": 1.5,
+     "run": 1.8
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 2,
+     "cached": false,
+     "queued": 1.5,
+     "run": 1.8
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 58.2,
+     "position": 0,
+     "queued": 0.0,
+     "run": 56.9,
+     "chars": 82,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 167.3,
+     "position": 0,
+     "queued": 0.0,
+     "run": 166.9,
+     "chars": 1571,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 202.9,
+     "position": 0,
+     "queued": 0.0,
+     "run": 201.6,
+     "chars": 1955,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 215.2,
+     "position": 22,
+     "queued": 127.4,
+     "run": 85.9,
+     "chars": 1512,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 243.5,
+     "position": 61,
+     "queued": 165.6,
+     "run": 76.0,
+     "chars": 1428,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 213.0,
+     "position": 79,
+     "queued": 207.4,
+     "run": 4.5,
+     "chars": 73,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 298.6,
+     "position": 66,
+     "queued": 174.0,
+     "run": 123.3,
+     "chars": 1681,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 291.0,
+     "position": 79,
+     "queued": 195.5,
+     "run": 94.7,
+     "chars": 1482,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 450.3,
+   "total": 1093.9
+  },
+  {
+   "user": 12,
+   "name": "공유 주방#12",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 388.2,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 386.4,
+    "research_facts": 3
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.2
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.2
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.4
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 60.8,
+     "position": 0,
+     "queued": 0.0,
+     "run": 60.7,
+     "chars": 85,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 164.6,
+     "position": 0,
+     "queued": 0.0,
+     "run": 164.5,
+     "chars": 1620,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 225.1,
+     "position": 0,
+     "queued": 0.0,
+     "run": 223.4,
+     "chars": 1515,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 278.5,
+     "position": 43,
+     "queued": 147.4,
+     "run": 129.8,
+     "chars": 1589,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 266.0,
+     "position": 67,
+     "queued": 173.4,
+     "run": 90.7,
+     "chars": 1595,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 335.0,
+     "position": 79,
+     "queued": 206.6,
+     "run": 125.9,
+     "chars": 1485,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 181.9,
+     "position": 73,
+     "queued": 173.5,
+     "run": 6.3,
+     "chars": 88,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 324.6,
+     "position": 79,
+     "queued": 213.2,
+     "run": 109.5,
+     "chars": 1506,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 494.0,
+   "total": 1097.1
+  },
+  {
+   "user": 28,
+   "name": "외국인 행정#28",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 391.3,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 388.6,
+    "research_facts": 8
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.8
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.7
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.7
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.8
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.8
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 66.0,
+     "position": 0,
+     "queued": 0.0,
+     "run": 64.6,
+     "chars": 70,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 164.7,
+     "position": 0,
+     "queued": 1.5,
+     "run": 162.6,
+     "chars": 1568,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 195.5,
+     "position": 1,
+     "queued": 12.6,
+     "run": 181.9,
+     "chars": 1586,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 258.7,
+     "position": 46,
+     "queued": 160.0,
+     "run": 97.2,
+     "chars": 1705,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 286.1,
+     "position": 65,
+     "queued": 172.4,
+     "run": 111.8,
+     "chars": 1546,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 294.4,
+     "position": 73,
+     "queued": 205.4,
+     "run": 87.8,
+     "chars": 1457,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 180.5,
+     "position": 69,
+     "queued": 166.2,
+     "run": 14.0,
+     "chars": 66,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 352.2,
+     "position": 77,
+     "queued": 210.3,
+     "run": 141.7,
+     "chars": 1523,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 502.3,
+   "total": 1113.2
+  },
+  {
+   "user": 35,
+   "name": "동네 세탁#35",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 349.4,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 347.5,
+    "research_facts": 6
+   },
+   "research": {
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.7
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 1.6,
+     "run": 1.8
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 1.6,
+     "run": 1.8
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.5
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 78.7,
+     "position": 0,
+     "queued": 0.0,
+     "run": 77.4,
+     "chars": 83,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 189.8,
+     "position": 0,
+     "queued": 0.0,
+     "run": 188.2,
+     "chars": 1701,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 192.3,
+     "position": 0,
+     "queued": 0.0,
+     "run": 191.0,
+     "chars": 1776,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 268.4,
+     "position": 34,
+     "queued": 128.1,
+     "run": 139.9,
+     "chars": 1926,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 255.7,
+     "position": 63,
+     "queued": 168.0,
+     "run": 87.8,
+     "chars": 1209,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 273.4,
+     "position": 64,
+     "queued": 167.3,
+     "run": 105.7,
+     "chars": 1795,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 187.1,
+     "position": 76,
+     "queued": 178.3,
+     "run": 6.4,
+     "chars": 62,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 377.3,
+     "position": 79,
+     "queued": 213.7,
+     "run": 162.9,
+     "chars": 1801,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 473.2,
+   "total": 1118.9
+  },
+  {
+   "user": 31,
+   "name": "딸기 농장 체험#31",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 398.9,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 395.8,
+    "research_facts": 4
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.9
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.9
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.9
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.9
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.8
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.8
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.8
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.8
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 96.3,
+     "position": 7,
+     "queued": 45.4,
+     "run": 49.4,
+     "chars": 93,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 197.5,
+     "position": 5,
+     "queued": 35.6,
+     "run": 161.8,
+     "chars": 1575,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 202.9,
+     "position": 6,
+     "queued": 43.0,
+     "run": 159.2,
+     "chars": 1661,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 266.5,
+     "position": 52,
+     "queued": 159.6,
+     "run": 106.0,
+     "chars": 1843,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 314.1,
+     "position": 79,
+     "queued": 215.8,
+     "run": 97.9,
+     "chars": 1528,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 326.9,
+     "position": 79,
+     "queued": 213.4,
+     "run": 113.4,
+     "chars": 1652,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 149.4,
+     "position": 61,
+     "queued": 134.7,
+     "run": 12.3,
+     "chars": 91,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 313.9,
+     "position": 79,
+     "queued": 196.9,
+     "run": 115.5,
+     "chars": 1411,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 540.3,
+   "total": 1120.7
+  },
+  {
+   "user": 0,
+   "name": "반찬 꾸러미#0",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 379.9,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 378.6,
+    "research_facts": 6
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.1
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 96.2,
+     "position": 0,
+     "queued": 0.0,
+     "run": 95.4,
+     "chars": 64,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 202.7,
+     "position": 0,
+     "queued": 0.0,
+     "run": 202.0,
+     "chars": 1814,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 203.1,
+     "position": 0,
+     "queued": 0.0,
+     "run": 202.1,
+     "chars": 1404,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 240.6,
+     "position": 49,
+     "queued": 147.0,
+     "run": 91.4,
+     "chars": 1476,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 288.7,
+     "position": 68,
+     "queued": 193.1,
+     "run": 94.4,
+     "chars": 1332,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 307.0,
+     "position": 69,
+     "queued": 193.7,
+     "run": 112.3,
+     "chars": 1540,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 174.9,
+     "position": 66,
+     "queued": 160.5,
+     "run": 13.6,
+     "chars": 78,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 362.6,
+     "position": 78,
+     "queued": 212.1,
+     "run": 148.4,
+     "chars": 1696,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 521.0,
+   "total": 1124.2
+  },
+  {
+   "user": 30,
+   "name": "반찬 꾸러미#30",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 330.8,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 328.6,
+    "research_facts": 3
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.5
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 1.1,
+     "run": 0.5
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.5,
+     "run": 0.6
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.5
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.5,
+     "run": 0.5
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 1.1,
+     "run": 0.6
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.5,
+     "run": 0.5
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.5
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 63.3,
+     "position": 0,
+     "queued": 0.0,
+     "run": 62.0,
+     "chars": 85,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 182.5,
+     "position": 0,
+     "queued": 0.0,
+     "run": 181.6,
+     "chars": 1516,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 182.8,
+     "position": 0,
+     "queued": 0.0,
+     "run": 181.3,
+     "chars": 1592,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 154.8,
+     "position": 1,
+     "queued": 26.8,
+     "run": 127.5,
+     "chars": 1604,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 177.4,
+     "position": 66,
+     "queued": 170.7,
+     "run": 4.9,
+     "chars": 79,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 261.1,
+     "position": 60,
+     "queued": 162.0,
+     "run": 97.4,
+     "chars": 1459,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 263.5,
+     "position": 61,
+     "queued": 164.8,
+     "run": 97.3,
+     "chars": 1603,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 362.2,
+     "position": 78,
+     "queued": 212.1,
+     "run": 148.1,
+     "chars": 1495,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 439.1,
+   "total": 1133.5
+  },
+  {
+   "user": 5,
+   "name": "동네 세탁#5",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 372.2,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 369.0,
+    "research_facts": 5
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.9
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.9
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 73.7,
+     "position": 1,
+     "queued": 0.0,
+     "run": 72.1,
+     "chars": 78,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 166.9,
+     "position": 0,
+     "queued": 0.0,
+     "run": 165.4,
+     "chars": 1481,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 184.6,
+     "position": 0,
+     "queued": 0.0,
+     "run": 183.3,
+     "chars": 1616,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 235.4,
+     "position": 40,
+     "queued": 139.9,
+     "run": 94.0,
+     "chars": 1443,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 246.0,
+     "position": 63,
+     "queued": 166.1,
+     "run": 78.0,
+     "chars": 1457,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 260.9,
+     "position": 67,
+     "queued": 181.3,
+     "run": 77.1,
+     "chars": 1421,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 200.1,
+     "position": 78,
+     "queued": 195.3,
+     "run": 4.6,
+     "chars": 78,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 314.1,
+     "position": 76,
+     "queued": 184.1,
+     "run": 128.3,
+     "chars": 986,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 491.0,
+   "total": 1144.2
+  },
+  {
+   "user": 39,
+   "name": "농산물 직거래#39",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 350.5,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 347.0,
+    "research_facts": 4
+   },
+   "research": {
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 1.0,
+     "run": 2.1
+    },
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 1.0,
+     "run": 2.1
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 1.0,
+     "run": 2.1
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.9
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.9
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 91.6,
+     "position": 0,
+     "queued": 0.0,
+     "run": 91.4,
+     "chars": 83,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 185.5,
+     "position": 0,
+     "queued": 0.0,
+     "run": 184.4,
+     "chars": 1603,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 208.2,
+     "position": 0,
+     "queued": 0.0,
+     "run": 207.2,
+     "chars": 1946,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 233.5,
+     "position": 40,
+     "queued": 139.9,
+     "run": 93.3,
+     "chars": 1415,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 263.7,
+     "position": 64,
+     "queued": 165.1,
+     "run": 98.1,
+     "chars": 1649,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 289.0,
+     "position": 67,
+     "queued": 192.1,
+     "run": 96.5,
+     "chars": 1458,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 200.0,
+     "position": 79,
+     "queued": 195.5,
+     "run": 2.9,
+     "chars": 65,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 323.8,
+     "position": 74,
+     "queued": 176.3,
+     "run": 145.9,
+     "chars": 1491,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 487.1,
+   "total": 1168.6
+  },
+  {
+   "user": 19,
+   "name": "헬스장 유휴#19",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 400.2,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 396.3,
+    "research_facts": 4
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.4
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.4
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 7.7,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.3
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 7.7,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 6.2
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.9
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 7.7,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 6.2
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.2,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 165.0,
+     "position": 17,
+     "queued": 112.3,
+     "run": 52.7,
+     "chars": 72,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 250.8,
+     "position": 18,
+     "queued": 113.8,
+     "run": 134.5,
+     "chars": 1454,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 270.8,
+     "position": 19,
+     "queued": 117.6,
+     "run": 151.3,
+     "chars": 1594,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 296.1,
+     "position": 69,
+     "queued": 195.7,
+     "run": 100.2,
+     "chars": 1621,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 278.7,
+     "position": 77,
+     "queued": 190.1,
+     "run": 87.2,
+     "chars": 1408,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 309.1,
+     "position": 79,
+     "queued": 190.7,
+     "run": 117.1,
+     "chars": 1716,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 134.1,
+     "position": 54,
+     "queued": 119.8,
+     "run": 14.0,
+     "chars": 59,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 273.1,
+     "position": 67,
+     "queued": 163.9,
+     "run": 107.8,
+     "chars": 1436,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 610.2,
+   "total": 1179.4
+  },
+  {
+   "user": 3,
+   "name": "캠핑장 빈자리#3",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 399.1,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 396.7,
+    "research_facts": 5
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.8
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.7
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.7
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.0
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.0
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 7.7,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 6.0
+    },
+    "q10": {
+     "ok": true,
+     "sec": 7.6,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.6
+    },
+    "q8": {
+     "ok": true,
+     "sec": 7.6,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.6
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 114.1,
+     "position": 13,
+     "queued": 87.5,
+     "run": 25.7,
+     "chars": 86,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 195.2,
+     "position": 12,
+     "queued": 76.2,
+     "run": 118.3,
+     "chars": 1423,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 238.3,
+     "position": 10,
+     "queued": 56.0,
+     "run": 181.5,
+     "chars": 1580,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 255.6,
+     "position": 59,
+     "queued": 158.8,
+     "run": 96.1,
+     "chars": 1437,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 319.5,
+     "position": 79,
+     "queued": 218.0,
+     "run": 99.5,
+     "chars": 1711,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 316.4,
+     "position": 79,
+     "queued": 202.6,
+     "run": 113.3,
+     "chars": 1627,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 202.7,
+     "position": 79,
+     "queued": 195.3,
+     "run": 5.1,
+     "chars": 61,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 235.5,
+     "position": 61,
+     "queued": 136.4,
+     "run": 97.7,
+     "chars": 1493,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 558.2,
+   "total": 1194.3
+  },
+  {
+   "user": 2,
+   "name": "경단녀 돌봄#2",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 373.8,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 371.0,
+    "research_facts": 3
+   },
+   "research": {
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.9
+    },
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.9
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.9
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.1
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.1
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 81.3,
+     "position": 0,
+     "queued": 0.0,
+     "run": 80.6,
+     "chars": 85,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 177.6,
+     "position": 0,
+     "queued": 0.0,
+     "run": 175.2,
+     "chars": 1637,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 182.7,
+     "position": 0,
+     "queued": 0.0,
+     "run": 182.5,
+     "chars": 1874,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 255.9,
+     "position": 45,
+     "queued": 156.5,
+     "run": 98.5,
+     "chars": 1599,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 268.5,
+     "position": 66,
+     "queued": 178.3,
+     "run": 87.6,
+     "chars": 1562,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 278.4,
+     "position": 67,
+     "queued": 173.1,
+     "run": 103.3,
+     "chars": 1593,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 220.8,
+     "position": 79,
+     "queued": 212.7,
+     "run": 6.4,
+     "chars": 66,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 326.9,
+     "position": 73,
+     "queued": 171.6,
+     "run": 154.6,
+     "chars": 1762,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 500.1,
+   "total": 1196.8
+  },
+  {
+   "user": 36,
+   "name": "주차 공유#36",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 398.3,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 396.3,
+    "research_facts": 7
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.3
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.3
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.0,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.6
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.0,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.3
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.0,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.3
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.3
+    },
+    "q8": {
+     "ok": true,
+     "sec": 7.6,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.5
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 88.6,
+     "position": 3,
+     "queued": 28.5,
+     "run": 59.7,
+     "chars": 83,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 195.1,
+     "position": 2,
+     "queued": 27.2,
+     "run": 166.7,
+     "chars": 1582,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 207.5,
+     "position": 4,
+     "queued": 30.9,
+     "run": 176.4,
+     "chars": 1769,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 222.8,
+     "position": 49,
+     "queued": 137.2,
+     "run": 85.5,
+     "chars": 1560,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 314.2,
+     "position": 79,
+     "queued": 215.0,
+     "run": 97.5,
+     "chars": 1613,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 308.5,
+     "position": 79,
+     "queued": 211.1,
+     "run": 96.4,
+     "chars": 1578,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 218.2,
+     "position": 78,
+     "queued": 209.4,
+     "run": 7.1,
+     "chars": 71,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 245.7,
+     "position": 62,
+     "queued": 135.8,
+     "run": 108.4,
+     "chars": 1423,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 532.0,
+   "total": 1198.4
+  },
+  {
+   "user": 4,
+   "name": "헬스장 유휴#4",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 426.8,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 423.6,
+    "research_facts": 5
+   },
+   "research": {
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.2
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.2
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.2
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 187.9,
+     "position": 33,
+     "queued": 128.7,
+     "run": 58.1,
+     "chars": 67,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 260.7,
+     "position": 32,
+     "queued": 128.6,
+     "run": 130.6,
+     "chars": 1445,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 268.8,
+     "position": 32,
+     "queued": 128.0,
+     "run": 138.8,
+     "chars": 1631,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 336.7,
+     "position": 79,
+     "queued": 207.6,
+     "run": 126.9,
+     "chars": 1507,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 319.0,
+     "position": 78,
+     "queued": 211.6,
+     "run": 107.1,
+     "chars": 1587,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 314.3,
+     "position": 79,
+     "queued": 214.1,
+     "run": 98.6,
+     "chars": 1534,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 88.4,
+     "position": 37,
+     "queued": 79.9,
+     "run": 6.3,
+     "chars": 71,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 205.4,
+     "position": 55,
+     "queued": 119.0,
+     "run": 84.9,
+     "chars": 1557,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 659.8,
+   "total": 1201.9
+  },
+  {
+   "user": 14,
+   "name": "동네 공방 클래스#14",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 399.1,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 397.0,
+    "research_facts": 3
+   },
+   "research": {
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.7
+    },
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.7
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.7
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.9
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 7.7,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 6.0
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 7.7,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 6.0
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.7
+    },
+    "q8": {
+     "ok": true,
+     "sec": 7.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.6
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 119.6,
+     "position": 9,
+     "queued": 55.4,
+     "run": 63.3,
+     "chars": 83,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 223.3,
+     "position": 8,
+     "queued": 49.9,
+     "run": 173.4,
+     "chars": 1879,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 225.7,
+     "position": 11,
+     "queued": 56.8,
+     "run": 167.2,
+     "chars": 1987,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 258.6,
+     "position": 61,
+     "queued": 161.2,
+     "run": 96.8,
+     "chars": 1680,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 299.4,
+     "position": 78,
+     "queued": 210.0,
+     "run": 86.8,
+     "chars": 1675,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 316.8,
+     "position": 79,
+     "queued": 212.9,
+     "run": 103.0,
+     "chars": 1669,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 195.1,
+     "position": 76,
+     "queued": 186.7,
+     "run": 6.2,
+     "chars": 67,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 240.4,
+     "position": 61,
+     "queued": 135.9,
+     "run": 102.4,
+     "chars": 1664,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 563.7,
+   "total": 1207.1
+  },
+  {
+   "user": 23,
+   "name": "어르신 약 관리#23",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 399.9,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 396.1,
+    "research_facts": 6
+   },
+   "research": {
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.7
+    },
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.7
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.7
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 7.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.3
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 7.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 6.5
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 7.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 6.5
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.0,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 177.3,
+     "position": 15,
+     "queued": 112.3,
+     "run": 63.7,
+     "chars": 81,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 261.0,
+     "position": 16,
+     "queued": 112.4,
+     "run": 147.1,
+     "chars": 1401,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 261.0,
+     "position": 14,
+     "queued": 93.9,
+     "run": 165.0,
+     "chars": 1505,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 281.5,
+     "position": 69,
+     "queued": 190.9,
+     "run": 89.6,
+     "chars": 1453,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 293.8,
+     "position": 78,
+     "queued": 192.8,
+     "run": 101.0,
+     "chars": 1620,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 324.2,
+     "position": 77,
+     "queued": 186.5,
+     "run": 135.2,
+     "chars": 1629,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 174.8,
+     "position": 68,
+     "queued": 165.5,
+     "run": 7.7,
+     "chars": 63,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 207.8,
+     "position": 54,
+     "queued": 119.4,
+     "run": 86.2,
+     "chars": 1337,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 622.2,
+   "total": 1207.5
+  },
+  {
+   "user": 18,
+   "name": "캠핑장 빈자리#18",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 425.8,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 424.2,
+    "research_facts": 5
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.2
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.2
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.2
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.3,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.3,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 172.1,
+     "position": 28,
+     "queued": 122.6,
+     "run": 49.2,
+     "chars": 65,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 245.4,
+     "position": 29,
+     "queued": 122.9,
+     "run": 120.1,
+     "chars": 1291,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 256.0,
+     "position": 30,
+     "queued": 123.2,
+     "run": 130.9,
+     "chars": 1585,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 303.7,
+     "position": 79,
+     "queued": 216.8,
+     "run": 84.6,
+     "chars": 1565,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 316.6,
+     "position": 78,
+     "queued": 191.6,
+     "run": 124.8,
+     "chars": 1527,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 312.1,
+     "position": 78,
+     "queued": 198.3,
+     "run": 112.3,
+     "chars": 1441,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 154.7,
+     "position": 62,
+     "queued": 140.4,
+     "run": 13.6,
+     "chars": 59,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 187.4,
+     "position": 43,
+     "queued": 96.8,
+     "run": 90.1,
+     "chars": 1560,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 642.9,
+   "total": 1220.2
+  },
+  {
+   "user": 13,
+   "name": "외국인 행정#13",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 416.8,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 414.6,
+    "research_facts": 6
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.1
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.4
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.5
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 164.8,
+     "position": 23,
+     "queued": 118.1,
+     "run": 45.4,
+     "chars": 75,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 238.5,
+     "position": 24,
+     "queued": 120.2,
+     "run": 117.9,
+     "chars": 1425,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 251.0,
+     "position": 25,
+     "queued": 120.8,
+     "run": 129.9,
+     "chars": 1406,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 286.8,
+     "position": 70,
+     "queued": 191.1,
+     "run": 94.7,
+     "chars": 1721,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 269.0,
+     "position": 79,
+     "queued": 189.4,
+     "run": 79.0,
+     "chars": 1468,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 329.5,
+     "position": 79,
+     "queued": 191.7,
+     "run": 137.1,
+     "chars": 1552,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 174.5,
+     "position": 67,
+     "queued": 162.3,
+     "run": 11.2,
+     "chars": 75,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 260.3,
+     "position": 60,
+     "queued": 135.1,
+     "run": 125.1,
+     "chars": 1192,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 626.6,
+   "total": 1229.7
+  },
+  {
+   "user": 16,
+   "name": "딸기 농장 체험#16",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 425.6,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 423.6,
+    "research_facts": 2
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.3
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.2,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.3
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.2,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.7
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.2,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.3,
+     "facts": 2,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 167.0,
+     "position": 25,
+     "queued": 114.8,
+     "run": 51.3,
+     "chars": 76,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 263.8,
+     "position": 27,
+     "queued": 121.8,
+     "run": 139.6,
+     "chars": 1658,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 278.5,
+     "position": 26,
+     "queued": 115.9,
+     "run": 162.2,
+     "chars": 1792,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 324.1,
+     "position": 78,
+     "queued": 214.8,
+     "run": 106.9,
+     "chars": 1600,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 334.9,
+     "position": 79,
+     "queued": 216.6,
+     "run": 118.1,
+     "chars": 1603,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 324.2,
+     "position": 79,
+     "queued": 209.2,
+     "run": 114.0,
+     "chars": 1660,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 147.0,
+     "position": 61,
+     "queued": 138.8,
+     "run": 7.7,
+     "chars": 67,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 161.9,
+     "position": 34,
+     "queued": 68.4,
+     "run": 91.9,
+     "chars": 1497,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 637.7,
+   "total": 1231.2
+  },
+  {
+   "user": 32,
+   "name": "경단녀 돌봄#32",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 404.1,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 401.4,
+    "research_facts": 8
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.8
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.0
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.0
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.8
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.7
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 7.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 5.6
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.7
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 180.2,
+     "position": 20,
+     "queued": 124.4,
+     "run": 53.5,
+     "chars": 72,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 256.0,
+     "position": 19,
+     "queued": 118.1,
+     "run": 137.6,
+     "chars": 1429,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 278.7,
+     "position": 21,
+     "queued": 127.7,
+     "run": 149.8,
+     "chars": 1735,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 293.8,
+     "position": 73,
+     "queued": 206.6,
+     "run": 85.8,
+     "chars": 1424,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 306.5,
+     "position": 76,
+     "queued": 187.2,
+     "run": 119.2,
+     "chars": 1528,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 301.5,
+     "position": 79,
+     "queued": 198.4,
+     "run": 102.8,
+     "chars": 1432,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 166.8,
+     "position": 65,
+     "queued": 153.7,
+     "run": 11.7,
+     "chars": 63,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 220.2,
+     "position": 51,
+     "queued": 112.5,
+     "run": 105.6,
+     "chars": 1524,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 629.3,
+   "total": 1231.8
+  },
+  {
+   "user": 7,
+   "name": "반려견 산책#7",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 523.0,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 520.6,
+    "research_facts": 7
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.1
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 215.2,
+     "position": 64,
+     "queued": 164.0,
+     "run": 51.2,
+     "chars": 87,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 301.8,
+     "position": 63,
+     "queued": 163.4,
+     "run": 137.2,
+     "chars": 1417,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 324.1,
+     "position": 62,
+     "queued": 163.1,
+     "run": 158.6,
+     "chars": 1643,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 322.4,
+     "position": 79,
+     "queued": 210.1,
+     "run": 111.1,
+     "chars": 1653,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 291.3,
+     "position": 72,
+     "queued": 170.0,
+     "run": 120.3,
+     "chars": 1559,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.1,
+     "position": 0,
+     "queued": 0.0,
+     "run": 3.7,
+     "chars": 63,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 296.5,
+     "position": 70,
+     "queued": 174.1,
+     "run": 121.1,
+     "chars": 1664,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 131.6,
+     "position": 23,
+     "queued": 36.9,
+     "run": 92.8,
+     "chars": 1569,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 783.2,
+   "total": 1237.2
+  },
+  {
+   "user": 20,
+   "name": "동네 세탁#20",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 559.7,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 557.6,
+    "research_facts": 8
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.4
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.4
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.4
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 260.7,
+     "position": 70,
+     "queued": 200.2,
+     "run": 60.1,
+     "chars": 75,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 336.9,
+     "position": 68,
+     "queued": 193.9,
+     "run": 141.7,
+     "chars": 1484,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 352.2,
+     "position": 69,
+     "queued": 196.2,
+     "run": 153.8,
+     "chars": 1459,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 291.2,
+     "position": 73,
+     "queued": 172.0,
+     "run": 118.2,
+     "chars": 1645,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 255.8,
+     "position": 62,
+     "queued": 144.1,
+     "run": 111.1,
+     "chars": 1719,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 15.1,
+     "position": 0,
+     "queued": 0.0,
+     "run": 14.1,
+     "chars": 64,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 258.3,
+     "position": 61,
+     "queued": 136.2,
+     "run": 119.9,
+     "chars": 1782,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 83.3,
+     "position": 0,
+     "queued": 0.0,
+     "run": 81.6,
+     "chars": 1456,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 865.4,
+   "total": 1240.0
+  },
+  {
+   "user": 6,
+   "name": "주차 공유#6",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 501.1,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 498.6,
+    "research_facts": 5
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.1
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.1
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.1
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.7
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.7
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.7
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 5,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.5
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 202.4,
+     "position": 53,
+     "queued": 157.7,
+     "run": 42.5,
+     "chars": 73,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 291.5,
+     "position": 55,
+     "queued": 158.6,
+     "run": 132.6,
+     "chars": 1762,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 336.8,
+     "position": 54,
+     "queued": 158.3,
+     "run": 178.3,
+     "chars": 1562,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 319.3,
+     "position": 79,
+     "queued": 208.2,
+     "run": 109.5,
+     "chars": 1400,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 301.4,
+     "position": 76,
+     "queued": 177.8,
+     "run": 122.0,
+     "chars": 1720,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 73.3,
+     "position": 34,
+     "queued": 69.5,
+     "run": 3.1,
+     "chars": 61,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 268.4,
+     "position": 70,
+     "queued": 166.6,
+     "run": 100.1,
+     "chars": 1403,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 101.1,
+     "position": 7,
+     "queued": 7.5,
+     "run": 91.2,
+     "chars": 1785,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 748.5,
+   "total": 1240.0
+  },
+  {
+   "user": 34,
+   "name": "헬스장 유휴#34",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 471.9,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 470.0,
+    "research_facts": 6
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.8
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.8
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.8
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.0,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.1
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.0,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.1
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.6
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 199.9,
+     "position": 47,
+     "queued": 146.7,
+     "run": 52.3,
+     "chars": 76,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 281.3,
+     "position": 49,
+     "queued": 150.5,
+     "run": 128.5,
+     "chars": 1452,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 306.3,
+     "position": 48,
+     "queued": 150.5,
+     "run": 154.3,
+     "chars": 1846,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 305.9,
+     "position": 79,
+     "queued": 195.5,
+     "run": 108.4,
+     "chars": 1478,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 316.7,
+     "position": 79,
+     "queued": 196.2,
+     "run": 120.1,
+     "chars": 1524,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 309.4,
+     "position": 77,
+     "queued": 188.2,
+     "run": 119.4,
+     "chars": 1528,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 114.1,
+     "position": 47,
+     "queued": 105.8,
+     "run": 7.1,
+     "chars": 88,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 126.4,
+     "position": 19,
+     "queued": 30.5,
+     "run": 93.9,
+     "chars": 1604,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 716.8,
+   "total": 1241.3
+  },
+  {
+   "user": 17,
+   "name": "경단녀 돌봄#17",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 505.2,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 503.7,
+    "research_facts": 8
+   },
+   "research": {
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.2
+    },
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.2
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.2
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 215.7,
+     "position": 61,
+     "queued": 165.5,
+     "run": 48.8,
+     "chars": 74,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 304.5,
+     "position": 58,
+     "queued": 162.2,
+     "run": 139.9,
+     "chars": 1633,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 308.9,
+     "position": 57,
+     "queued": 156.9,
+     "run": 150.1,
+     "chars": 1599,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 311.7,
+     "position": 79,
+     "queued": 210.7,
+     "run": 100.1,
+     "chars": 1410,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 73.2,
+     "position": 31,
+     "queued": 62.8,
+     "run": 8.1,
+     "chars": 79,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 306.5,
+     "position": 76,
+     "queued": 177.9,
+     "run": 126.1,
+     "chars": 1563,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 311.5,
+     "position": 75,
+     "queued": 176.4,
+     "run": 135.1,
+     "chars": 1659,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 93.6,
+     "position": 1,
+     "queued": 4.7,
+     "run": 87.1,
+     "chars": 1398,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 766.0,
+   "total": 1244.5
+  },
+  {
+   "user": 25,
+   "name": "소상공인 SNS#25",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 439.5,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 435.6,
+    "research_facts": 3
+   },
+   "research": {
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.8
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.8
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 185.1,
+     "position": 38,
+     "queued": 140.8,
+     "run": 43.8,
+     "chars": 68,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 269.0,
+     "position": 39,
+     "queued": 142.4,
+     "run": 124.6,
+     "chars": 1691,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 278.0,
+     "position": 40,
+     "queued": 142.5,
+     "run": 133.0,
+     "chars": 1839,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 294.0,
+     "position": 78,
+     "queued": 209.7,
+     "run": 84.2,
+     "chars": 1528,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 319.0,
+     "position": 79,
+     "queued": 210.1,
+     "run": 106.6,
+     "chars": 1587,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 324.5,
+     "position": 79,
+     "queued": 212.7,
+     "run": 110.6,
+     "chars": 1429,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 146.6,
+     "position": 61,
+     "queued": 138.9,
+     "run": 5.7,
+     "chars": 63,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 174.5,
+     "position": 33,
+     "queued": 67.2,
+     "run": 106.2,
+     "chars": 1917,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 669.6,
+   "total": 1247.0
+  },
+  {
+   "user": 38,
+   "name": "어르신 약 관리#38",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 505.2,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 503.6,
+    "research_facts": 3
+   },
+   "research": {
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.6
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.5
+    },
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 4.2
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 3,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.2
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 225.5,
+     "position": 59,
+     "queued": 163.5,
+     "run": 61.8,
+     "chars": 66,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 291.2,
+     "position": 56,
+     "queued": 154.5,
+     "run": 135.4,
+     "chars": 1063,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 303.8,
+     "position": 60,
+     "queued": 163.8,
+     "run": 139.5,
+     "chars": 1517,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 289.4,
+     "position": 75,
+     "queued": 175.1,
+     "run": 113.3,
+     "chars": 1458,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 372.1,
+     "position": 79,
+     "queued": 215.1,
+     "run": 155.6,
+     "chars": 1362,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 306.3,
+     "position": 76,
+     "queued": 177.3,
+     "run": 126.6,
+     "chars": 1654,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 7.6,
+     "position": 2,
+     "queued": 1.8,
+     "run": 4.7,
+     "chars": 63,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 103.5,
+     "position": 5,
+     "queued": 6.0,
+     "run": 96.2,
+     "chars": 1379,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 775.7,
+   "total": 1247.0
+  },
+  {
+   "user": 11,
+   "name": "중고 교재#11",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 493.7,
+    "cards": 0,
+    "queued": 0.0,
+    "run": 491.0,
+    "research_facts": 6
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.8
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.8
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 210.4,
+     "position": 44,
+     "queued": 146.1,
+     "run": 62.1,
+     "chars": 69,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 278.5,
+     "position": 46,
+     "queued": 154.2,
+     "run": 122.6,
+     "chars": 1440,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 283.6,
+     "position": 45,
+     "queued": 149.6,
+     "run": 133.7,
+     "chars": 1524,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 278.9,
+     "position": 79,
+     "queued": 194.0,
+     "run": 82.5,
+     "chars": 1496,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 336.3,
+     "position": 79,
+     "queued": 213.2,
+     "run": 122.2,
+     "chars": 1701,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 131.7,
+     "position": 56,
+     "queued": 122.5,
+     "run": 7.2,
+     "chars": 67,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 344.6,
+     "position": 79,
+     "queued": 211.3,
+     "run": 131.6,
+     "chars": 1499,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 136.4,
+     "position": 20,
+     "queued": 32.8,
+     "run": 103.4,
+     "chars": 1553,
+     "error": null
+    }
+   },
+   "think": 0,
+   "first_draft": 706.9,
+   "total": 1247.8
+  },
+  {
+   "user": 37,
+   "name": "반려견 산책#37",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 428.2,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 424.6,
+    "research_facts": 6
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.7
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.2,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.7
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.2,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.7
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.3,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.2,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.3,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.9
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.7
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.6
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 190.2,
+     "position": 35,
+     "queued": 129.6,
+     "run": 59.6,
+     "chars": 74,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 258.3,
+     "position": 37,
+     "queued": 136.9,
+     "run": 121.2,
+     "chars": 1444,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 278.6,
+     "position": 36,
+     "queued": 136.8,
+     "run": 140.3,
+     "chars": 1490,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 335.3,
+     "position": 79,
+     "queued": 205.1,
+     "run": 129.9,
+     "chars": 1937,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 308.8,
+     "position": 78,
+     "queued": 202.5,
+     "run": 105.8,
+     "chars": 1591,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 316.5,
+     "position": 78,
+     "queued": 207.6,
+     "run": 108.0,
+     "chars": 1360,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 128.9,
+     "position": 54,
+     "queued": 119.5,
+     "run": 7.6,
+     "chars": 89,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 207.7,
+     "position": 40,
+     "queued": 90.6,
+     "run": 116.0,
+     "chars": 1698,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 663.4,
+   "total": 1247.9
+  },
+  {
+   "user": 33,
+   "name": "캠핑장 빈자리#33",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 489.6,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 488.0,
+    "research_facts": 6
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.7,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.4
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.7,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.4
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.7,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.4
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.4
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.4
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.4
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.8
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 6,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.8
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 197.5,
+     "position": 50,
+     "queued": 146.9,
+     "run": 50.5,
+     "chars": 71,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 278.6,
+     "position": 52,
+     "queued": 158.9,
+     "run": 118.2,
+     "chars": 1415,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 311.8,
+     "position": 51,
+     "queued": 150.2,
+     "run": 161.2,
+     "chars": 1940,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 319.6,
+     "position": 77,
+     "queued": 208.1,
+     "run": 109.1,
+     "chars": 1602,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 88.6,
+     "position": 38,
+     "queued": 83.8,
+     "run": 4.1,
+     "chars": 74,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 299.1,
+     "position": 76,
+     "queued": 181.9,
+     "run": 115.8,
+     "chars": 1504,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 334.8,
+     "position": 77,
+     "queued": 190.4,
+     "run": 142.1,
+     "chars": 1890,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 108.8,
+     "position": 7,
+     "queued": 8.2,
+     "run": 100.1,
+     "chars": 1698,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 732.2,
+   "total": 1249.2
+  },
+  {
+   "user": 8,
+   "name": "어르신 약 관리#8",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 543.3,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 541.3,
+    "research_facts": 4
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.6
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.2,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.7
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.2,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.6
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.0,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.6
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.6
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.6
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.6
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 212.4,
+     "position": 65,
+     "queued": 166.8,
+     "run": 43.5,
+     "chars": 79,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 312.1,
+     "position": 66,
+     "queued": 171.1,
+     "run": 139.2,
+     "chars": 1755,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 321.9,
+     "position": 67,
+     "queued": 171.2,
+     "run": 148.3,
+     "chars": 1677,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 324.9,
+     "position": 79,
+     "queued": 197.7,
+     "run": 125.7,
+     "chars": 1521,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 25.3,
+     "position": 14,
+     "queued": 20.2,
+     "run": 3.7,
+     "chars": 71,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 283.1,
+     "position": 68,
+     "queued": 166.9,
+     "run": 115.8,
+     "chars": 1771,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 274.0,
+     "position": 67,
+     "queued": 162.2,
+     "run": 111.0,
+     "chars": 1564,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 98.7,
+     "position": 0,
+     "queued": 3.5,
+     "run": 94.5,
+     "chars": 1671,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 800.7,
+   "total": 1249.6
+  },
+  {
+   "user": 9,
+   "name": "농산물 직거래#9",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 446.9,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 443.3,
+    "research_facts": 7
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.1
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.0
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 3.0
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.6
+    },
+    "q8": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 7,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.6
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 194.8,
+     "position": 41,
+     "queued": 144.9,
+     "run": 48.0,
+     "chars": 79,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 278.4,
+     "position": 42,
+     "queued": 145.4,
+     "run": 131.7,
+     "chars": 1651,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 313.8,
+     "position": 43,
+     "queued": 146.7,
+     "run": 166.3,
+     "chars": 1890,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 329.6,
+     "position": 79,
+     "queued": 198.4,
+     "run": 130.2,
+     "chars": 1671,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 332.6,
+     "position": 78,
+     "queued": 206.6,
+     "run": 125.6,
+     "chars": 1491,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 301.5,
+     "position": 79,
+     "queued": 194.0,
+     "run": 106.2,
+     "chars": 1549,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 114.0,
+     "position": 49,
+     "queued": 109.5,
+     "run": 3.9,
+     "chars": 63,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 149.1,
+     "position": 23,
+     "queued": 39.5,
+     "run": 108.4,
+     "chars": 1085,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 686.7,
+   "total": 1252.1
+  },
+  {
+   "user": 27,
+   "name": "공유 주방#27",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 589.7,
+    "cards": 6,
+    "queued": 0.0,
+    "run": 587.3,
+    "research_facts": 8
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.8
+    },
+    "q2": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.8
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 5.1,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.8
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.9
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.4
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 8,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.8
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 266.4,
+     "position": 77,
+     "queued": 209.6,
+     "run": 56.6,
+     "chars": 73,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 355.0,
+     "position": 78,
+     "queued": 209.6,
+     "run": 143.8,
+     "chars": 1294,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 375.1,
+     "position": 79,
+     "queued": 211.3,
+     "run": 163.1,
+     "chars": 1694,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 293.5,
+     "position": 68,
+     "queued": 166.3,
+     "run": 126.3,
+     "chars": 1661,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 222.9,
+     "position": 56,
+     "queued": 120.7,
+     "run": 101.1,
+     "chars": 1504,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 5.0,
+     "position": 0,
+     "queued": 0.0,
+     "run": 3.7,
+     "chars": 67,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 240.4,
+     "position": 51,
+     "queued": 113.3,
+     "run": 125.6,
+     "chars": 1668,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 58.0,
+     "position": 0,
+     "queued": 0.0,
+     "run": 57.2,
+     "chars": 1439,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 901.1,
+   "total": 1252.6
+  },
+  {
+   "user": 29,
+   "name": "동네 공방 클래스#29",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 587.6,
+    "cards": 5,
+    "queued": 0.0,
+    "run": 584.0,
+    "research_facts": 4
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.1
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.0
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.4
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.5
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.5
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.8
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 0.7
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 253.2,
+     "position": 74,
+     "queued": 207.6,
+     "run": 44.8,
+     "chars": 82,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 337.0,
+     "position": 75,
+     "queued": 209.9,
+     "run": 126.2,
+     "chars": 1572,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 375.0,
+     "position": 76,
+     "queued": 211.4,
+     "run": 163.0,
+     "chars": 1377,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 271.2,
+     "position": 69,
+     "queued": 165.5,
+     "run": 105.3,
+     "chars": 1194,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 10.2,
+     "position": 0,
+     "queued": 1.8,
+     "run": 6.9,
+     "chars": 64,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 217.8,
+     "position": 52,
+     "queued": 114.5,
+     "run": 102.4,
+     "chars": 1596,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 80.9,
+     "position": 0,
+     "queued": 0.0,
+     "run": 79.6,
+     "chars": 1282,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 283.2,
+     "position": 61,
+     "queued": 136.2,
+     "run": 146.1,
+     "chars": 1685,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 885.8,
+   "total": 1252.8
+  },
+  {
+   "user": 26,
+   "name": "중고 교재#26",
+   "t0": 0.1,
+   "intake": {
+    "ok": true,
+    "sec": 583.8,
+    "cards": 7,
+    "queued": 0.0,
+    "run": 580.4,
+    "research_facts": 4
+   },
+   "research": {
+    "q1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q2": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.3
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.8
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.8
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 2.6,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 1.8
+    },
+    "q8": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    },
+    "q10": {
+     "ok": true,
+     "sec": 2.5,
+     "facts": 4,
+     "cached": false,
+     "queued": 0.0,
+     "run": 2.3
+    }
+   },
+   "generate": {
+    "q1": {
+     "ok": true,
+     "sec": 253.1,
+     "position": 70,
+     "queued": 192.9,
+     "run": 57.6,
+     "chars": 97,
+     "error": null
+    },
+    "q2": {
+     "ok": true,
+     "sec": 349.7,
+     "position": 71,
+     "queued": 199.4,
+     "run": 148.7,
+     "chars": 1589,
+     "error": null
+    },
+    "q3_1": {
+     "ok": true,
+     "sec": 364.8,
+     "position": 72,
+     "queued": 199.9,
+     "run": 162.8,
+     "chars": 1856,
+     "error": null
+    },
+    "q3_2": {
+     "ok": true,
+     "sec": 296.6,
+     "position": 70,
+     "queued": 161.8,
+     "run": 133.9,
+     "chars": 1612,
+     "error": null
+    },
+    "q4_2": {
+     "ok": true,
+     "sec": 227.8,
+     "position": 57,
+     "queued": 129.7,
+     "run": 97.3,
+     "chars": 1437,
+     "error": null
+    },
+    "q10": {
+     "ok": true,
+     "sec": 20.2,
+     "position": 0,
+     "queued": 0.0,
+     "run": 18.1,
+     "chars": 59,
+     "error": null
+    },
+    "q4_1": {
+     "ok": true,
+     "sec": 243.0,
+     "position": 54,
+     "queued": 119.5,
+     "run": 122.1,
+     "chars": 1497,
+     "error": null
+    },
+    "q8": {
+     "ok": true,
+     "sec": 75.7,
+     "position": 0,
+     "queued": 0.0,
+     "run": 73.5,
+     "chars": 1646,
+     "error": null
+    }
+   },
+   "think": 45,
+   "first_draft": 881.9,
+   "total": 1254.2
+  }
+ ],
+ "samples": [
+  {
+   "t": 1788366268.0,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366274.4,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366284.5,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366294.6,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366304.6,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366314.7,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366324.7,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366332.2,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366337.3,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366346.6,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366351.7,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366361.1,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366371.1,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366377.2,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366382.4,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366392.4,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366402.7,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366408.2,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366414.2,
+   "vllm_running": 6.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.027927927927927976,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366424.2,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 4.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.018018018018018056,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366431.0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.16216216216216217,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366441.1,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.16576576576576574,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366451.1,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.16756756756756752,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366461.2,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.1711711711711712,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366471.2,
+   "vllm_running": 40.0,
+   "vllm_waiting": 2.0,
+   "kv_perc": 0.20450450450450453,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366481.3,
+   "vllm_running": 45.0,
+   "vllm_waiting": 5.0,
+   "kv_perc": 0.23693693693693696,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366491.3,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 53.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.28558558558558556,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366497.8,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 64.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33783783783783783,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366504.7,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 64.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3423423423423423,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366510.2,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 65.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.35945945945945945,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366516.8,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 63.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3540540540540541,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366522.0,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 57.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3306306306306306,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366527.2,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 55.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.327027027027027,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366532.3,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 54.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33783783783783783,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366537.4,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 52.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33333333333333337,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366542.4,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 52.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3450450450450451,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366547.5,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 46.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3144144144144144,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366552.6,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 46.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3198198198198198,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366557.7,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 43.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3063063063063063,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366562.8,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 42.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3063063063063063,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366567.9,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 41.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.29729729729729726,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366573.0,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2954954954954955,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366578.2,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30090090090090094,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366583.2,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3063063063063063,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366588.3,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30990990990990996,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366593.5,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3153153153153153,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366598.6,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.31351351351351353,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366603.7,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3207207207207208,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366608.9,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32432432432432434,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366613.9,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.318018018018018,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366619.0,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30990990990990996,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366624.0,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2936936936936937,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366629.0,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3036036036036036,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366634.1,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2765765765765765,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366639.1,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.26306306306306304,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366644.2,
+   "api_running": 3,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.26036036036036037,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366649.2,
+   "api_running": 3,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 34.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2675675675675676,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366654.3,
+   "api_running": 6,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 30.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.24864864864864866,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366659.3,
+   "api_running": 6,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 29.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.24144144144144142,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366664.3,
+   "api_running": 15,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.25135135135135134,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366669.4,
+   "api_running": 15,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 32.0,
+   "vllm_waiting": 4.0,
+   "kv_perc": 0.23513513513513518,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366674.5,
+   "api_running": 18,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 7.0,
+   "kv_perc": 0.22522522522522526,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366679.6,
+   "api_running": 24,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 3.0,
+   "kv_perc": 0.23333333333333328,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366684.6,
+   "api_running": 24,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 26.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.19279279279279282,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366689.7,
+   "api_running": 30,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 28.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2072072072072072,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366694.8,
+   "api_running": 36,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 34.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.22612612612612615,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366699.9,
+   "api_running": 36,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.23783783783783785,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366705.0,
+   "api_running": 40,
+   "api_queued": 2,
+   "api_error": 0,
+   "vllm_running": 29.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.19729729729729728,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366710.0,
+   "api_running": 40,
+   "api_queued": 2,
+   "api_error": 0,
+   "vllm_running": 28.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.1945945945945946,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366715.1,
+   "api_running": 40,
+   "api_queued": 20,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2207207207207207,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366720.2,
+   "api_running": 40,
+   "api_queued": 23,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.24864864864864866,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366725.2,
+   "api_running": 40,
+   "api_queued": 23,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.24684684684684688,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366730.3,
+   "api_running": 40,
+   "api_queued": 26,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 1.0,
+   "kv_perc": 0.2792792792792793,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366735.4,
+   "api_running": 40,
+   "api_queued": 26,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.29639639639639637,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366740.5,
+   "api_running": 40,
+   "api_queued": 34,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.29639639639639637,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366745.5,
+   "api_running": 40,
+   "api_queued": 38,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3153153153153153,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366750.6,
+   "api_running": 40,
+   "api_queued": 38,
+   "api_error": 0,
+   "vllm_running": 42.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33513513513513515,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366755.6,
+   "api_running": 40,
+   "api_queued": 41,
+   "api_error": 0
+  },
+  {
+   "t": 1788366760.6,
+   "api_running": 40,
+   "api_queued": 44,
+   "api_error": 0,
+   "vllm_running": 41.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33513513513513515,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366765.6,
+   "api_running": 40,
+   "api_queued": 47,
+   "api_error": 0,
+   "vllm_running": 45.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.36036036036036034,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366770.7,
+   "api_running": 40,
+   "api_queued": 47,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32432432432432434,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366775.7,
+   "api_running": 40,
+   "api_queued": 47,
+   "api_error": 0,
+   "vllm_running": 44.0,
+   "vllm_waiting": 2.0,
+   "kv_perc": 0.3432432432432433,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366780.8,
+   "api_running": 40,
+   "api_queued": 47,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3279279279279279,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366785.9,
+   "api_running": 40,
+   "api_queued": 50,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3315315315315316,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366791.0,
+   "api_running": 40,
+   "api_queued": 50,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 1.0,
+   "kv_perc": 0.3288288288288288,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366796.1,
+   "api_running": 40,
+   "api_queued": 50,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3324324324324325,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366801.1,
+   "api_running": 40,
+   "api_queued": 50,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3297297297297297,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366806.2,
+   "api_running": 40,
+   "api_queued": 53,
+   "api_error": 0,
+   "vllm_running": 41.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.34864864864864864,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366811.3,
+   "api_running": 40,
+   "api_queued": 53,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33333333333333337,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366816.5,
+   "api_running": 40,
+   "api_queued": 56,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3450450450450451,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366821.6,
+   "api_running": 40,
+   "api_queued": 62,
+   "api_error": 0,
+   "vllm_running": 43.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.36936936936936937,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366826.7,
+   "api_running": 40,
+   "api_queued": 62,
+   "api_error": 0,
+   "vllm_running": 42.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.363063063063063,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366831.7,
+   "api_running": 40,
+   "api_queued": 62,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3387387387387387,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366836.8,
+   "api_running": 40,
+   "api_queued": 65,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32252252252252256,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366841.9,
+   "api_running": 40,
+   "api_queued": 64,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3144144144144144,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366847.0,
+   "api_running": 40,
+   "api_queued": 64,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30900900900900896,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366852.0,
+   "api_running": 40,
+   "api_queued": 63,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.28648648648648645,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366857.1,
+   "api_running": 40,
+   "api_queued": 68,
+   "api_error": 0,
+   "vllm_running": 30.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.23873873873873874,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366862.2,
+   "api_running": 40,
+   "api_queued": 66,
+   "api_error": 0,
+   "vllm_running": 28.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2189189189189189,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366867.2,
+   "api_running": 40,
+   "api_queued": 68,
+   "api_error": 0,
+   "vllm_running": 29.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.22162162162162158,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366872.3,
+   "api_running": 40,
+   "api_queued": 68,
+   "api_error": 0,
+   "vllm_running": 27.0,
+   "vllm_waiting": 1.0,
+   "kv_perc": 0.2081081081081081,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366877.4,
+   "api_running": 40,
+   "api_queued": 71,
+   "api_error": 0,
+   "vllm_running": 30.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.23693693693693696,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366882.6,
+   "api_running": 40,
+   "api_queued": 71,
+   "api_error": 0,
+   "vllm_running": 29.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.22252252252252247,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366887.6,
+   "api_running": 40,
+   "api_queued": 71,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.245945945945946,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366892.7,
+   "api_running": 40,
+   "api_queued": 71,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.25045045045045045,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366897.7,
+   "api_running": 40,
+   "api_queued": 74,
+   "api_error": 0,
+   "vllm_running": 30.0,
+   "vllm_waiting": 2.0,
+   "kv_perc": 0.23963963963963963,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366902.8,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2675675675675676,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366907.9,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2432432432432432,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366913.0,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 32.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.245945945945946,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366918.0,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.27747747747747753,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366923.1,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 34.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.27477477477477474,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366928.2,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2711711711711712,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366933.2,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2918918918918919,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366938.3,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.27297297297297296,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366943.4,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 34.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2810810810810811,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366948.4,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2918918918918919,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366953.6,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2801801801801802,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366958.7,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2918918918918919,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366963.7,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.29729729729729726,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366968.8,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3054054054054054,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366973.8,
+   "api_running": 40,
+   "api_queued": 77,
+   "api_error": 0,
+   "vllm_running": 32.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2576576576576577,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366978.8,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 1.0,
+   "kv_perc": 0.27747747747747753,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366983.9,
+   "api_running": 40,
+   "api_queued": 77,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.25225225225225223,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366989.0,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.24774774774774777,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366994.0,
+   "api_running": 40,
+   "api_queued": 78,
+   "api_error": 0,
+   "vllm_running": 32.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2576576576576577,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788366999.1,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.26396396396396393,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367004.1,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.25045045045045045,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367009.3,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 30.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.24684684684684688,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367014.3,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 32.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2657657657657657,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367019.4,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 34.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.27567567567567564,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367024.5,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 32.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2567567567567568,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367029.6,
+   "api_running": 40,
+   "api_queued": 78,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2693693693693694,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367034.6,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.28738738738738734,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367039.7,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 34.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.27387387387387385,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367044.8,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2954954954954955,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367049.9,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3045045045045045,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367054.9,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.31081081081081086,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367059.9,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3198198198198198,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367065.0,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3306306306306306,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367070.0,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32162162162162167,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367075.0,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.318018018018018,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367080.1,
+   "api_running": 40,
+   "api_queued": 79,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30900900900900896,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367085.1,
+   "api_running": 40,
+   "api_queued": 80,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3153153153153153,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367090.3,
+   "api_running": 40,
+   "api_queued": 76,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3063063063063063,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367095.3,
+   "api_running": 40,
+   "api_queued": 78,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3144144144144144,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367100.4,
+   "api_running": 40,
+   "api_queued": 78,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2900900900900901,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367105.5,
+   "api_running": 40,
+   "api_queued": 76,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.290990990990991,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367110.6,
+   "api_running": 40,
+   "api_queued": 77,
+   "api_error": 0,
+   "vllm_running": 35.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.28738738738738734,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367115.7,
+   "api_running": 40,
+   "api_queued": 77,
+   "api_error": 0,
+   "vllm_running": 32.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.254054054054054,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367120.7,
+   "api_running": 40,
+   "api_queued": 76,
+   "api_error": 0,
+   "vllm_running": 31.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.24144144144144142,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367125.8,
+   "api_running": 40,
+   "api_queued": 75,
+   "api_error": 0,
+   "vllm_running": 32.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.254054054054054,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367130.8,
+   "api_running": 40,
+   "api_queued": 73,
+   "api_error": 0,
+   "vllm_running": 34.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.27387387387387385,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367135.8,
+   "api_running": 40,
+   "api_queued": 73,
+   "api_error": 0,
+   "vllm_running": 34.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2792792792792793,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367140.9,
+   "api_running": 40,
+   "api_queued": 74,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.290990990990991,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367145.9,
+   "api_running": 40,
+   "api_queued": 72,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.290990990990991,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367151.0,
+   "api_running": 40,
+   "api_queued": 71,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3027027027027027,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367156.0,
+   "api_running": 40,
+   "api_queued": 70,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.31081081081081086,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367161.1,
+   "api_running": 40,
+   "api_queued": 69,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30180180180180183,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367166.2,
+   "api_running": 40,
+   "api_queued": 69,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3288288288288288,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367171.3,
+   "api_running": 40,
+   "api_queued": 68,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.327027027027027,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367176.4,
+   "api_running": 40,
+   "api_queued": 67,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3315315315315316,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367181.5,
+   "api_running": 40,
+   "api_queued": 68,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32162162162162167,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367186.6,
+   "api_running": 40,
+   "api_queued": 67,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33513513513513515,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367191.7,
+   "api_running": 40,
+   "api_queued": 66,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3324324324324325,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367196.8,
+   "api_running": 40,
+   "api_queued": 64,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3171171171171171,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367201.9,
+   "api_running": 40,
+   "api_queued": 63,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32252252252252256,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367207.0,
+   "api_running": 40,
+   "api_queued": 63,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.327027027027027,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367212.1,
+   "api_running": 40,
+   "api_queued": 63,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3171171171171171,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367217.0,
+   "api_running": 40,
+   "api_queued": 63,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3171171171171171,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367222.1,
+   "api_running": 40,
+   "api_queued": 63,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33423423423423426,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367227.1,
+   "api_running": 40,
+   "api_queued": 62,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3297297297297297,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367232.2,
+   "api_running": 40,
+   "api_queued": 62,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3171171171171171,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367237.2,
+   "api_running": 40,
+   "api_queued": 60,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30810810810810807,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367242.3,
+   "api_running": 40,
+   "api_queued": 60,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33423423423423426,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367247.5,
+   "api_running": 40,
+   "api_queued": 58,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3288288288288288,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367252.5,
+   "api_running": 40,
+   "api_queued": 57,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3189189189189189,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367257.5,
+   "api_running": 40,
+   "api_queued": 56,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3297297297297297,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367262.6,
+   "api_running": 40,
+   "api_queued": 54,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3198198198198198,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367267.7,
+   "api_running": 40,
+   "api_queued": 55,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32252252252252256,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367272.8,
+   "api_running": 40,
+   "api_queued": 53,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32522522522522523,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367277.8,
+   "api_running": 40,
+   "api_queued": 52,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3153153153153153,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367282.9,
+   "api_running": 40,
+   "api_queued": 51,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32522522522522523,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367288.0,
+   "api_running": 40,
+   "api_queued": 49,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.31351351351351353,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367293.0,
+   "api_running": 40,
+   "api_queued": 48,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.327027027027027,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367298.0,
+   "api_running": 40,
+   "api_queued": 44,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3054054054054054,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367303.1,
+   "api_running": 40,
+   "api_queued": 44,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3288288288288288,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367308.2,
+   "api_running": 40,
+   "api_queued": 40,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.31351351351351353,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367313.3,
+   "api_running": 40,
+   "api_queued": 39,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32342342342342345,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367318.4,
+   "api_running": 40,
+   "api_queued": 38,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32522522522522523,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367323.5,
+   "api_running": 40,
+   "api_queued": 38,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3162162162162162,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367328.6,
+   "api_running": 40,
+   "api_queued": 38,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3144144144144144,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367333.7,
+   "api_running": 40,
+   "api_queued": 37,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32432432432432434,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367338.8,
+   "api_running": 40,
+   "api_queued": 34,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30990990990990996,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367343.8,
+   "api_running": 40,
+   "api_queued": 33,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30180180180180183,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367348.9,
+   "api_running": 40,
+   "api_queued": 32,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3072072072072072,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367354.1,
+   "api_running": 40,
+   "api_queued": 31,
+   "api_error": 0
+  },
+  {
+   "t": 1788367359.1,
+   "api_running": 40,
+   "api_queued": 28,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33603603603603605,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367364.1,
+   "api_running": 40,
+   "api_queued": 26,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3171171171171171,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367369.2,
+   "api_running": 40,
+   "api_queued": 25,
+   "api_error": 0,
+   "vllm_running": 38.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3189189189189189,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367374.3,
+   "api_running": 40,
+   "api_queued": 23,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.327027027027027,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367379.3,
+   "api_running": 40,
+   "api_queued": 21,
+   "api_error": 0
+  },
+  {
+   "t": 1788367384.3,
+   "api_running": 40,
+   "api_queued": 19,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3315315315315316,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367389.4,
+   "api_running": 40,
+   "api_queued": 17,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32522522522522523,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367394.5,
+   "api_running": 40,
+   "api_queued": 14,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3207207207207208,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367399.6,
+   "api_running": 40,
+   "api_queued": 10,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32162162162162167,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367404.7,
+   "api_running": 40,
+   "api_queued": 9,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.33423423423423426,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367409.8,
+   "api_running": 40,
+   "api_queued": 7,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.32252252252252256,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367414.9,
+   "api_running": 40,
+   "api_queued": 2,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3162162162162162,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367420.0,
+   "api_running": 40,
+   "api_queued": 2,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3306306306306306,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367425.1,
+   "api_running": 40,
+   "api_queued": 1,
+   "api_error": 0,
+   "vllm_running": 39.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3144144144144144,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367430.1,
+   "api_running": 40,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 40.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3162162162162162,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367435.2,
+   "api_running": 38,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30000000000000004,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367440.3,
+   "api_running": 37,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3063063063063063,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367445.3,
+   "api_running": 37,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 37.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.3054054054054054,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367450.4,
+   "api_running": 36,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 36.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.30090090090090094,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367455.4,
+   "api_running": 33,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2810810810810811,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367460.5,
+   "api_running": 33,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 33.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.2792792792792793,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367465.6,
+   "api_running": 30,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 29.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.23513513513513518,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367470.7,
+   "api_running": 29,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 28.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.22882882882882882,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367475.8,
+   "api_running": 27,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 25.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.1963963963963964,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367480.8,
+   "api_running": 26,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 24.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.19099099099099104,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367485.8,
+   "api_running": 24,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 23.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.18828828828828825,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367490.9,
+   "api_running": 23,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 23.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.1936936936936937,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367495.9,
+   "api_running": 21,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 21.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.18558558558558558,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367501.0,
+   "api_running": 18,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 17.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.1468468468468469,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367506.1,
+   "api_running": 15,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 14.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.12072072072072071,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367511.2,
+   "api_running": 12,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 12.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.10720720720720722,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367516.3,
+   "api_running": 7,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 7.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.06216216216216219,
+   "preempt": 0.0
+  },
+  {
+   "t": 1788367521.4,
+   "api_running": 0,
+   "api_queued": 0,
+   "api_error": 0,
+   "vllm_running": 0.0,
+   "vllm_waiting": 0.0,
+   "kv_perc": 0.0,
+   "preempt": 0.0
+  }
+ ]
+}
