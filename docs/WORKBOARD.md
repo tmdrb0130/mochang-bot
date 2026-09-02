@@ -135,6 +135,8 @@
   - ✅ **네이버 (API HUB) 09:4x 발급 완료** — `.env` 에 `NAVER_CLIENT_ID/SECRET` 들어감. 세션1이 파이썬으로 실호출 1건
     (`/search/v1/news` query=창업) → 200, UTF-8 한글 정상, total 478만. **세션3: 어댑터를 HUB 규격으로 고친 뒤 실키 검증 1~2건 가능.**
     운영 `mochang-api` 는 아직 재시작 전(구 어댑터라 재시작해도 네이버 호출은 실패함 → 어댑터 수정 후 재시작).
+  - ✅ 10:0x `.env` 현황(값 확인 안 함, 이름만): `DATA_GO_KR_API_KEY`·`KOSIS_API_KEY`·`ECOS_API_KEY` 들어감.
+    `KCI_API_KEY` 신청 제출·승인 대기, `KIPRIS_API_KEY` 미신청. data.go.kr 는 상권정보·K-Startup 활용신청 기준.
   - 네이버 → **NAVER API HUB** (ncloud.com 계정 → 콘솔 > Application Services > NAVER API HUB > Application 등록 > 검색 API).
     developers.naver.com 은 신규 신청 종료. 뉴스·블로그·웹문서 공용, 전문자료는 종료됨. 콘솔에서 한도 알림 설정
   - KCI OpenAPI (kci.go.kr) — 학술 근거용 키. OpenAlex·Semantic Scholar 는 키 불필요
