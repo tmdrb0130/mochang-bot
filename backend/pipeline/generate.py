@@ -170,8 +170,10 @@ async def generate_one(client: LLMClient, form: dict) -> dict:
         except Exception:
             break
         merged, duplicates = polish_mod.dedupe_sentences(out.get("text") or "")
+        merged, foreign = polish_mod.drop_foreign_sentences(merged)      # 이어쓴 글은 후처리를 안 거쳤다
         if len(merged) <= len(text):
             break
+        polished["foreign_after_extend"] = polished.get("foreign_after_extend", 0) + foreign
         text, auto_extended = merged, True
         polished["duplicate"] = polished.get("duplicate", 0) + duplicates
     return {

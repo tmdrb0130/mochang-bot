@@ -32,7 +32,7 @@ SHORT_KEYS = ("customer", "solution")
 # 작업 15·18에서 확인한 대로 이 모델은 "쓰지 마라"가 아니라 "이것만 써라"를 지킨다 → 아예 안 보여 준다.
 ROLE_KEYS = {
     "q1": ("customer", "solution"),
-    "q2": ("problem", "customer", "evidence", "solution"),
+    "q2": ("problem", "customer", "evidence", "solution", "differentiators"),   # 대안의 한계는 Q2 도 쓴다
     "q3_1": ("differentiators", "solution", "problem"),
     "q3_2": ("revenue", "customer"),
     "q4_1": ("plan_6m", "solution", "revenue"),
@@ -72,8 +72,35 @@ def verified_stats(stats: list[str], references) -> list[str]:
     return kept
 
 
+def verified_differentiators(items: list[str], form: dict) -> list[str]:
+    """'기존 대안과 다른 점' 중 **근거 없는 서비스·업체 이름**이 든 항목을 버린다 (Q3_1_QUALITY 4절).
+
+    실측에서 골자가 참고자료에 없는 경쟁사 이름을 만들어 넣었고 본문이 그대로 '○○는 시뮬레이션이 없다' 고 단정했다.
+    이름 판정은 영문 브랜드 토큰(3자 이상)과 '○○ 서비스/앱/플랫폼' 꼴 — 입력·참고자료 어디에도 없으면 근거 없는 이름."""
+    blob = json.dumps({k: form.get(k) for k in ("idea", "answers", "references")}, ensure_ascii=False).lower()
+    kept = []
+    for item in items or []:
+        latin = re.findall(r"[A-Za-z][A-Za-z0-9.+-]{2,}", item)
+        korean_brand = re.findall(r"([가-힣A-Za-z0-9]{2,})\s*(?:앱|서비스|플랫폼)", item)
+        generic = {"ai", "mvp", "b2b", "b2c", "app", "sns", "iot",
+                   "기존", "유사", "범용", "해당", "다른", "일반", "자체", "우리", "저희", "이런", "같은", "경쟁", "타사"}
+        names = [n for n in latin + korean_brand if n.lower() not in generic]
+        unsupported = [n for n in names if n.lower() not in blob]
+        if unsupported and not any(n.lower() in blob for n in names):
+            continue
+        kept.append(item)
+    return kept
+
+
 def _clean(value) -> str:
     return " ".join(str(value or "").split())
+
+
+def voice_for(form: dict) -> str:
+    """전 문항이 같은 1인칭을 받도록 골자에 싣는 값. 팀원이 없으면 '저', 있으면 '저희'."""
+    team = str((form or {}).get("team") or "").strip()
+    solo = (not team) or ("없" in team) or team in ("0", "0명")
+    return "저" if solo else "저희"
 
 
 def normalize(raw: dict) -> dict:
@@ -97,6 +124,8 @@ def slice_for(outline: dict, question_id: str | None) -> dict:
     if not keys:
         return dict(outline)
     out = {k: outline.get(k) for k in keys if outline.get(k)}
+    if outline.get("voice"):
+        out["voice"] = outline["voice"]          # 1인칭은 모든 문항이 받는다
     stats = outline.get("key_stats") or []
     index = STAT_FOR.get(str(question_id or ""))
     if index is not None and len(stats) > index:
@@ -113,6 +142,8 @@ def format_outline(outline: dict, short: bool = False) -> str:
     }
     keys = SHORT_KEYS if short else OUTLINE_KEYS
     lines = []
+    if outline.get("voice"):
+        lines.append(f"- 1인칭: 처음부터 끝까지 '{outline['voice']}' 로 씁니다")
     for key in keys:
         value = outline.get(key)
         if not value:
@@ -135,6 +166,8 @@ async def build_outline(client: LLMClient, form: dict) -> dict:
         if start == -1 or end == -1:
             return {}
         out = normalize(json.loads(text[start:end + 1]))
+        out["voice"] = voice_for(form)          # 모델이 아니라 입력(팀원 수)이 정한다
+        out["differentiators"] = verified_differentiators(out["differentiators"], form)
         # 참고자료가 없으면 인용할 수치도 없고, 있어도 참고자료에 실제로 있는 숫자만 남긴다.
         # 모델이 "한국통계청에 따르면 70%" 같은 출처를 지어내는 일이 실호출에서 두 번 나왔다.
         out["key_stats"] = verified_stats(out["key_stats"], form.get("references"))

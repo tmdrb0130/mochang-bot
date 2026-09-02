@@ -58,8 +58,8 @@ def test_sentence_with_a_new_statistic_survives():
 @pytest.mark.parametrize("sentence,reason", [
     ("生活 속 불편을 해결합니다.", "이물"),
     ("まず 첫 달에는 준비합니다.", "이물"),
-    ("베타 사용자 500명을 모읍니다.", "상용구 수치"),
-    ("자금은 60%를 개발에 씁니다.", "상용구 수치"),
+    ("첫해 매출 1억을 목표로 합니다.", "상용구 수치"),
+    ("건당 5천 원을 받습니다.", "상용구 수치"),
     ("시장 규모는 2,340억 원입니다.", "근거 없는 수치"),
     ("1인 가구 10명에게 인터뷰했습니다.", "하지 않은 조사"),
 ])
@@ -86,12 +86,12 @@ def test_interview_is_fine_when_the_applicant_actually_did_it():
 
 @pytest.mark.asyncio
 async def test_problem_sentences_are_rewritten_in_one_call():
-    text = ("저희는 生活 속 불편을 해결합니다. 베타 사용자 500명을 모읍니다. 저는 앱을 만듭니다.")
+    text = ("저희는 生活 속 불편을 해결합니다. 첫해 매출 1억을 목표로 합니다. 저는 앱을 만듭니다.")
     client = Client("1. 저는 생활 속 불편을 해결합니다.\n2. 초기 사용자를 모읍니다.")
     out, report = await P.polish_text(client, text, SOLO)
 
     assert len(client.systems) == 1 and "문장 고쳐 쓰기" in client.systems[0]
-    assert "生活" not in out and "500명" not in out
+    assert "生活" not in out and "1억" not in out
     assert "저희" not in out and report["person"] == 1 and report["rewritten"] == 2
 
 
@@ -133,7 +133,7 @@ async def test_generate_one_runs_polish_and_reports_it():
 
 @pytest.mark.asyncio
 async def test_polish_can_be_turned_off():
-    text = "저희는 生活 속에서 500명을 모읍니다. " * 40
+    text = "저희는 生活 속에서 첫해 매출 1억을 냅니다. " * 40
     client = Client(text)
     out = await generate.generate_one(client, {**SOLO, "polish_settings": {"enabled": False},
                                                "auto_extend": {"enabled": False},
@@ -191,3 +191,16 @@ def test_duplicate_sentences_are_removed():
 def test_similarity_matches_the_measurement_tool():
     assert P.similarity("같은 문장입니다.", "같은 문장입니다.") == 1.0
     assert P.similarity("완전히 다른 이야기", "숫자와 통계 이야기") < 0.3
+
+
+def test_foreign_sentences_dropped_without_a_model_call():
+    text = "첫 문장입니다. 두 번째는 需求를 확인합니다. 세 번째 문장입니다."
+    out, n = P.drop_foreign_sentences(text)
+    assert n == 1 and "需求" not in out and out.startswith("첫 문장") and "세 번째" in out
+
+
+def test_short_questions_lose_a_leading_self_reference():
+    assert P.strip_leading_self("저는 딸기를 모아 포장해 보내는 공동 센터를 만듭니다.", "q1") ==         ("딸기를 모아 포장해 보내는 공동 센터를 만듭니다.", 1)
+    assert P.strip_leading_self("저는 그렇게 생각합니다.", "q2") == ("저는 그렇게 생각합니다.", 0)   # 긴 문항은 손대지 않음
+    assert P.strip_leading_self("딸기를 모아 보냅니다.", "q10") == ("딸기를 모아 보냅니다.", 0)
+

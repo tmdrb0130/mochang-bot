@@ -24,18 +24,21 @@ class PromptNotFound(Exception):
 # 라마는 "넷 중 골라 써라" 같은 선택형·금지형 지시를 지키지 못한다(실호출 25건 확인) — 그래서 코드가 **하나만**
 # 골라 넣는다. 문구는 여전히 md 에만 있고(q1_structures.md), 코드는 어느 것을 넣을지만 정한다.
 STRUCTURES_FILE = "q1_structures.md"
+# 짧은 문항별 짜임 파일 — Q10 은 대중 홍보 문장이라 Q1 과 짜임이 다르다 (Q1_Q10_QUALITY 3절)
+STRUCTURE_FILES = {"q1": "q1_structures.md", "q10": "q10_structures.md"}
 _STRUCT_SEP = re.compile("^-{3,}$", re.M)
 _rotation = itertools.count()          # 요청마다 한 칸씩 — 같은 아이디어를 다시 눌러도 다른 짜임이 나온다
 
 
-def structures() -> list[str]:
-    """q1_structures.md 를 '---' 줄로 나눈 짜임 목록."""
-    return [b.strip() for b in _STRUCT_SEP.split(_read(STRUCTURES_FILE)) if b.strip()]
+def structures(question_id: str = "q1") -> list[str]:
+    """문항의 짜임 파일을 '---' 줄로 나눈 목록."""
+    path = STRUCTURE_FILES.get(str(question_id or "q1"), STRUCTURES_FILE)
+    return [b.strip() for b in _STRUCT_SEP.split(_read(path)) if b.strip()]
 
 
-def pick_structure(idea: str, offset: int) -> str:
+def pick_structure(idea: str, offset: int, question_id: str = "q1") -> str:
     """아이디어 해시 + 회전값으로 짜임 하나를 고른다. 아이디어가 다르면 시작점이 다르고, 요청마다 한 칸씩 돈다."""
-    items = structures()
+    items = structures(question_id)
     base = int(hashlib.sha1((idea or "").encode("utf-8")).hexdigest()[:8], 16)
     return items[(base + int(offset)) % len(items)]
 
@@ -100,17 +103,28 @@ def _is_short_question(question_id: str | None) -> bool:
 # 같은 통계 문장이 문항마다 그대로 반복됐다 (실측: 'foodtoday … 7.2%' 가 한 신청서에서 9번).
 # 문항별로 다른 구간을 주면 각 문항이 다른 근거를 인용한다. 0 이면 예전처럼 전부 준다.
 FACTS_PER_QUESTION = 2
-FACT_SLOT = {"q2": 0, "q3_1": 1, "q3_2": 2, "q4_1": 3, "q4_2": 4, "q8": 5, "q7_1": 6}
+FACT_SLOT = {"q2": 0, "q3_1": 1, "q3_2": 2, "q7_1": 3}
+# 참고자료를 아예 주지 않는 문항 (WORKORDER_QUALITY 1-7): 실행 계획·멘토 요청·역량 문항에 외부 기사가 끼어들면
+# 다른 문항의 통계가 또 인용되거나 계획 대신 기사 요약이 들어간다. Q1·Q10 은 짧아서 원래 안 준다.
+NO_REFERENCE_QUESTIONS = ("q4_1", "q4_2", "q8", "q1", "q10")
 
 
-def references_for(refs, question_id: str | None, per: int = FACTS_PER_QUESTION):
-    """이 문항이 인용할 참고자료만. 목록을 문항 순번만큼 밀어서 per 개씩 준다."""
-    if not isinstance(refs, list) or per <= 0 or len(refs) <= per:
-        return refs
-    slot = FACT_SLOT.get(str(question_id or ""), 0)
-    start = (slot * per) % len(refs)
-    picked = (refs + refs)[start:start + per]         # 목록 끝을 넘어가면 앞에서 이어 받는다
-    return picked
+def references_for(refs, question_id: str | None, per: int = FACTS_PER_QUESTION, outline: dict | None = None):
+    """이 문항이 인용할 참고자료만 — 문항 역할(각도) 기반, 문항 간 중복 없이 (작업 33, backend/rag/allocate.py).
+
+    per=0 이면 예전처럼 전부 준다(테스트·비교용)."""
+    qid = str(question_id or "")
+    if qid in NO_REFERENCE_QUESTIONS:
+        return []
+    if not qid or not isinstance(refs, list) or per <= 0:
+        return refs                      # 문항 밖(골자·인테이크)에서는 전부 준다
+    from ..rag.allocate import for_question
+    hints = None
+    if isinstance(outline, dict):
+        # 골자의 문항 몫 텍스트를 키워드 단서로 — 각도가 안 붙은 사실을 그 문항 주제에 맞춰 보낸다
+        from .outline import ROLE_KEYS
+        hints = {q: " ".join(str(outline.get(k) or "") for k in keys) for q, keys in ROLE_KEYS.items()}
+    return for_question(refs, qid, hints)
 
 
 def build_context(form: dict) -> str:
@@ -142,16 +156,21 @@ def build_context(form: dict) -> str:
         # 참고자료 1,000자와 "인용하면 출처를 붙이라"는 지시가 붙으면
         # 한 문장에 통계를 욱여넣게 된다. 아예 넣지 않는다.
         refs = None
+    qid = str(form.get("question_id") or "")
+    if refs and not isinstance(refs, str):
+        refs = references_for(refs, qid, outline=form.get("outline") if isinstance(form.get("outline"), dict) else None)
     if refs:
         # 조사 파이프라인(backend/rag/pipeline.py)이 만든 사실 목록 → 참고자료 섹션. 문자열이면 그대로.
         if isinstance(refs, str):
             parts.append(refs)
         else:
-            refs = references_for(refs, form.get("question_id"))
             from ..rag.pipeline import format_references
             section = format_references(refs)
             if section:
                 parts.append(section)
+    elif qid and qid not in NO_REFERENCE_QUESTIONS and not _is_short_question(qid):
+        # 근거가 0건인 긴 문항 — 섹션을 그냥 빼면 라마가 기관명·통계를 지어낸다 (WORKORDER_QUALITY 2-4)
+        parts.append(section_headers().get("no_references", "[웹 참고자료 없음 — 통계·기관명·서비스명을 쓰지 않습니다]"))
     return "\n\n".join(parts)
 
 
@@ -202,7 +221,8 @@ def build_prompts(form: dict) -> tuple[str, str, dict]:
     if "{structure}" in question_body:
         # 회전값은 요청마다 하나씩 소비한다. 재생성(generate_one)은 meta 로 받은 값에 +1 해서 다른 짜임을 부른다.
         structure_offset = next(_rotation) if structure_offset is None else int(structure_offset)
-        question_body = question_body.replace("{structure}", pick_structure(form.get("idea", ""), structure_offset))
+        question_body = question_body.replace(
+            "{structure}", pick_structure(form.get("idea", ""), structure_offset, form["question_id"]))
     meta = {**meta, "structure_offset": structure_offset}
 
     question_section = "\n".join([

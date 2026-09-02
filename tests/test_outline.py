@@ -181,7 +181,7 @@ async def test_outline_can_be_turned_off():
 def test_slice_gives_each_question_only_its_part():
     full = O.normalize(RAW)
     q2 = O.slice_for(full, "q2")
-    assert set(q2) == {"problem", "customer", "evidence", "solution", "key_stats"}
+    assert set(q2) == {"problem", "customer", "evidence", "solution", "differentiators", "key_stats"}
     assert "revenue" not in q2 and "plan_6m" not in q2          # 남의 몫은 아예 안 보인다
 
     assert set(O.slice_for(full, "q3_2")) == {"revenue", "customer"}
@@ -205,25 +205,78 @@ def test_context_only_carries_this_questions_slice():
     assert "노코드로 제작" not in ctx and "검증 계획" not in ctx    # 계획·검증은 다른 문항 몫
 
 
-# ── 참고자료 분배 (전/후 실측에서 드러난 반복의 주범) ──
+# ── 참고자료 분배 — 문항 역할(각도) 기반, 문항 간 중복 없이 (작업 33) ──
 
-def test_each_question_cites_a_different_slice_of_the_references():
+def _refs():
+    mk = lambda i, angle, fact: {"fact": fact, "quote": f"q{i}", "url": f"https://a.co/{i}", "date": "2026-01-01",
+                                 "publisher": "출처", "angle": angle}
+    return [mk(0, "problem", "가구의 42%가 같은 어려움을 겪는다"),
+            mk(1, "competitor", "○○ 서비스는 예약 알림만 제공한다"),
+            mk(2, "pricing", "유사 서비스 월 이용료는 9천 원 수준"),
+            mk(3, "trend", "이 분야 이용자가 3년 연속 늘었다"),
+            mk(4, "", "지원자들이 검색으로 정보를 모으는 비율이 높다"),
+            mk(5, "competitor", "△△ 플랫폼은 기사 매칭 기능을 운영한다")]
+
+
+def test_each_question_gets_the_facts_of_its_own_angle():
+    refs = _refs()
+    q2, q3_1, q3_2 = (assemble.references_for(refs, q) for q in ("q2", "q3_1", "q3_2"))
+    assert refs[0] in q2 and refs[1] in q3_1 and refs[5] in q3_1 and refs[2] in q3_2   # 각도 일치 우선
+    urls = [r["url"] for part in (q2, q3_1, q3_2) for r in part]
+    assert len(urls) == len(set(urls))                                                 # 같은 사실은 한 문항에만
+    assert refs[3] in q2 + q3_1 + q3_2 and refs[4] in q2 + q3_1 + q3_2                 # trend·미분류도 어딘가엔 간다
+
+
+def test_untagged_facts_are_classified_by_hints():
+    from backend.rag import allocate as A
+    assert A.angle_of({"fact": "유사 서비스 월 구독료는 9천 원", "angle": ""}) == "pricing"
+    assert A.angle_of({"fact": "○○ 앱은 알림 기능을 제공한다", "use_for": ""}) == "competitor"
+    assert A.angle_of({"fact": "1인 가구 비율 36.6%"}) == "problem"
+    assert A.angle_of({"fact": "특별한 단서 없음"}) == "trend"
+    assert A.angle_of({"fact": "x", "angle": "PRICING"}) == "pricing"                  # 추출 단계 태그가 우선
+
+
+def test_allocation_is_stable_and_skips_non_receivers():
+    refs = _refs()
+    from backend.rag import allocate as A
+    assert A.assign(refs) == A.assign(refs)                    # 문항마다 따로 불러도 같은 답
+    assert A.for_question(refs, "q8") == [] and A.for_question(refs, "q1") == []
+    assert assemble.references_for(refs, "q2", per=0) == refs  # per=0 이면 예전 동작(전부)
+    assert assemble.references_for(refs, "") == refs           # 문항 밖(골자·인테이크)에서는 전부
+
+
+def test_context_only_carries_this_questions_references():
+    refs = _refs()
+    ctx2 = assemble.build_context({**FORM, "question_id": "q2", "references": refs})
+    ctx3 = assemble.build_context({**FORM, "question_id": "q3_1", "references": refs})
+    assert "42%" in ctx2 and "○○ 서비스" not in ctx2
+    assert "○○ 서비스" in ctx3 and "42%" not in ctx3
+
+
+def test_plan_mentor_and_capability_questions_get_no_references():
+    """WORKORDER_QUALITY 1-7 — Q4-1·Q4-2·Q8 에는 참고자료를 주지 않는다 (기사 요약이 계획을 밀어낸다)."""
     refs = [{"fact": f"사실 {i}", "quote": f"q{i}", "url": f"https://a.co/{i}",
              "date": "2026-01-01", "publisher": "출처"} for i in range(6)]
-    q2 = assemble.references_for(refs, "q2")
-    q3_1 = assemble.references_for(refs, "q3_1")
-    q3_2 = assemble.references_for(refs, "q3_2")
-
-    assert [r["fact"] for r in q2] == ["사실 0", "사실 1"]
-    assert [r["fact"] for r in q3_1] == ["사실 2", "사실 3"]
-    assert [r["fact"] for r in q3_2] == ["사실 4", "사실 5"]
-    assert not (set(r["url"] for r in q2) & set(r["url"] for r in q3_1))   # 겹치지 않는다
+    for qid in ("q4_1", "q4_2", "q8"):
+        assert assemble.references_for(refs, qid) == []
+        ctx = assemble.build_context({**FORM, "question_id": qid, "references": refs})
+        assert "[웹 참고자료" not in ctx
 
 
-def test_reference_slicing_is_skipped_when_there_are_few_facts():
-    refs = [{"fact": "하나", "url": "u"}, {"fact": "둘", "url": "v"}]
-    assert assemble.references_for(refs, "q8") == refs        # 2건뿐이면 그대로 (나눌 것이 없다)
-    assert assemble.references_for(refs, "q2", per=0) == refs  # per=0 이면 예전 동작
+def test_long_question_without_facts_gets_an_explicit_notice():
+    """근거 0건인 긴 문항은 '참고자료 없음' 을 명시해 지어냄을 막는다 (WORKORDER_QUALITY 2-4)."""
+    ctx = assemble.build_context({**FORM, "question_id": "q2", "references": []})
+    assert "웹 참고자료 없음" in ctx and "기관명" in ctx
+    assert "웹 참고자료 없음" not in assemble.build_context({**FORM, "question_id": "q1"})     # 짧은 문항은 원래 안 준다
+    assert "웹 참고자료 없음" not in assemble.build_context({**FORM, "question_id": "q8"})     # 미주입 문항도 표시 안 함
+
+
+def test_outline_carries_the_voice_from_team_input():
+    assert O.voice_for({"team": "팀원 없음"}) == "저" and O.voice_for({}) == "저"
+    assert O.voice_for({"team": "개발 1명"}) == "저희"
+    full = {**O.normalize(RAW), "voice": "저"}
+    assert "1인칭: 처음부터 끝까지 '저'" in O.format_outline(full)
+    assert O.slice_for(full, "q8")["voice"] == "저"           # 어느 문항이 받아도 같은 값
 
 
 def test_context_shows_only_this_questions_references():
@@ -233,3 +286,15 @@ def test_context_shows_only_this_questions_references():
     ctx8 = assemble.build_context({**FORM, "question_id": "q8", "references": refs})
     assert "사실 0" in ctx2 and "사실 4" not in ctx2
     assert "사실 0" not in ctx8
+
+
+def test_differentiators_with_unsupported_competitor_names_are_dropped():
+    """골자가 참고자료에 없는 경쟁사 이름을 지어내 본문이 단정하던 건 (Q3_1_QUALITY 4절)."""
+    form = {**FORM, "references": [{"fact": "Notion 은 메모 정리 기능을 제공한다", "url": "u"}]}
+    items = ["Notion 과 달리 자동 인식", "ChatGPT 와 달리 직접 답하게 한다", "기존 수작업 대비 사진 한 장으로 끝난다",
+             "잡코리아 앱과 달리 시뮬레이션이 있다"]
+    kept = O.verified_differentiators(items, form)
+    assert "Notion 과 달리 자동 인식" in kept                   # 참고자료에 있는 이름
+    assert "기존 수작업 대비 사진 한 장으로 끝난다" in kept      # 이름 없는 범주 비교
+    assert not any("ChatGPT" in k or "잡코리아" in k for k in kept)
+

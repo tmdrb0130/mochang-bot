@@ -143,6 +143,10 @@ async def _with_idea_research(form: dict) -> dict:
     except Exception as e:                      # 검색 실패·타임아웃 등
         return {"facts": [], "queries": [], "error": str(e)[:200]}
     form["references"] = found.get("facts") or []
+    # 진단용(작업 24): 검색 결과 수와 본문 페이지 수를 같이 돌려준다 — 실측에서 '검색 23건 → facts 0' 이 어디서
+    # 사라진 것인지(fetch 실패 / 추출 0 / quote 검증 탈락) 볼 수 있게. 기존 필드는 그대로.
+    found.setdefault("result_count", 0)
+    found["pages_count"] = len(found.get("pages") or [])
     return found
 
 

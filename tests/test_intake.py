@@ -26,8 +26,10 @@ def slot(sid, status="missing", known=None):
 
 
 def card(sid, labels, ctype="single", qids=None):
+    # 보기는 한국어여야 한다(영어만 있는 보기는 코드가 버린다) — 라틴 문자 라벨엔 '보기 ' 를 붙인다
     return {"slot": sid, "type": ctype, "question": f"{sid}?", "why": "w", "question_ids": qids or [],
-            "options": [{"label": l, "hint": f"{l} 힌트"} for l in labels]}
+            "options": [{"label": (l if any("가" <= ch <= "힣" for ch in l) else f"보기 {l}"), "hint": f"{l} 힌트"}
+                        for l in labels]}
 
 
 def all_slots(**overrides):
@@ -55,15 +57,20 @@ def test_mentoring_card_survives_max_cards_cut():
     out = I._normalize({"summary": "", "slots": all_slots(), "cards": cards})
     kept = [c["slot"] for c in out["cards"]]
     assert len(kept) == I.MAX_CARDS
-    assert "mentoring" in kept
-    assert kept[:I.MAX_CARDS - 1] == I.CARD_PRIORITY[:I.MAX_CARDS - 1]     # 앞 순위는 그대로
+    # 작업 24: 필수 4장(evidence·capability·first_step·mentoring)이 항상 남고, 나머지는 우선순위 순으로 채운다
+    assert set(I.ALWAYS_CARD_SLOTS) <= set(kept)
+    assert kept[:3] == ["problem", "customer", "revenue"]
 
 
 def test_no_card_for_known_mentoring():
     parsed = {"summary": "", "slots": all_slots(mentoring=("known", "원가 계산")),
               "cards": [card("mentoring", ["a", "b"]), card("problem", ["x", "y"])]}
     out = I._normalize(parsed)
-    assert [c["slot"] for c in out["cards"]] == ["problem"]
+    slots = [c["slot"] for c in out["cards"]]
+    assert "mentoring" not in slots and "problem" in slots
+    # 작업 24: evidence·capability·first_step 은 missing 이면 모델이 안 냈어도 기본 카드로 채운다
+    assert {"evidence", "capability", "first_step"} <= set(slots)
+    assert all(c.get("fallback") for c in out["cards"] if c["slot"] in ("evidence", "capability", "first_step"))
 
 
 def test_multi_cards_allow_more_options_than_single():
@@ -166,3 +173,61 @@ async def test_run_intake_parse_failure_does_not_block():
     out = await I.run_intake(FakeClient(["???"]), FORM)
     assert out["ready"] is True and out["cards"] == [] and "error" in out
     assert [s["id"] for s in out["slots"]] == I.SLOT_ORDER
+
+
+# ── 작업 24: 필수 카드 기본값·영어 보기 ──
+
+def test_english_only_options_are_dropped():
+    raw = {"slot": "alternative", "type": "multi", "question": "q", "why": "w", "question_ids": [],
+           "options": [{"label": l, "hint": "h"} for l in ("word of mouth", "인터넷 검색", "지인 소개")]}
+    parsed = {"summary": "", "slots": all_slots(), "cards": [raw]}
+    out = I._normalize(parsed)
+    alt = next(c for c in out["cards"] if c["slot"] == "alternative")
+    assert [o["label"] for o in alt["options"]] == ["인터넷 검색", "지인 소개"]
+
+
+def test_fallback_cards_are_field_neutral_and_registered():
+    fb = I.fallback_cards()
+    assert set(fb) >= {"evidence", "capability", "first_step", "mentoring"}
+    for slot, spec in fb.items():
+        labels = " ".join(o["label"] + o.get("hint", "") for o in spec["options"])
+        for word in ("개발", "앱", "기능 설계", "출시"):
+            assert word not in labels, f"{slot} 기본 카드에 소프트웨어 전제 '{word}'"
+    assert I._fallback_card("evidence")["type"] == "number"
+    assert I._fallback_card("없는슬롯") is None
+
+
+
+def test_mentoring_options_avoid_the_applicants_strength_axis():
+    """개발자에게 '개발 방법' 을 묻게 하지 않는다 — 강점 축 보기는 빼고 반대편 축으로 채운다 (Q4_2_QUALITY 1-1)."""
+    raw = {"slot": "mentoring", "type": "multi", "question": "q", "why": "w", "question_ids": ["q4_2"],
+           "options": [{"label": "AI 기술 개발", "hint": "h"}, {"label": "마케팅 전략", "hint": "h"},
+                       {"label": "사업계획서 작성", "hint": "h"}]}
+    out = I._normalize({"summary": "", "slots": all_slots(), "cards": [raw]}, capability="컴퓨터공학 전공, 웹 프로젝트")
+    ment = next(c for c in out["cards"] if c["slot"] == "mentoring")
+    labels = [o["label"] for o in ment["options"]]
+    assert "AI 기술 개발" not in labels and "마케팅 전략" in labels
+    assert len(labels) >= 4 and not any(I.option_axis(l) == "tech" for l in labels)   # 반대편 축으로 채워졌다
+
+    out2 = I._normalize({"summary": "", "slots": all_slots(), "cards": [raw]}, capability="영업직 5년")
+    labels2 = [o["label"] for o in next(c for c in out2["cards"] if c["slot"] == "mentoring")["options"]]
+    assert "마케팅 전략" not in labels2 and any(I.option_axis(l) == "tech" for l in labels2)  # 영업직은 기술 축을 요청
+
+
+def test_evidence_card_always_offers_not_yet_checked():
+    raw = {"slot": "evidence", "type": "number", "question": "q", "why": "w", "question_ids": ["q2"],
+           "options": [{"label": "직접 인터뷰", "hint": "h"}, {"label": "서베이", "hint": "h"}, {"label": "기타", "hint": "h"}]}
+    out = I._normalize({"summary": "", "slots": all_slots(), "cards": [raw]})
+    ev = next(c for c in out["cards"] if c["slot"] == "evidence")
+    labels = [o["label"] for o in ev["options"]]
+    assert "기타" not in labels and any("아직" in l for l in labels)       # 자동 보기 제거 + '아직 확인 안 함' 보장
+
+
+def test_english_words_inside_options_are_dropped_except_common_acronyms():
+    raw = {"slot": "first_step", "type": "single", "question": "q", "why": "w", "question_ids": ["q4_1"],
+           "options": [{"label": "prototype 개발", "hint": "h"}, {"label": "MVP 를 먼저 만든다", "hint": "h"},
+                       {"label": "시장조사", "hint": "h"}]}
+    out = I._normalize({"summary": "", "slots": all_slots(), "cards": [raw]})
+    labels = [o["label"] for o in next(c for c in out["cards"] if c["slot"] == "first_step")["options"]]
+    assert "prototype 개발" not in labels and "MVP 를 먼저 만든다" in labels
+    assert I.strength_axes("딸기 농사 8년, 영농조합 총무") == {"ops"}

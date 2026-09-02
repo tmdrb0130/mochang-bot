@@ -25,8 +25,9 @@ from . import assemble
 STAT = re.compile(r"\d[\d,.]*\s*(?:%|퍼센트|억|천만|만\s*원|원|배|만\s*명|만\s*가구)")
 # 확인하지 않은 조사를 한 것처럼 쓰는 표현
 CLAIM = re.compile(r"(인터뷰|설문|여쭤|물어보|물어봤|응답자|조사한 결과|만나 보았|만나봤)")
-# 라마가 아이디어와 무관하게 반복해 내놓는 상용구 수치 (실측 2건에서 같은 값이 나왔다)
-BOILERPLATE = ("500명", "30명", "1억", "1,000만 원", "1000만 원", "60%", "20%", "10%", "5,000만 원")
+# 라마가 아이디어와 무관하게 반복해 내놓는 **매출·원가 상용구** (Q4_1_QUALITY 5절 정정: '500명·60%' 류는 원인이
+# 프롬프트 예시였으므로 예시 삭제로 해결하고, 여기서는 단위경제 숫자만 잡는다 — 정상적인 비율 서술을 오탐하지 않게)
+BOILERPLATE = ("1만 원", "5천 원", "5,000원", "1억", "1,000만 원", "1000만 원", "5,000만 원", "1천만 원")
 SENTENCE_SPLIT = re.compile(r"(?<=[.다!?])\s+")
 # 어느 아이디어에나 붙어 아무것도 설명하지 못하는 말 (작업 26 진단표 5)
 ABSTRACT = ("고유한 가치", "혁신적", "효율적", "큰 도움", "차별화된 경쟁력", "획기적")
@@ -121,6 +122,27 @@ def drop_idea_restatement(text: str, form: dict) -> tuple[str, int]:
            for seed in seeds):
         return " ".join(parts[1:]).strip(), 1
     return text, 0
+
+
+def drop_foreign_sentences(text: str) -> tuple[str, int]:
+    """이물이 든 문장을 모델 호출 없이 지운다 — 이어쓰기로 새로 붙은 글에 쓴다 (후처리 뒤에 붙는 글이라 검사가 빠졌다)."""
+    kept, dropped = [], 0
+    for sentence in sentences(text):
+        if has_foreign(sentence):
+            dropped += 1
+            continue
+        kept.append(sentence)
+    return (" ".join(kept) if dropped else text), dropped
+
+
+def strip_leading_self(text: str, question_id: str | None) -> tuple[str, int]:
+    """짧은 문항(Q1·Q10)이 '저는 ' 으로 시작하면 그 낱말만 뗀다 — 자기소개 투 금지를 라마가 무시한다 (실측 3/10)."""
+    if str(question_id or "") not in ("q1", "q10"):
+        return text, 0
+    m = re.match(r"^\s*(저는|저희는|제가|저희가)\s+", text or "")
+    if not m:
+        return text, 0
+    return text[m.end():].lstrip(), 1
 
 
 def dedupe_sentences(text: str, threshold: float = 0.6) -> tuple[str, int]:
@@ -238,6 +260,8 @@ async def polish_text(client: LLMClient, text: str, form: dict) -> tuple[str, di
     report = {"person": 0, "repeat": 0, "rewritten": 0, "dropped": 0, "left": 0,
               "self_intro": 0, "restated": 0, "duplicate": 0}
     text, report["self_intro"] = drop_self_intro(text, form.get("question_id"))
+    text, lead = strip_leading_self(text, form.get("question_id"))
+    report["self_intro"] += lead
     text, report["restated"] = drop_idea_restatement(text, form)
     text, report["person"] = unify_person(text, form)
     text, report["repeat"] = drop_repeated_stats(text)

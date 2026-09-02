@@ -157,7 +157,12 @@ async def generate_followup_queries(client: LLMClient, form: dict, meta: dict, s
     억지로 검색하는 것보다 안 하는 쪽이 낫다 (요청 수를 늘리지 않는 것이 2단계의 목적)."""
     if cfg.max_followup_queries <= 0:
         return []
-    system = assemble.render("research/followup_queries.md", n=cfg.max_followup_queries)
+    from .allocate import ANGLE_LABEL, QUESTION_ANGLES
+    qid = str(meta.get("id") or "")
+    angles = QUESTION_ANGLES.get(qid)
+    angle_text = ("\n".join(f"- {a}: {ANGLE_LABEL[a]}" for a in angles) if angles
+                  else "- 이 문항은 외부 근거를 쓰지 않습니다. 빈 배열을 출력합니다.")
+    system = assemble.render("research/followup_queries.md", n=cfg.max_followup_queries, angles=angle_text)
     shared_queries = list(shared.get("queries") or [])
     user = "\n\n".join([
         assemble.build_context({k: v for k, v in form.items() if k != "references"}),
@@ -421,7 +426,14 @@ async def extract_facts(client: LLMClient, form: dict, meta: dict, pages: list[d
             "date": (str(f["date"]).strip() if f.get("date") not in (None, "", "null") else None),
             "publisher": str(f.get("publisher") or domain(str(f.get("url", "")))).strip(),
             "use_for": str(f.get("use_for", "")).strip(),
+            # 문항별 배분에 쓰는 각도 (작업 33). 모델이 안 붙였으면 배분 단계가 단서로 추정한다
+            "angle": str(f.get("angle", "")).strip().lower() if str(f.get("angle", "")).strip().lower()
+            in ("problem", "competitor", "pricing", "trend") else "",
         })
+    for row in out:
+        # 경쟁 서비스 사실은 프론트·골자가 알아볼 수 있게 표시 (KCI 표시는 그대로 둔다)
+        if row["angle"] == "competitor" and row["source_kind"] != "kci":
+            row["source_kind"] = "competitor"
     return out
 
 
