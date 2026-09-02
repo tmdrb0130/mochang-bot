@@ -718,3 +718,13 @@ def test_reuse_page_shape_matches_collect_pages_output():
     p = P.reuse_page(hit("https://a.co.kr/1", 0.7))
     assert set(p) >= {"url", "title", "date", "text", "source_type", "from_snippet", "from_vectorstore"}
     assert p["from_snippet"] is False and p["from_vectorstore"] is True and p["score"] == 0.7
+
+
+def test_kci_pages_are_never_indexed():
+    """KCI 이용 준수 2항 — source_type 이 kci 인 것도, 웹 검색이 물어온 kci.go.kr 페이지도 색인 대상이 아니다."""
+    assert P.indexable({"url": "https://news.co.kr/a", "source_type": "news"}) is True
+    assert P.indexable({"url": "https://x.com/a", "source_type": "kci"}) is False
+    assert P.indexable({"url": "https://www.kci.go.kr/kciportal/ci/x", "source_type": "web"}) is False
+    assert P.indexable({"url": "https://kci.go.kr/x", "source_type": "news"}) is False
+    assert P.indexable({"url": "https://evil.com/kci.go.kr/x", "source_type": "web"}) is True   # 경로 위장은 도메인이 아니다
+    assert P.indexable({"url": "https://a.co/x", "from_vectorstore": True}) is False

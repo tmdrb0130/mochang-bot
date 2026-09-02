@@ -234,8 +234,8 @@ def test_build_sources_needs_keys():
     cfg = O.OpenDataConfig()
     assert build_names(O.build_sources(cfg, env={})) == []
     assert build_names(O.build_sources(cfg, env={"ECOS_API_KEY": "e"})) == ["ecos"]
-    full = {"KOSIS_API_KEY": "k", "ECOS_API_KEY": "e", "DATA_GO_KR_API_KEY": "d"}
-    assert build_names(O.build_sources(cfg, env=full)) == ["kosis", "ecos", "kstartup", "sangkwon"]
+    full = {"KOSIS_API_KEY": "k", "ECOS_API_KEY": "e", "DATA_GO_KR_API_KEY": "d", "KCI_API_KEY": "c"}
+    assert build_names(O.build_sources(cfg, env=full)) == ["kosis", "ecos", "kstartup", "sangkwon", "kci"]
     assert build_names(O.build_sources(O.OpenDataConfig(enabled=False), env=full)) == []
     assert build_names(O.build_sources(O.OpenDataConfig(sources=["ecos"]), env=full)) == ["ecos"]
 
@@ -247,4 +247,73 @@ def build_names(sources):
 def test_config_reads_yaml_section():
     cfg = O.OpenDataConfig.from_config({"opendata": {"enabled": True, "sources": ["ecos", "없는소스"], "timeout": 30}})
     assert cfg.sources == ["ecos"] and cfg.timeout == 30
-    assert O.OpenDataConfig.from_config({}).sources == ["kosis", "ecos", "kstartup", "sangkwon"]
+    assert O.OpenDataConfig.from_config({}).sources == ["kosis", "ecos", "kstartup", "sangkwon", "kci"]
+
+
+# ── KCI (작업 17) — 이용 준수 사항을 코드로 지키는지 ──
+
+KCI_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<MetaData><outputData><result><total>2</total></result>
+<record>
+  <journalInfo><journal-name>한국식품영양학회지</journal-name><publisher-name>한국식품영양학회</publisher-name>
+    <pub-year>2024</pub-year></journalInfo>
+  <articleInfo article-id="ART001">
+    <title-group><article-title lang="original"><![CDATA[1인가구의 식품 폐기 실태와 요인]]></article-title></title-group>
+    <author-group><author english="Hong">홍길동(한국대학교)</author></author-group>
+    <abstract-group><abstract lang="original"><![CDATA[본 연구는 1인가구의 식품 폐기 실태를 조사하였다.]]></abstract></abstract-group>
+    <url><![CDATA[https://www.kci.go.kr/kciportal/ci/sereArticleSearch/ciSereArtiView.kci?x=ART001]]></url>
+  </articleInfo>
+</record>
+<record>
+  <journalInfo><journal-name>신약연구</journal-name><pub-year>2023</pub-year></journalInfo>
+  <articleInfo article-id="ART002">
+    <title-group><article-title lang="original"><![CDATA[요한일서 1:1의 해석]]></article-title></title-group>
+    <abstract-group><abstract lang="original"><![CDATA[신약 본문 해석에 관한 논문이다.]]></abstract></abstract-group>
+  </articleInfo>
+</record>
+</outputData></MetaData>"""
+
+
+def test_kci_terms_drop_digits_and_short_words():
+    """KCI 는 '1인가구' 의 '1' 을 따로 매칭해 엉뚱한 논문을 준다 — 숫자를 뺀 낱말만 쓴다."""
+    assert O.KciSearch.terms("1인 가구 식품 폐기 실태") == ["식품", "폐기"] or \
+           set(O.KciSearch.terms("1인 가구 식품 폐기 실태")) <= {"식품", "폐기", "실태", "가구"}
+    assert all(not any(ch.isdigit() for ch in t) for t in O.KciSearch.terms("2025 창업 통계"))
+    assert O.KciSearch.terms("1 2 3") == []
+
+
+def test_kci_parse_keeps_only_papers_that_match_the_query():
+    rows = O.KciSearch("key").parse(KCI_XML, ["식품", "폐기"])
+    assert len(rows) == 1                                    # 신약학 논문은 걸러진다
+    r = rows[0]
+    assert r["title"] == "1인가구의 식품 폐기 실태와 요인"
+    assert r["url"].startswith("https://www.kci.go.kr/") and r["date"] == "2024-01-01"
+    assert r["source_type"] == "kci" and r["no_fetch"] is True      # 준수 1항: 원문을 받아오지 않는다
+    assert "홍길동" in r["snippet"] and "한국식품영양학회지" in r["snippet"]
+    assert "초록: 본 연구는" in r["snippet"]                        # 제목·저자·학술지·연도·초록까지만
+
+
+def test_kci_parse_survives_broken_xml_and_empty_terms():
+    assert O.KciSearch("key").parse("<xml", ["식품"]) == []
+    assert len(O.KciSearch("key").parse(KCI_XML, [])) == 2          # 낱말이 없으면 거르지 않는다
+
+
+@pytest.mark.asyncio
+async def test_kci_search_uses_title_param_and_caps_results(monkeypatch):
+    seen = {}
+
+    async def fake_fetch(self, term):
+        seen["term"] = term
+        return KCI_XML
+
+    monkeypatch.setattr(O.KciSearch, "fetch", fake_fetch)
+    rows = await O.KciSearch("key", max_items=1)("식품 폐기 논문", 8)
+    assert seen["term"] in ("식품", "폐기", "논문")                  # 가장 긴 낱말 하나로 검색
+    assert len(rows) == 1 and rows[0]["source_type"] == "kci"
+
+
+@pytest.mark.asyncio
+async def test_kci_returns_nothing_without_usable_terms(monkeypatch):
+    called = []
+    monkeypatch.setattr(O.KciSearch, "fetch", lambda self, t: called.append(t))
+    assert await O.KciSearch("key")("2025 1 2", 8) == [] and called == []

@@ -34,6 +34,7 @@ TRIGGERS = {
     "ecos": ("금리", "환율", "물가", "경기", "소비자심리", "가계", "대출", "예금", "생산자물가", "국내총생산", "gdp"),
     "kstartup": ("창업지원", "지원사업", "정부지원", "공고", "모집", "바우처", "사업화", "창업 지원", "예비창업"),
     "sangkwon": ("상권", "업종", "점포", "자영업", "소상공인", "업소", "상가", "매장", "가맹"),
+    "kci": ("논문", "학술", "연구", "선행연구", "문헌", "학회", "효과", "요인", "인식", "실태"),
 }
 
 
@@ -295,12 +296,94 @@ class SangKwonStats:
         return [stat_result(f"전국 {name} 업종 상가업소 수", SANGKWON_URL, snippet, _year_date(stdr), "stat")]
 
 
+# ────────────────────────── KCI (한국학술지인용색인) ──────────────────────────
+# 이용 준수 사항은 RESEARCH_PLAN "API 한도" 절 6항. 코드로 강제하는 것:
+#   ① 메타데이터만 — no_fetch. 원문을 받아오지 않는다 (제목·저자·학술지·연도·초록까지만)
+#   ② 벡터DB 색인 제외 — source_type "kci" 는 pipeline 이 upsert_pages 에 넘기지 않는다
+#   ③ 왜곡 금지 — 우리는 있는 그대로 넘기고, 수치화 금지는 프롬프트(references 규칙)가 맡는다
+#   ④ UI 출처 표기 — facts 에 source_kind 를 실어 프론트가 배지를 붙일 수 있게 한다
+#   ⑤ 파기 — scripts/purge_kci_cache.py
+
+KCI_SEARCH = "https://open.kci.go.kr/po/openapi/openApiSearch.kci"
+KCI_ARTICLE_URL = ("https://www.kci.go.kr/kciportal/ci/sereArticleSearch/ciSereArtiView.kci"
+                   "?sereArticleSearchBean.artiId={artid}")
+KCI_ABSTRACT_CHARS = 400
+
+
+def _cdata(node, path: str) -> str:
+    found = node.find(path)
+    return clean_label(found.text if found is not None and found.text else "")
+
+
+class KciSearch:
+    """KCI 논문 검색 — 제목·저자·학술지·연도·초록만. 요청 1회.
+
+    KCI 의 title 검색은 낱말을 느슨하게 쪼개 매칭한다("1인가구" 로 찾으면 '1' 이 걸려 무관한 논문이 섞인다).
+    그래서 **받아온 논문 제목·초록에 검색 낱말이 실제로 있는 것만** 남긴다 — 근거로 인용될 자료라
+    관련 없는 논문이 끼면 안 된다.
+    """
+
+    def __init__(self, api_key: str, timeout: int = DEFAULT_TIMEOUT, max_items: int = 3):
+        self.api_key = api_key
+        self.timeout = timeout
+        self.max_items = max_items
+
+    @staticmethod
+    def terms(query: str) -> list[str]:
+        """검색에 쓸 한국어 낱말. 숫자는 뺀다 — KCI 가 숫자만 따로 매칭해 엉뚱한 결과를 준다."""
+        words = [w for w in re.split(r"[^가-힣A-Za-z]+", query or "") if len(w) >= 2]
+        return sorted(words, key=len, reverse=True)[:2]
+
+    async def fetch(self, term: str) -> str:
+        import httpx
+        async with httpx.AsyncClient(timeout=self.timeout) as c:
+            r = await c.get(KCI_SEARCH, params={"apiCode": "articleSearch", "key": self.api_key,
+                                                "title": term, "displayCount": 10, "page": 1})
+            r.raise_for_status()
+            return r.text
+
+    def parse(self, xml_text: str, terms: list[str]) -> list[dict]:
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return []
+        out = []
+        for rec in root.iter("record"):
+            title = _cdata(rec, ".//article-title")
+            abstract = _cdata(rec, ".//abstract")[:KCI_ABSTRACT_CHARS]
+            haystack = f"{title} {abstract}"
+            if terms and not any(t in haystack for t in terms):
+                continue                     # KCI 매칭이 헐거워 무관한 논문이 섞인다 — 제목·초록으로 다시 거른다
+            info = rec.find("journalInfo")
+            journal = _cdata(info, "journal-name") if info is not None else ""
+            publisher = _cdata(info, "publisher-name") if info is not None else ""
+            year = _cdata(info, "pub-year") if info is not None else ""
+            author = _cdata(rec, ".//author")
+            art = rec.find("articleInfo")
+            art_id = (art.get("article-id") if art is not None else "") or ""
+            url = _cdata(rec, ".//url") or KCI_ARTICLE_URL.format(artid=art_id)
+            if not title or not url:
+                continue
+            snippet = (f"KCI 등재 논문 「{title}」 — {author or '저자 미상'}, {journal or '학술지 미상'}"
+                       f"{f' {year}년' if year else ''}. 초록: {abstract}")
+            out.append(stat_result(title, url, snippet, _year_date(year), "kci"))
+        return out
+
+    async def __call__(self, query: str, max_results: int = 8) -> list[dict]:
+        terms = self.terms(query)
+        if not terms:
+            return []
+        rows = self.parse(await self.fetch(terms[0]), terms)
+        return rows[: min(self.max_items, max_results)]
+
+
 # ────────────────────────── 묶기 ──────────────────────────
 
 @dataclass
 class OpenDataConfig:
     enabled: bool = True
-    sources: list[str] = field(default_factory=lambda: ["kosis", "ecos", "kstartup", "sangkwon"])
+    sources: list[str] = field(default_factory=lambda: ["kosis", "ecos", "kstartup", "sangkwon", "kci"])
     timeout: int = DEFAULT_TIMEOUT
 
     @classmethod
@@ -308,7 +391,7 @@ class OpenDataConfig:
         oc = (rc or {}).get("opendata") or {}
         return cls(
             enabled=bool(oc.get("enabled", True)),
-            sources=[s for s in oc.get("sources", ["kosis", "ecos", "kstartup", "sangkwon"])
+            sources=[s for s in oc.get("sources", ["kosis", "ecos", "kstartup", "sangkwon", "kci"])
                      if s in TRIGGERS],
             timeout=int(oc.get("timeout", DEFAULT_TIMEOUT)),
         )
@@ -318,6 +401,7 @@ def build_sources(cfg: OpenDataConfig, env: dict | None = None) -> list[tuple[st
     """설정 + .env 키로 쓸 수 있는 소스만 만든다. 키가 없으면 그 소스는 빠진다."""
     env = env if env is not None else os.environ
     kosis, ecos, dgk = env.get("KOSIS_API_KEY", ""), env.get("ECOS_API_KEY", ""), env.get("DATA_GO_KR_API_KEY", "")
+    kci = env.get("KCI_API_KEY", "")
     made: list[tuple[str, object]] = []
     if not cfg.enabled:
         return made
@@ -330,6 +414,8 @@ def build_sources(cfg: OpenDataConfig, env: dict | None = None) -> list[tuple[st
             made.append((name, KStartupSearch(dgk, cfg.timeout)))
         elif name == "sangkwon" and dgk:
             made.append((name, SangKwonStats(dgk, cfg.timeout)))
+        elif name == "kci" and kci:
+            made.append((name, KciSearch(kci, cfg.timeout)))
     return made
 
 

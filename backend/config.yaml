@@ -117,10 +117,12 @@ research:
   #   ecos      금리·환율·물가·경기…         → 한국은행 100대 지표        (ECOS_API_KEY)
   #   kstartup  창업지원·지원사업·공고…      → 정부 창업지원 공고 검색    (DATA_GO_KR_API_KEY)
   #   sangkwon  상권·업종·점포·소상공인…     → 업종별 전국 상가업소 수    (DATA_GO_KR_API_KEY)
+  #   kci       논문·학술·연구·실태…         → KCI 논문 서지정보          (KCI_API_KEY)
+  #             ⚠ KCI 는 메타데이터만 쓰고 벡터DB 에 쌓지 않는다 (RESEARCH_PLAN 이용 준수 사항 1·2항)
   # 키 없는 소스는 자동으로 빠진다. 끄려면 enabled: false 한 줄.
   opendata:
     enabled: true
-    sources: ["kosis", "ecos", "kstartup", "sangkwon"]
+    sources: ["kosis", "ecos", "kstartup", "sangkwon", "kci"]
     timeout: 15
 
   # 네이버 검색 API — NAVER API HUB (2026-06-25 이관, RESEARCH_PLAN 3단계).

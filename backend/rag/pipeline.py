@@ -22,6 +22,19 @@ from .research import DiskCache, Researcher, domain
 MAX_PAGE_CHARS = 6000
 MIN_BODY_CHARS = 40      # 이보다 짧은 본문/스니펫은 사실 추출에 못 쓴다
 MAX_FACTS = 8
+# 이 소스에서 온 페이지는 벡터DB 에 쌓지 않는다 — KCI 이용 준수 사항 2항(원천 데이터 영구 보유 금지).
+# source_type 뿐 아니라 **도메인**으로도 막는다: ddgs·네이버가 kci.go.kr 문서를 물어 오는 경우가 실제로 있어
+# (backend/.cache 에 사례 다수) 그 페이지가 색인되면 같은 조항을 어기게 된다.
+NO_INDEX_SOURCE = "kci"
+NO_INDEX_DOMAINS = ("kci.go.kr",)
+
+
+def indexable(page: dict) -> bool:
+    """벡터DB 에 쌓아도 되는 페이지인지 (KCI 계열 제외)."""
+    if page.get("from_vectorstore") or page.get("source_type") == NO_INDEX_SOURCE:
+        return False
+    host = domain(str(page.get("url", "")))
+    return not any(host == d or host.endswith("." + d) for d in NO_INDEX_DOMAINS)
 PREFERRED_DOMAINS = ("go.kr", "or.kr", "re.kr", "kostat", "kosis", "news", "yna.co.kr", "hankyung", "mk.co.kr",
                      "chosun", "joongang", "donga", "hani.co.kr", "khan.co.kr", "sedaily", "edaily", "etnews", "zdnet")
 SKIP_EXT = (".pdf", ".hwp", ".xls", ".xlsx", ".ppt", ".pptx", ".doc", ".docx", ".zip")
@@ -345,7 +358,8 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
             pages.append({**r, "text": body, "from_snippet": not bool(t)})
         if len(pages) >= want:
             break
-    await index_pages([p for p in pages if not p.get("from_vectorstore")], cfg)   # 새로 받아온 것만 색인
+    # 새로 받아온 것만 색인한다. KCI 계열은 영구 축적 금지(RESEARCH_PLAN 준수 사항 2항)라 여기서 뺀다.
+    await index_pages([p for p in pages if indexable(p)], cfg)
     return unique, pages
 
 
@@ -392,9 +406,12 @@ async def extract_facts(client: LLMClient, form: dict, meta: dict, pages: list[d
     except Exception:
         return []
     facts = _verify_quotes(raw_facts, pages)
+    kind_by_url = {_url_key(p.get("url", "")): p.get("source_type", "") for p in pages}
     out = []
     for f in facts[:MAX_FACTS]:
         out.append({
+            # 어느 소스에서 온 근거인지 (프론트가 KCI 배지·출처 표기에 쓴다 — 세션2 요청)
+            "source_kind": kind_by_url.get(_url_key(str(f.get("url", ""))), ""),
             "fact": str(f.get("fact", "")).strip(),
             "quote": str(f.get("quote", "")).strip(),
             "source_title": str(f.get("source_title", "")).strip(),
