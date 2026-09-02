@@ -38,7 +38,8 @@ const QUESTIONS = [
 ];
 
 // 브라우저 쪽 동시 요청 수. 실제 LLM 동시성은 백엔드 config.yaml 의 concurrency 가 최종 제한한다.
-const PARALLEL = 2;
+// 서버 워커가 30개로 올랐고 IP 당 동시 3건까지 허용되므로(백엔드 max_jobs_per_client) 3 까지는 429 없이 간다.
+const PARALLEL = 3;
 // 조사 동시 실행 수. 백엔드 조사 모델은 로컬 70B 라 무료 한도가 없어 생성보다 높여도 된다.
 const RESEARCH_PARALLEL = 3;
 
@@ -147,10 +148,14 @@ function RegenerateBar({ slot, state, onNote, onRun, compact = false }) {
 // ───────────────────────── 컴포넌트 ─────────────────────────
 // ───────────────────────── 웹 조사 근거 패널 ─────────────────────────
 // 백엔드 /research 결과. 조사는 로컬 라마 70B 가 하고, 이 사실들이 [웹 참고자료] 로 작성 모델에 넘어간다.
-function ResearchPanel({ state }) {
+function ResearchPanel({ state, warm = true }) {
   const [open, setOpen] = useState(false);
   if (!state) return null;
-  if (state.busy) return <div className="px-4 py-2 text-xs text-slate-500 bg-sky-50 border-b border-sky-100">웹에서 근거 자료를 조사하는 중… (백석대학교 로컬 LLM)</div>;
+  // 아이디어 공통 조사는 이 아이디어의 첫 문항에서만 실제로 돈다 (모델 호출 4회) — 나머지 문항보다 몇 배 느리다.
+  // 문구가 같으면 첫 문항에서 멈춘 것처럼 보이므로, 아직 조사 결과가 하나도 없을 때는 그렇다고 알린다.
+  if (state.busy) return <div className="px-4 py-2 text-xs text-slate-500 bg-sky-50 border-b border-sky-100">{warm
+    ? "웹에서 근거 자료를 조사하는 중… (백석대학교 로컬 LLM)"
+    : "아이디어 공통 조사부터 합니다 — 처음 한 번만 1~2분 걸려요 (백석대학교 로컬 LLM)"}</div>;
   if (state.error) return <div className="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-b border-amber-100">조사 실패 — 참고자료 없이 작성합니다. ({state.error})</div>;
   const facts = state.facts || [];
   if (!facts.length) return <div className="px-4 py-2 text-xs text-slate-500 bg-slate-50 border-b border-slate-200">조사에서 인용할 만한 근거를 못 찾았습니다. 참고자료 없이 작성했습니다.</div>;
@@ -283,6 +288,8 @@ export default function ModooWriter() {
   // 생성 전에 문항마다 /research 를 돌려 출처 있는 사실을 모으고, 그걸 references 로 생성에 넘긴다.
   // 조사는 백엔드의 조사 전용 모델(로컬 라마 70B)이 하고, 본문 작성은 llm: 모델(OpenRouter)이 한다.
   const [researchState, setResearchState] = useState(saved?.researchState ?? {}); // researchState[qid] = { busy, error, facts, queries, pages, backend }
+  // 이 아이디어로 조사 결과를 한 번이라도 받았는지. 첫 조사만 느리다는 것을 화면에 알리는 데 쓴다 (공통 조사).
+  const [researchWarm, setResearchWarm] = useState(() => Object.values(saved?.researchState ?? {}).some((v) => v && !v.error));
   // 생성 태스크가 즉시 읽어야 해서(setState 는 비동기) 사실은 ref 에도 둔다.
   // 저장본에서 복원할 때 ref 도 같이 채워야 재생성 시 조사를 다시 돌지 않는다.
   // 단 실패했던 문항(error)은 복원하지 않는다 — 복원하면 다음에도 조사를 건너뛴다.
@@ -338,8 +345,17 @@ export default function ModooWriter() {
       const kept = Object.fromEntries(Object.entries(byStyle).filter(([, v]) => v !== "loading"));
       if (Object.keys(kept).length) cleanStatus[qid] = kept;
     }
-    saveState({ step, form, texts, status: cleanStatus, picked, intake, answers, cardIdx, modelUsed, researchState, researchKey: researchKeyRef.current });
+    // pages(조사에서 본문을 받은 URL 목록)는 화면에서 한 번도 쓰지 않는데 문항마다 수 KB 다.
+    // localStorage 가 꽉 차면 saveState 가 통째로 실패해 초안까지 저장되지 않으므로 저장 대상에서 뺀다.
+    const leanResearch = Object.fromEntries(
+      Object.entries(researchState).map(([qid, v]) => { const { pages: _pages, ...rest } = v || {}; return [qid, rest]; })
+    );
+    saveState({ step, form, texts, status: cleanStatus, picked, intake, answers, cardIdx, modelUsed, researchState: leanResearch, researchKey: researchKeyRef.current });
   }, [step, form, texts, status, picked, intake, answers, cardIdx, modelUsed, researchState]);
+
+  // 마운트 시점 클로저(이어받기)가 잡은 texts 는 곧 낡는다 — "무엇이 아직 비었는지" 는 항상 최신값으로 판단해야 한다.
+  const textsRef = useRef(texts);
+  useEffect(() => { textsRef.current = texts; }, [texts]);
 
   const formForApi = () => ({ ...form, answers: buildAnswers() });
   const answeredCount = Object.values(answers).filter((a) => a && (a.unknown || a.answer)).length;
@@ -377,6 +393,7 @@ export default function ModooWriter() {
     researchKeyRef.current = key;
     researchRef.current = {};
     setResearchState({});
+    setResearchWarm(false);
   }
 
   // 문항 하나에 대한 조사. 이미 받아온 게 있으면 재사용(백엔드도 7일 디스크 캐시).
@@ -391,6 +408,7 @@ export default function ModooWriter() {
       const r = await api.research(formForApi(), qid);
       researchRef.current[qid] = r.facts || [];
       setResearchState((p) => ({ ...p, [qid]: { busy: false, error: "", facts: r.facts || [], queries: r.queries || [], pages: r.pages || [], backend: r.backend, cached: r.cached } }));
+      setResearchWarm(true);
       return researchRef.current[qid];
     } catch (e) {
       // 조사가 실패해도 생성은 계속한다 (참고자료 없이 작성).
@@ -445,16 +463,25 @@ export default function ModooWriter() {
   }
 
   // 새로고침으로 끊긴 작업 이어받기 (V6). 큐에 남아 있으면 결과를 그대로 받고, 없으면 만료 안내를 띄운다.
+  // 이어받기만으로는 부족하다: 새로고침 시점에 아직 큐에 넣지도 못한 문항은 job id 가 없어 영영 안 만들어진다
+  // (9문항 중 먼저 제출된 2~3개만 채워진 채 멈춘다) → 이어받기가 끝나면 남은 문항을 계속 만든다.
   useEffect(() => {
-    for (const [key, id] of Object.entries(jobsRef.current)) {
-      const [qid, sid] = key.split("|");
-      const q = QUESTIONS.find((x) => x.id === qid);
-      const style = STYLES.find((x) => x.id === sid);
-      if (!q || !style) { forgetJob(key); continue; }
-      // 첫 폴링(2.5초 뒤)까지는 "대기열에 넣는 중"으로 보여 새로 제출한 것처럼 오해된다 → 이어받는 중임을 먼저 알린다.
-      setJobTick(qid, sid, { status: "resuming" });
-      runQuestionJob(q, style, (opts) => api.followJob(id, opts));
-    }
+    const pending = Object.entries(jobsRef.current);
+    if (!pending.length) return;
+    (async () => {
+      setRunning(true);
+      await Promise.all(pending.map(([key, id]) => {
+        const [qid, sid] = key.split("|");
+        const q = QUESTIONS.find((x) => x.id === qid);
+        const style = STYLES.find((x) => x.id === sid);
+        if (!q || !style) { forgetJob(key); return null; }
+        // 첫 폴링(2.5초 뒤)까지는 "대기열에 넣는 중"으로 보여 새로 제출한 것처럼 오해된다 → 이어받는 중임을 먼저 알린다.
+        setJobTick(qid, sid, { status: "resuming" });
+        return runQuestionJob(q, style, (opts) => api.followJob(id, opts));
+      }));
+      await generateMissing();
+      setRunning(false);
+    })();
   }, []);
 
   // 1) 아이디어 읽기(인테이크) → 충분하면 바로 생성, 부족하면 카드 단계로
@@ -524,6 +551,25 @@ export default function ModooWriter() {
     refreshHealth();
   }
 
+  // 본문이 아직 비어 있는 (문항, 스타일) 쌍. 무엇을 더 만들어야 하는지 판단하는 기준이다.
+  const missingPairs = (src) => {
+    const out = [];
+    for (const q of activeQuestions) for (const s of selectedStyles) if (!(src[q.id]?.[s.id] || "").trim()) out.push([q, s]);
+    return out;
+  };
+
+  // 남은 문항만 이어서 만든다. 이어받기 직후 자동으로, 그리고 "남은 N개 계속 만들기" 버튼에서 부른다.
+  async function generateMissing() {
+    const todo = missingPairs(textsRef.current);
+    if (!todo.length) return;
+    setRunning(true);
+    const qids = [...new Set(todo.map(([q]) => q.id))];
+    await runLimited(qids.map((qid) => () => ensureResearch(qid)), RESEARCH_PARALLEL);
+    await runLimited(todo.map(([q, s]) => () => generateOne(q, s)), PARALLEL);
+    setRunning(false);
+    refreshHealth();
+  }
+
   async function extend(q, style) {
     const current = texts[q.id]?.[style.id] || "";
     if (q.limit - current.length < 150) return;
@@ -532,14 +578,19 @@ export default function ModooWriter() {
     await runQuestionJob(q, style, (opts) => api.extend(formForApi(), q.id, style.id, current, references, opts));
   }
 
+  // 복사는 조용히 실패할 수 있다 (비보안 컨텍스트·권한 거부). 알려주지 않으면 붙여넣기가 안 되는 이유를 모른다.
   function copy(key, value) {
-    navigator.clipboard?.writeText(value).then(() => {
-      setCopied(key);
-      setTimeout(() => setCopied(""), 1500);
-    });
+    const mark = (k, ms) => { setCopied(k); setTimeout(() => setCopied(""), ms); };
+    const fail = () => mark(`${key}!`, 3000);
+    if (!navigator.clipboard?.writeText) return fail();
+    navigator.clipboard.writeText(value).then(() => mark(key, 1500), fail);
   }
+  // 복사 버튼 문구 — 성공은 1.5초, 실패는 3초 동안 바뀐다.
+  const copyLabel = (key, idle = "복사", done = "복사됨") =>
+    copied === key ? done : copied === `${key}!` ? "복사 안 됨 — 직접 선택하세요" : idle;
 
   const doneCount = activeQuestions.filter((q) => picked[q.id] && texts[q.id]?.[picked[q.id]]).length;
+  const missingCount = missingPairs(texts).length;
 
   // ───────── 렌더 ─────────
   return (
@@ -567,14 +618,18 @@ export default function ModooWriter() {
           {server === null && <span className="text-slate-400">백엔드 연결 확인 중…</span>}
           {server?.ok && (
             <>
-              <label className="flex items-center gap-2 text-slate-600">
-                <span>모델</span>
-                <select value={form.model || ""} onChange={(e) => setForm({ ...form, model: e.target.value })}
-                  className="px-2 py-1 rounded-md border border-slate-300 bg-white text-xs max-w-[220px]">
-                  {models.length === 0 && <option value="">{server.model}</option>}
-                  {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              </label>
+              {/* 고를 수 있는 모델이 하나뿐이면 드롭다운은 고르라는 신호만 주고 할 일이 없다 → 글자로만 보여준다. */}
+              {models.length <= 1 ? (
+                <span className="text-slate-600">모델 {models[0]?.name || server.model}</span>
+              ) : (
+                <label className="flex items-center gap-2 text-slate-600">
+                  <span>모델</span>
+                  <select value={form.model || ""} onChange={(e) => setForm({ ...form, model: e.target.value })}
+                    className="px-2 py-1 rounded-md border border-slate-300 bg-white text-xs max-w-[220px]">
+                    {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                </label>
+              )}
               {models.find((m) => m.id === form.model)?.note && (
                 <span className="text-slate-400 hidden md:inline">{models.find((m) => m.id === form.model).note}</span>
               )}
@@ -599,7 +654,8 @@ export default function ModooWriter() {
             </>
           )}
           {server && !server.ok && (
-            <span className="text-red-600">백엔드({api.API_BASE})에 연결할 수 없어요. 프로젝트 루트에서 <code className="font-mono bg-red-50 px-1">uvicorn backend.main:app --port 8000</code> 을 실행해 주세요.</span>
+            /* 공개 서비스라 일반 사용자가 본다 — 실행 명령 대신 사람 말로. 주소·원인은 title 에만 남겨 개발자가 확인한다. */
+            <span className="text-red-600" title={`${api.API_BASE} 연결 실패: ${server.error || ""}`}>서버와 연결이 끊겼어요. 잠시 후 새로고침해 주세요.</span>
           )}
         </div>
       </header>
@@ -779,6 +835,10 @@ export default function ModooWriter() {
                 {running ? "초안을 만드는 중입니다. 완성된 문항부터 읽고 골라두세요." : `${doneCount}/${activeQuestions.length}개 문항 선택됨. 글은 직접 고쳐도 됩니다.`}
               </p>
               <div className="flex gap-2">
+                {/* 새로고침 등으로 중간에 끊기면 큐에 못 들어간 문항이 남는다 — 이어서 만들 수단을 눈에 보이게 둔다. */}
+                {!running && missingCount > 0 && Object.keys(status).length > 0 && (
+                  <button onClick={generateMissing} className="px-3 py-1.5 text-sm rounded-lg border border-indigo-300 text-indigo-700">남은 {missingCount}개 계속 만들기</button>
+                )}
                 <button onClick={() => setStep(0)} className="px-3 py-1.5 text-sm rounded-lg border border-slate-300">입력 수정</button>
                 {/* 저장본까지 비우고 처음부터. 새로고침으로는 안 지워지므로 명시적 버튼이 필요하다. */}
                 <button onClick={() => { if (confirm("지금까지 만든 초안과 조사 결과가 모두 지워집니다. 계속할까요?")) { try { localStorage.removeItem(SAVE_KEY); sessionStorage.removeItem(JOBS_KEY); } catch { /* 접근 차단 */ } location.reload(); } }}
@@ -816,11 +876,18 @@ export default function ModooWriter() {
                     </div>
                   </div>
 
-                  <ResearchPanel state={researchState[q.id]} />
+                  <ResearchPanel state={researchState[q.id]} warm={researchWarm} />
 
                   <div className="px-5 pb-4">
                     {st === "loading" && <JobProgress info={jobInfo[q.id]?.[cur]} />}
                     {st === "loading" && !text && <div className="h-32 rounded-lg bg-slate-50 animate-pulse" />}
+                    {/* 조사는 3개씩 병렬로 돈다 — 아직 차례가 안 온 문항은 상태가 아예 없어서 제목만 있는 빈 카드로 보였다. */}
+                    {!st && running && (
+                      <>
+                        {!researchState[q.id]?.busy && <div className="text-xs text-slate-500 mb-2">차례를 기다리는 중…</div>}
+                        <div className="h-32 rounded-lg bg-slate-50" />
+                      </>
+                    )}
                     {st === "error" && (
                       <div className="p-4 rounded-lg bg-red-50 text-sm text-red-700 flex justify-between items-center gap-3">
                         <span>생성에 실패했어요. {errors[q.id]?.[cur] ? <span className="text-red-600">{errors[q.id][cur]}</span> : "무료 모델은 잠시 후 다시 시도하면 대개 됩니다."}</span>
@@ -852,7 +919,7 @@ export default function ModooWriter() {
                               </button>
                             )}
                             <button onClick={() => generateOne(q, STYLES.find((s) => s.id === cur))} disabled={st === "loading"} className="underline disabled:text-slate-300">새로 생성</button>
-                            <button onClick={() => copy(q.id + cur, text)} className="underline">{copied === q.id + cur ? "복사됨" : "복사"}</button>
+                            <button onClick={() => copy(q.id + cur, text)} className="underline">{copyLabel(q.id + cur)}</button>
                             {cardsForQuestion(q.id).length > 0 && (
                               <button onClick={() => setAssistOpen((p) => ({ ...p, [q.id]: !p[q.id] }))} className="underline text-indigo-600">
                                 {assistOpen[q.id] ? "정보 보태기 닫기" : "정보 보태기"}
@@ -889,7 +956,7 @@ export default function ModooWriter() {
                 <p className="text-sm text-slate-500">modoo.or.kr 도전하기 화면을 옆에 열고 문항 순서대로 붙여넣으세요.</p>
               </div>
               <button onClick={() => copy("all", activeQuestions.map((q) => `[${q.label}] ${q.title}\n${texts[q.id]?.[picked[q.id]] || "(미작성)"}`).join("\n\n"))}
-                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm">{copied === "all" ? "전체 복사됨" : "전체 복사"}</button>
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm">{copyLabel("all", "전체 복사", "전체 복사됨")}</button>
             </div>
 
             <div className="grid md:grid-cols-2 gap-3 text-sm">
@@ -925,7 +992,7 @@ export default function ModooWriter() {
                       <h3 className="font-semibold text-sm">{q.title}</h3>
                     </div>
                     <button onClick={() => copy("final" + q.id, text)} disabled={!text}
-                      className="px-3 py-1 text-xs rounded-lg border border-slate-300 disabled:text-slate-300 shrink-0">{copied === "final" + q.id ? "복사됨" : "복사"}</button>
+                      className="px-3 py-1 text-xs rounded-lg border border-slate-300 disabled:text-slate-300 shrink-0">{copyLabel("final" + q.id)}</button>
                   </div>
                   {text ? (
                     <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-700">{text}</p>
