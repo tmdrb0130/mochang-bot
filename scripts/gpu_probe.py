@@ -110,6 +110,11 @@ async def sample_metrics(base_url: str, stop: asyncio.Event, samples: list[dict]
                 pass
 
 
+# config.yaml llm.extra — Qwen3.8 의 thinking 끄기(chat_template_kwargs) 같은 요청 옵션. 실사용과 같게 보내야
+# 측정이 맞는다 (안 보내면 thinking 이 켜져 max_tokens 를 전부 추론에 쓴다). run() 이 채운다.
+EXTRA: dict = {}
+
+
 async def one_call(client: httpx.AsyncClient, model: str, max_tokens: int,
                    messages: list[dict]) -> tuple[float, int, int, str | None]:
     t0 = time.perf_counter()
@@ -119,6 +124,7 @@ async def one_call(client: httpx.AsyncClient, model: str, max_tokens: int,
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": 0.7,
+            **EXTRA,
         })
         r.raise_for_status()
         usage = (r.json().get("usage") or {})
@@ -178,6 +184,8 @@ async def run(levels: list[int], max_tokens: int | None, timeout: float, verbose
     llm = cfg["llm"]
     base_url, api_key, model = llm["base_url"], llm.get("api_key", "dummy"), llm["model"]
     max_tokens = max_tokens or int(llm.get("max_tokens", 4096))       # 기본값은 실사용과 같은 상한
+    global EXTRA
+    EXTRA = dict(llm.get("extra") or {})
     messages = (real_messages(question_id) if prompt == "real"
                 else [{"role": "user", "content": SHORT_PROMPT}])
     chars = sum(len(m["content"]) for m in messages)

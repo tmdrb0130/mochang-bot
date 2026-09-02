@@ -20,25 +20,21 @@ llm:
   # daily_request_limit / fallback 로직이 자동으로 꺼진다(client.py is_openrouter).
   # 주의: SSH 터널이 필요하다 -> ssh -N -L 30800:localhost:30800 gpu
   # 되돌리려면 config.yaml.openrouter.bak 참고.
-  # 2026-09-02 밤: Qwen3.8-27B-FP8 (GPU 서버 GPU2, 파드 vllm-qwen, NodePort 30801 → SSH 터널 30801).
-  # A/B(아이디어 3 × 문항 5, 같은 참고자료·후처리): 평균 32s vs 라마 61s, 긴 문항 1,609자 vs 1,153자, 이물 0/0.
-  # 라마로 되돌리기: config.yaml.llama.bak 를 config.yaml 로 (라마 파드 vllm/30800 은 계속 떠 있음).
-  base_url: "http://localhost:30801/v1"
+  base_url: "http://localhost:30800/v1"
   api_key: "dummy"                        # vLLM 은 키를 검증하지 않음
-  model: "Qwen/Qwen3.8-27B-FP8"
+  model: "casperhansen/llama-3.3-70b-instruct-awq"
   max_tokens: 4096                        # 실측 한국어 1.7자/토큰 -> 2000자면 약 1200토큰. 넉넉함
   temperature: 0.7
-  # Qwen3.8 은 thinking 이 기본 ON — 켜 두면 max_tokens 를 전부 추론에 쓰고 본문이 0자로 온다(실측). 요청마다 끈다.
-  extra: {chat_template_kwargs: {enable_thinking: false}}
+  extra: {}                               # vLLM 이므로 OpenRouter 전용 reasoning 옵션 제거
 
 # UI에서 고를 수 있는 모델 목록. llm.model 이 기본값. 각 항목에 extra 를 두면 그 모델에만 추가 적용.
 models:
   # vLLM 서버가 서빙하는 모델은 하나뿐이라 목록도 하나다.
   # 다른 id 를 고르면 vLLM 이 404 를 낸다.
   # OpenRouter 로 되돌릴 때 쓸 목록은 config.yaml.openrouter.bak 에 있다.
-  - id: Qwen/Qwen3.8-27B-FP8
+  - id: casperhansen/llama-3.3-70b-instruct-awq
     name: 백석대학교 로컬 LLM
-    note: 무료 한도 없음. 문항당 15~40초.
+    note: 무료 한도 없음. 문항당 15~25초. 분량이 목표보다 짧게 나오는 경향 있음
 
 # 선택 모델이 429/다운이면 목록의 다른 모델로 OpenRouter 가 자동 전환 (`models` 파라미터, 최대 3개 → 선택 모델 + 목록 위쪽 2개).
 # 응답의 model 로 실제 모델 확인.
@@ -62,13 +58,7 @@ daily_request_limit: 50
 # 2026-09-02 작업 39: 사실 추출을 페이지별 호출로 나눠 조사 1건이 모델을 여러 번 부른다(페이지 수만큼, 동시 3장).
 # 조사 쪽 실제 동시 호출이 워커 수보다 커지므로 본문·조사 워커를 함께 낮춰 총량을 포화점 아래로 유지한다:
 #   본문 24 + 조사 6×(페이지 동시 3) = 최대 42.
-# 2026-09-02 밤, Qwen3.8-27B-FP8(GPU2) 전환 후 재측정 (scripts/gpu_probe.py, 실사용 프롬프트 4,030토큰 / 생성 620토큰):
-#   동시성   20 →  40 →  60 →  80 → 100
-#   tok/s   374 → 508 → 528 → 543 → 565   ← 40 부터 평평 (처리량 포화점 ≈ 40~60)
-#   p50(초)  28 →  46 →  62 →  85 → 103   ← 동시성에 비례해 늘어남
-#   KV      16% → 32% → 49% → 65% → 81%   ← preemption 0. 라마(30 동시에 100%)와 달리 KV 는 더 이상 한계가 아님
-# 규칙대로 포화 무릎(40)에 맞춘다: 본문 40 + 조사 6×3 = 최대 58. 더 올려도 처리량은 같고 문항당 대기만 길어진다.
-max_workers: 40
+max_workers: 24
 
 # ── 사업계획 골자 공유 (작업 20, docs/OUTLINE_PLAN.md) ──
 # 아이디어당 골자를 1회 만들어(라마 +1회, 이후 캐시) 문항 9개에 같이 넣는다.
@@ -129,12 +119,11 @@ research:
   # 로컬 70B 는 무료 한도가 없으므로 조사처럼 호출이 잦은 단계에 적합하다.
   # 주의: base_url 이 SSH 터널이라 `ssh -L 30800:localhost:30800 gpu` 가 켜져 있어야 한다.
   llm:
-    base_url: "http://localhost:30801/v1"                   # 2026-09-02: 조사도 Qwen (GPU2). 라마는 30800
+    base_url: "http://localhost:30800/v1"
     api_key: "dummy"                                        # vLLM 은 키를 검증하지 않음
-    model: "Qwen/Qwen3.8-27B-FP8"
+    model: "casperhansen/llama-3.3-70b-instruct-awq"
     max_tokens: 4096
     temperature: 0.3                                        # 사실 추출·JSON 이라 낮게
-    extra: {chat_template_kwargs: {enable_thinking: false}} # thinking 끄기 (본문 클라이언트와 같은 이유)
     max_workers: 6                                          # 작업 39 로 9 → 6. 조사 1건이 페이지마다 호출하므로(동시 3장)
                                                             # 실제 동시 조사 호출은 최대 6×3=18 이다. 본문 24 + 조사 18 = 42 (GPU 포화점 60 아래).
                                                             # 페이지별로 나눈 뒤 프롬프트는 짧아졌다(2만 → 3천 토큰 안팎)
