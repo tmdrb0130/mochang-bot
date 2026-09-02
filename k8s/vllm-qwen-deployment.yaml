@@ -1,0 +1,101 @@
+# Qwen3.8-27B-FP8 vLLM — GPU 서버 GPU2 (2026-09-02, 라마 70B 와 나란히 띄워 A/B 비교용)
+#
+# 적용:   ssh gpu 'kubectl apply -f -' < k8s/vllm-qwen-deployment.yaml
+# 확인:   ssh gpu 'kubectl get pods -l app=vllm-qwen; kubectl logs deploy/vllm-qwen --tail=20'
+# 제거:   ssh gpu 'kubectl delete deploy,svc vllm-qwen'      (라마 배포 vllm 은 영향 없음)
+# 이 PC:  ssh -f -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 30801:localhost:30801 gpu
+#         → http://localhost:30801/v1  (config.yaml base_url)
+#
+# 설계 근거 (PROGRESS 2026-09-02 저녁 절):
+# - GPU 지정: k8s 자원 요청(nvidia.com/gpu)을 쓰면 다른 사람 Docker 가 14.7GB 점유 중인 GPU0 을 받을 수 있다
+#   → 자원 요청 없이 NVIDIA_VISIBLE_DEVICES 로 GPU2(UUID) 고정. 런타임 설정 accept-nvidia-visible-devices-envvar-when-unprivileged 기본 true.
+# - 다운로드: 서버→huggingface.co 본진은 차단(20 B/s), hf-mirror.com 은 4.5 MB/s. 그런데 파드 안의 huggingface_hub 는 미러 응답을
+#   "HF 가 아니다"(FileMetadataError) 라며 거부 → 전임자 방식대로 **호스트에서 curl 로 폴더에 직접 받고 경로로 로드**한다.
+#   폴더 /opt/llm-models/qwen3.8-27b-fp8 (스크립트 .download.sh, 로그 .download.log — 3병렬 ≈ 5 MB/s, 31GB ≈ 2시간).
+#   ⚠ 파일 목록을 Windows 에서 만들면 줄 끝 \r 이 URL 에 들어가 curl 이 전부 거부한다 (sed 's/\r$//').
+#   파드는 HF_HUB_OFFLINE=1 — 네트워크를 아예 안 본다. served-model-name 으로 API 상 id 는 Qwen/Qwen3.8-27B-FP8 유지.
+# - 모델: Qwen3.8 은 thinking 기본 ON — 앱 쪽 config.yaml extra.chat_template_kwargs.enable_thinking=false 로 요청마다 끈다.
+#   비전 입력은 안 쓰므로 limit-mm-per-prompt 0 (멀티모달 프로파일링 메모리 절약).
+# - vLLM 0.25.0 (서버에 있는 이미지 그대로) — Qwen3_5ForConditionalGeneration 지원 확인, transformers 5.13 ≥ 5.8 요건 충족.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-qwen
+  namespace: default
+  labels:
+    app: vllm-qwen
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm-qwen
+  template:
+    metadata:
+      labels:
+        app: vllm-qwen
+    spec:
+      runtimeClassName: nvidia
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --model
+            - /root/.cache/huggingface/qwen3.8-27b-fp8      # hostPath /opt/llm-models/qwen3.8-27b-fp8
+            - --served-model-name
+            - Qwen/Qwen3.8-27B-FP8
+            - --max-model-len
+            - "32768"
+            - --gpu-memory-utilization
+            - "0.90"
+            - --kv-cache-dtype
+            - fp8
+            - --reasoning-parser
+            - qwen3
+            - --limit-mm-per-prompt
+            - '{"image": 0, "video": 0}'
+            - --port
+            - "8000"
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: GPU-136470ac-db1a-2a7c-a856-9f368e2068d8   # nvidia-smi index 2
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+            - name: HF_HUB_OFFLINE
+              value: "1"
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          startupProbe:                # 다운로드 2시간 + 로드를 기다린다 (30초 × 8640 = 3일)
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            failureThreshold: 8640
+          volumeMounts:
+            - name: model-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: model-cache
+          hostPath:
+            path: /opt/llm-models
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-qwen
+  namespace: default
+spec:
+  type: NodePort
+  selector:
+    app: vllm-qwen
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30801
+      protocol: TCP
