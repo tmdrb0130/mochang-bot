@@ -328,6 +328,7 @@ export default function ModooWriter() {
   // ── 인테이크(정보 보충) ──
   const [intake, setIntake] = useState(saved?.intake ?? null);      // /intake 결과 { summary, slots, cards, ready }
   const [intakeBusy, setIntakeBusy] = useState(false);
+  const [intakePos, setIntakePos] = useState(null);      // 인테이크 작업의 큐 대기 순번 (0 = 다음 차례, null = 실행 중/모름)
   const [answers, setAnswers] = useState(saved?.answers ?? {});      // answers[slot] = { answer: string|string[]|null, unknown: bool }
   const [cardIdx, setCardIdx] = useState(saved?.cardIdx ?? 0);
   const [regen, setRegen] = useState({});          // regen[slot] = { busy: bool, note: string, error?: string, count: number }
@@ -563,10 +564,11 @@ export default function ModooWriter() {
   // 1) 아이디어 읽기(인테이크) → 충분하면 바로 생성, 부족하면 카드 단계로
   async function startIntake() {
     setIntakeBusy(true);
+    setIntakePos(null);
     // 지금 제출하는 아이디어가 이 초안의 기준이 된다 — 이후 편집은 이 글과 비교해 같은 초안인지 가른다
     setForm((f) => ({ ...f, draftIdea: f.idea }));
     try {
-      const r = await api.intake(form);
+      const r = await api.intake(form, { onTick: (snap) => setIntakePos(snap.status === "queued" ? snap.position : null) });
       setIntake(r);
       setAnswers({});
       setCardIdx(0);
@@ -838,7 +840,7 @@ export default function ModooWriter() {
 
               <button onClick={startIntake} disabled={!canStart || intakeBusy}
                 className="w-full py-3 rounded-lg bg-indigo-600 text-white font-medium disabled:bg-slate-300 disabled:cursor-not-allowed">
-                {intakeBusy ? "아이디어를 읽고 있어요…" : "신청서 초안 만들기"}
+                {intakeBusy ? (intakePos != null && intakePos > 0 ? `대기 중 — 앞에 ${intakePos}명` : "아이디어를 읽고 있어요…") : "신청서 초안 만들기"}
               </button>
               {intakeBusy && <p className="text-xs text-slate-500 text-center">설명이 충분하면 바로 초안을 만들고, 부족한 부분이 있으면 몇 가지 골라달라고 할게요.</p>}
               {!canStart && (

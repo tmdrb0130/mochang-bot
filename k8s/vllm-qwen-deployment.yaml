@@ -58,6 +58,11 @@ spec:
             # 정확도 문제 가능" 경고를 낸다 (2026-09-02 첫 기동 로그). 96GB 중 가중치 28GB 라 bf16 KV 로도 캐시가 넉넉하다.
             - --reasoning-parser
             - qwen3
+            # 우선순위 스케줄링 (2026-09-03): 요청의 priority 가 낮은 수일수록 먼저. 앱은 조사·인테이크 호출에 0, 본문 생성에 100 을
+            # 보낸다 (config.yaml extra.priority) → GPU 가 붐빌 때 카드·참고자료가 먼저 나오고 생성(순번 표시되는 큐)이 대기를 흡수.
+            # 40명 실측에서 인테이크가 생성 320건과 GPU 를 나눠 쓰느라 11분 걸린 것의 처방.
+            - --scheduling-policy
+            - priority
             - --limit-mm-per-prompt
             - '{"image": 0, "video": 0}'
             - --port

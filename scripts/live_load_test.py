@@ -4,9 +4,9 @@
     .venv/Scripts/python scripts/live_load_test.py --users 60 --json docs/measurements/load60.json
 
 사용자 1명이 하는 일 (App.jsx 와 같은 순서·같은 동시성):
-  ① 아이디어·팀원·사업자 여부·역량 입력 → POST /intake (동기, 웹 조사 포함)  → 카드
+  ① 아이디어·팀원·사업자 여부·역량 입력 → /jobs/intake + 폴링 (웹 조사 포함)  → 카드
   ② 카드마다 다르게 답 (첫 보기 / 둘째 보기+직접 문장 / 모름 / 직접 입력)
-  ③ 문항 8개 조사 POST /research (동기, 동시 3 = RESEARCH_PARALLEL) → 문항별 facts (실제 웹 검색)
+  ③ 문항 8개 조사 /jobs/research + 폴링 (동시 3 = RESEARCH_PARALLEL) → 문항별 facts (실제 웹 검색)
   ④ 문항 8개 생성 POST /jobs/generate + 폴링 (동시 3 = PARALLEL), 참고자료 주입 → 1,000~2,000자 본문
 사용자마다 **아이디어 문장이 다르다** (60개 풀) → 조사 캐시가 안 걸려 검색·본문 추출·사실 추출이 실제로 돈다.
 사용자마다 다른 X-Forwarded-For → IP 당 동시 작업 제한(max_jobs_per_client)이 사용자별로 걸린다.
@@ -101,18 +101,37 @@ def payload(u: dict) -> dict:
     return {k: v for k, v in u.items() if k != "name"}
 
 
+async def job(c: httpx.AsyncClient, kind: str, body: dict, hdr: dict) -> dict:
+    """/jobs/{kind} 제출(429 면 프론트처럼 잠시 뒤 재시도) → 2.5초 폴링 → 최종 snapshot (+ _position: 제출 때 순번)."""
+    for _ in range(120):
+        r = await c.post(f"{B}/jobs/{kind}", json=body, headers=hdr, timeout=60)
+        if r.status_code != 429:
+            break
+        await asyncio.sleep(3)
+    r.raise_for_status()
+    j = r.json()
+    while True:
+        await asyncio.sleep(2.5)
+        s = (await c.get(f"{B}/jobs/{j['job_id']}", timeout=60)).json()
+        if s["status"] in ("done", "error"):
+            s["_position"] = j.get("position")
+            return s
+
+
 async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> dict:
     u = make_user(i)
     hdr = {"X-Forwarded-For": f"10.99.{i // 250}.{i % 250 + 1}"}
     rec = {"user": i, "name": u["name"], "t0": round(time.time() - t_start, 1)}
-    # ① 인테이크 (동기 — 프론트와 같음)
+    # ① 인테이크 (/jobs/intake + 폴링 — 2026-09-03 프론트와 같음)
     t = time.time()
     try:
-        r = await c.post(f"{B}/intake", json=payload(u), headers=hdr, timeout=600)
-        r.raise_for_status()
-        it = r.json()
+        s = await job(c, "intake", payload(u), hdr)
+        it = s.get("result") or {}
+        if s["status"] != "done":
+            raise RuntimeError(s.get("error") or "job error")
         cards = it.get("cards") or []
-        rec["intake"] = {"ok": True, "sec": round(time.time() - t, 1), "cards": len(cards), "research_facts": len((it.get("research") or {}).get("facts") or [])}
+        rec["intake"] = {"ok": True, "sec": round(time.time() - t, 1), "cards": len(cards), "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds"),
+                         "research_facts": len((it.get("research") or {}).get("facts") or [])}
     except Exception as e:
         cards = []
         rec["intake"] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
@@ -128,11 +147,14 @@ async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> d
         async with sem:
             t = time.time()
             try:
-                r = await c.post(f"{B}/research", json={**form, "question_id": q}, headers=hdr, timeout=600)
-                r.raise_for_status()
-                facts = r.json().get("facts") or []
+                s = await job(c, "research", {**form, "question_id": q}, hdr)
+                res = s.get("result") or {}
+                if s["status"] != "done":
+                    raise RuntimeError(s.get("error") or "job error")
+                facts = res.get("facts") or []
                 refs[q] = facts
-                rec["research"][q] = {"ok": True, "sec": round(time.time() - t, 1), "facts": len(facts), "cached": r.json().get("cached")}
+                rec["research"][q] = {"ok": True, "sec": round(time.time() - t, 1), "facts": len(facts), "cached": res.get("cached"),
+                                      "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds")}
             except Exception as e:
                 refs[q] = []
                 rec["research"][q] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
@@ -145,20 +167,9 @@ async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> d
             t = time.time()
             body = {**form, "question_id": q, "style": "logic", "references": refs.get(q) or []}
             try:
-                for _ in range(40):
-                    r = await c.post(f"{B}/jobs/generate", json=body, headers=hdr, timeout=60)
-                    if r.status_code != 429:
-                        break
-                    await asyncio.sleep(3)
-                r.raise_for_status()
-                j = r.json()
-                while True:
-                    await asyncio.sleep(2.5)
-                    s = (await c.get(f"{B}/jobs/{j['job_id']}", timeout=60)).json()
-                    if s["status"] in ("done", "error"):
-                        break
+                s = await job(c, "generate", body, hdr)
                 text = ((s.get("result") or {}).get("text") or "")
-                rec["generate"][q] = {"ok": s["status"] == "done", "sec": round(time.time() - t, 1), "position": j.get("position"),
+                rec["generate"][q] = {"ok": s["status"] == "done", "sec": round(time.time() - t, 1), "position": s.get("_position"),
                                       "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds"), "chars": len(text),
                                       "error": (s.get("error") or "")[:100] or None}
             except Exception as e:

@@ -172,18 +172,26 @@ async def _with_idea_research(form: dict) -> dict:
     return found
 
 
+async def _intake_full(form: dict, owner: str | None) -> dict:
+    """인테이크 전체: 아이디어 공통 웹 조사 → 카드 생성 → research 요약 첨부. 동기 /intake 와 /jobs/intake 가 같이 쓴다.
+    (2026-09-03 이전엔 /jobs/intake 가 조사 없이 카드만 만들어 근거 없는 보기가 나왔다.)
+
+    카드 생성은 research_client(조사 클라이언트)로 돌린다 — 본문 생성이 채운 본문 큐 뒤에서 기다리지 않게(40명 실측: 최대 3분 47초),
+    그리고 vLLM 우선순위(extra.priority)가 조사와 같은 '높음'이 되게. 지금은 조사·본문 모델이 같은 Qwen 이라 품질 차이는 없다."""
+    found = await _with_idea_research(form)
+    out = await _persisted("intake", form, intake.run_intake(research_client, form), owner)
+    out["research"] = {"facts": found.get("facts") or [], "queries": found.get("queries") or [],
+                       "backend": found.get("backend"), "cached": found.get("cached"),
+                       **({"error": found["error"]} if found.get("error") else {})}
+    return out
+
+
 @app.post("/intake")
 async def intake_endpoint(req: IntakeRequest, request: Request):
     """웹 조사(라마) → 슬롯별 확인/부족 판정 + 부족한 슬롯의 '보기 고르기' 카드 생성.
     보기는 조사로 확인된 사실에 근거해 만들어지고, 근거가 있으면 보기마다 source 가 붙는다.
     ready=True 면 프론트는 카드 단계를 건너뛰고 바로 생성."""
-    form = req.model_dump()
-    found = await _with_idea_research(form)
-    out = await _persisted("intake", form, intake.run_intake(client, form), _client_key(request))
-    out["research"] = {"facts": found.get("facts") or [], "queries": found.get("queries") or [],
-                       "backend": found.get("backend"), "cached": found.get("cached"),
-                       **({"error": found["error"]} if found.get("error") else {})}
-    return out
+    return await _intake_full(req.model_dump(), _client_key(request))
 
 
 class IntakeRegenerateRequest(IntakeRequest):
@@ -202,11 +210,14 @@ def _regenerate_form(f: dict) -> dict:
 async def intake_regenerate_endpoint(req: IntakeRegenerateRequest):
     """지원자가 '보기가 안 맞아요'라고 한 슬롯의 카드만 다시 생성 (LLM 1회). → {cards, slots, model, error?}
     프론트는 돌아온 cards 를 슬롯 기준으로 기존 카드와 바꿔 끼운다."""
-    f = req.model_dump()
+    return await _intake_regenerate_full(req.model_dump())
+
+
+async def _intake_regenerate_full(f: dict) -> dict:
     form = _regenerate_form(f)
     # 재생성 보기도 조사 근거 위에서 만든다. 같은 아이디어면 디스크 캐시가 걸려 추가 조사 비용이 거의 없다.
     await _with_idea_research(form)
-    return await intake.regenerate_cards(client, form, f["slots"], f.get("seen") or {}, f.get("note") or "", f.get("keep") or {})
+    return await intake.regenerate_cards(research_client, form, f["slots"], f.get("seen") or {}, f.get("note") or "", f.get("keep") or {})
 
 
 class ResearchRequest(BaseModel):
@@ -279,14 +290,29 @@ async def verify_endpoint(req: VerifyRequest):
 _JOB_KINDS = {
     "generate": (GenerateRequest, lambda f: generate.generate_one(client, f)),
     "extend": (ExtendRequest, lambda f: generate.extend_one(client, {k: v for k, v in f.items() if k != "current"}, f["current"])),
-    "intake": (IntakeRequest, lambda f: intake.run_intake(client, f)),
-    "intake_regenerate": (IntakeRegenerateRequest, lambda f: intake.regenerate_cards(
-        client, _regenerate_form(f), f["slots"], f.get("seen") or {}, f.get("note") or "", f.get("keep") or {})),
-    # 조사는 조사 전용 클라이언트로 — 동기 /research 엔드포인트와 같게 맞춘다(작업 22).
-    # 지금은 둘 다 같은 로컬 라마라 결과는 같지만, 모델을 나누면 경로마다 조사 품질이 달라진다.
+    # 인테이크·조사 작업은 동기 엔드포인트와 완전히 같은 일을 한다 (아이디어 조사 포함).
+    "intake": (IntakeRequest, lambda f: _intake_full(f, None)),
+    "intake_regenerate": (IntakeRegenerateRequest, lambda f: _intake_regenerate_full(f)),
     "research": (ResearchRequest, lambda f: research_pipeline.run_research(research_client, researcher, f, f["question_id"], research_cfg)),
     "verify": (VerifyRequest, lambda f: verify.verify_text(client, {k: v for k, v in f.items() if k != "text"}, f["question_id"], f["text"])),
 }
+# 인테이크·조사 작업은 **조사 큐**(research_client.queue, 워커 수 = research.llm.max_workers)에서 돈다.
+# 본문 큐에 넣으면 웹 검색·페이지 수집으로 수십 초씩 네트워크를 기다리는 동안 본문 워커를 점유해 생성이 굶고,
+# 반대로 생성이 몰리면 인테이크가 그 뒤에 선다(40명 실측: 카드 생성 대기 최대 3분 47초). 큐를 나누면 서로 막지 않는다.
+# 조사 큐 워커 안에서 부르는 LLM 호출은 중첩 제출 없이 바로 나간다(jobs.py _in_worker) — 동시 호출 ≤ 워커 × 페이지 동시(3).
+_RESEARCH_KINDS = {"intake", "intake_regenerate", "research"}
+
+
+def _queue_for(kind: str):
+    return research_client.queue if kind in _RESEARCH_KINDS else client.queue
+
+
+def _find_job(job_id: str):
+    """두 큐 중 어느 쪽에 있든 찾는다 (job_id 는 uuid 라 겹치지 않는다)."""
+    snap = client.queue.get(job_id)
+    if snap is None and research_client is not client:
+        snap = research_client.queue.get(job_id)
+    return snap
 
 
 def _client_key(request: Request) -> str:
@@ -311,19 +337,22 @@ async def submit_job(kind: str, body: dict, request: Request):
     model_cls, runner = _JOB_KINDS[kind]
     form = model_cls(**body).model_dump()
     owner = _client_key(request)
+    q = _queue_for(kind)
     try:
-        # 결과가 나오면 DB 에 남기고(아이디어·초안, storage.py) 그대로 job.result 가 된다
-        job = client.queue.submit(lambda: _persisted(kind, form, runner(form), owner), kind=kind, owner=owner)
+        # 결과가 나오면 DB 에 남기고(아이디어·초안, storage.py) 그대로 job.result 가 된다.
+        # intake 는 _intake_full 안에서 이미 저장하므로 여기서 다시 저장하지 않는다(kind 가 저장 대상이 아니어서 무해).
+        job = q.submit(lambda: _persisted(kind, form, runner(form), owner) if kind != "intake" else _intake_full(form, owner),
+                       kind=kind, owner=owner)
     except TooManyJobs as e:
         raise HTTPException(status_code=429, detail=str(e),
                             headers={"Retry-After": "10"})
-    return {"job_id": job.id, "kind": kind, "position": client.queue.position(job.id), "queue": client.queue.stats()}
+    return {"job_id": job.id, "kind": kind, "position": q.position(job.id), "queue": q.stats()}
 
 
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
     """{status: queued|running|done|error, position, result, error}. done 이면 result 에 동기 엔드포인트와 같은 응답."""
-    snap = client.queue.get(job_id)
+    snap = _find_job(job_id)
     if snap is None:
         raise HTTPException(status_code=404, detail="작업이 없습니다 (만료되었거나 잘못된 ID).")
     return snap
@@ -331,8 +360,12 @@ async def get_job(job_id: str):
 
 @app.get("/jobs")
 async def queue_stats(request: Request):
-    """큐 전체 상태 + 이 클라이언트(IP)가 지금 점유 중인 작업 수(your_active). 기존 필드는 그대로."""
-    return {**client.queue.stats(), "your_active": client.queue.active_for(_client_key(request))}
+    """본문 큐 전체 상태 + 이 클라이언트(IP)가 지금 점유 중인 작업 수(your_active). 기존 필드는 그대로.
+    research 에 조사 큐(인테이크·조사 작업) 상태를 같이 준다."""
+    out = {**client.queue.stats(), "your_active": client.queue.active_for(_client_key(request))}
+    if research_client is not client:
+        out["research"] = {**research_client.queue.stats(), "your_active": research_client.queue.active_for(_client_key(request))}
+    return out
 
 
 @app.get("/drafts/{draft_id}")

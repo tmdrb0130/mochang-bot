@@ -29,7 +29,9 @@ llm:
   max_tokens: 4096                        # 실측 한국어 1.7자/토큰 -> 2000자면 약 1200토큰. 넉넉함
   temperature: 0.7
   # Qwen3.8 은 thinking 이 기본 ON — 켜 두면 max_tokens 를 전부 추론에 쓰고 본문이 0자로 온다(실측). 요청마다 끈다.
-  extra: {chat_template_kwargs: {enable_thinking: false}}
+  # priority: vLLM 우선순위(--scheduling-policy priority, 낮을수록 먼저). 본문 생성은 100 — 조사·인테이크(0)가 먼저 GPU 를 받고
+  # 생성은 순번이 보이는 큐에서 기다린다. (40명 실측: 인테이크가 생성 320건과 GPU 를 나눠 쓰느라 11분)
+  extra: {chat_template_kwargs: {enable_thinking: false}, priority: 100}
 
 # UI에서 고를 수 있는 모델 목록. llm.model 이 기본값. 각 항목에 extra 를 두면 그 모델에만 추가 적용.
 models:
@@ -134,7 +136,7 @@ research:
     model: "Qwen/Qwen3.8-27B-FP8"
     max_tokens: 4096
     temperature: 0.3                                        # 사실 추출·JSON 이라 낮게
-    extra: {chat_template_kwargs: {enable_thinking: false}} # thinking 끄기 (본문 클라이언트와 같은 이유)
+    extra: {chat_template_kwargs: {enable_thinking: false}, priority: 0} # thinking 끄기 + vLLM 우선순위 '먼저'(인테이크 카드도 이 클라이언트)
     # 2026-09-03 00:1x 40명 실측(Qwen, 조사 워커 6): 조사 LLM 호출 988건이 이 큐에서 **중앙 2분 36초·최대 5분** 대기, 실행은 2.1초.
     # 그동안 vLLM 은 running 1~7 로 놀았고, 인테이크가 10분(nginx 600s)을 넘겨 38/40 명이 504. KV 는 최고 34% 라 여유 →
     # 6 → 24. 실제 동시 조사 호출 최대 24×3=72 + 본문 40 = 112 (짧은 prefill 위주라 본문 생성과 나눠 쓴다. 재측정으로 확인)

@@ -45,9 +45,11 @@ function post(path, body) {
   });
 }
 
-/** 아이디어 인테이크 → { summary, slots[{id,label,status,known}], cards[{slot,label,type,question,why,question_ids,options[{label,hint}]}], ready, model } */
-export function intake(form) {
-  return post("/intake", toPayload(form));
+/** 아이디어 인테이크 → { summary, slots[{id,label,status,known}], cards[{slot,label,type,question,why,question_ids,options[{label,hint}]}], ready, model, research }
+ *  2026-09-03: 동기 POST /intake 에서 작업 큐(/jobs/intake)로. 40명 실측에서 인테이크가 10분(nginx 상한)을 넘겨 504 → "조사 실패" 가 됐다.
+ *  큐 방식은 요청이 짧아 타임아웃이 없고, opts.onTick 으로 대기 순번을 보여줄 수 있다. 응답 형태는 동기와 같다. */
+export function intake(form, opts) {
+  return runJob("intake", toPayload(form), opts);
 }
 
 /** 카드 재생성: 보기가 안 맞는 슬롯만 다시 → { cards[슬롯별 새 카드], slots, model, error? }
@@ -60,8 +62,8 @@ export function intakeRegenerate(form, slots, seen, note = "", keep = {}) {
  *  백엔드의 조사 전용 모델(config.yaml research.llm — 지금은 로컬 라마 70B)이 처리한다.
  *  → { question_id, queries, backend, result_count, pages[{url,title}], facts[{fact,quote,source_title,url,date,publisher,use_for}], references, cached }
  *  결과의 facts 를 generate/extend 의 references 로 넘기면 [웹 참고자료] 로 주입된다. */
-export function research(form, questionId) {
-  return post("/research", { ...toPayload(form), question_id: questionId });
+export function research(form, questionId, opts) {
+  return runJob("research", { ...toPayload(form), question_id: questionId }, opts);   // 2026-09-03: 인테이크와 같은 이유로 큐로
 }
 
 // ───────────────────────── 작업 큐 (비동기 제출 → 폴링) ─────────────────────────

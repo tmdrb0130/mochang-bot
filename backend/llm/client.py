@@ -86,6 +86,8 @@ def research_client_config(config: dict) -> dict | None:
         "daily_request_limit": None,
         "max_workers": rl.get("max_workers") or config.get("max_workers") or 4,
         "retry": config.get("retry") or {},
+        # 인테이크·조사 작업(/jobs/intake·/jobs/research)이 이 큐에서 돌므로 IP 당 동시 제한도 같이 건다 (2026-09-03)
+        "max_jobs_per_client": config.get("max_jobs_per_client") or 0,
     }
 
 
