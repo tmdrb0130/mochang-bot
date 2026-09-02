@@ -58,7 +58,8 @@
 ## 5. 결정 (2026-09-02 10:2x 사용자 — 세션1 추천안 그대로 진행)
 
 - [x] 임베딩 모델: **로컬 Ollama `bge-m3`** (`ollama pull bge-m3`, 사용자 실행). LlamaIndex `OllamaEmbedding`.
-- [x] "충분" 임계 초기값: **유사도 0.8 이상 · 5건 이상** — `config.yaml research.vectorstore.{min_score,min_hits}` 로 조정 가능하게.
+- [x] "충분" 임계 초기값: ~~0.8~~ → **유사도 0.6 이상 · 5건 이상** (2026-09-02 11:3x 세션1 조정 — 세션3 bge-m3 실측에서 같은 주제 문장끼리 0.668.
+  0.8 이면 벡터DB 가 사실상 안 쓰임). `config.yaml research.vectorstore.{min_score,min_hits}` 로 조정. 조회 단계 붙인 뒤 실사용 로그로 재조정.
 - [x] 뉴스 신선도: **date 2년 초과 제외** — `max_age_days: 730`.
 
 ## 5-1. 모듈 인터페이스 (세션2 구현 `backend/rag/vectorstore.py`, 세션3 이 파이프라인에 연결)
