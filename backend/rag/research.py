@@ -189,6 +189,10 @@ NAVER_ENDPOINTS = {                      # 검색 유형 → (경로 조각, sou
 
 NAVER_MAX_DISPLAY = 100                  # display 는 1~100 (start 는 1~1000)
 
+# 유형별 기본 정렬. 2026-09-02 실호출 확인: 블로그를 sort=sim 으로 부르면 3년 전 무관한 글이 섞여 나온다.
+# 뉴스는 sim 이 관련도가 좋았고, 블로그·카페는 date(최신순)가 낫다.
+NAVER_SORT_BY_KIND = {"news": "sim", "blog": "date", "cafearticle": "date", "webkr": "sim"}
+
 
 def strip_tags(text: str) -> str:
     """네이버 응답의 <b> 강조 태그와 HTML 엔티티 제거."""
@@ -221,8 +225,11 @@ class NaverConfig:
     client_secret: str = ""
     base_url: str = "https://naverapihub.apigw.ntruss.com/search/v1"
     kinds: list[str] = field(default_factory=lambda: ["news", "blog"])
-    sort: str = "sim"                    # sim(정확도) | date(최신). 뉴스는 date 도 유용
+    sort: str = ""                       # 비우면 유형별 기본값(NAVER_SORT_BY_KIND). 값을 주면 전 유형에 강제
     timeout: int = 10
+
+    def sort_for(self, kind: str) -> str:
+        return self.sort or NAVER_SORT_BY_KIND.get(kind, "sim")
 
     @property
     def configured(self) -> bool:
@@ -241,7 +248,7 @@ class NaverConfig:
             client_secret=os.environ.get(nc.get("client_secret_env", "NAVER_CLIENT_SECRET"), ""),
             base_url=nc.get("base_url", "https://naverapihub.apigw.ntruss.com/search/v1"),
             kinds=[k for k in nc.get("kinds", ["news", "blog"]) if k in NAVER_ENDPOINTS],
-            sort=nc.get("sort", "sim"),
+            sort=nc.get("sort", ""),
             timeout=int(nc.get("timeout", 10)),
         )
 
@@ -286,7 +293,8 @@ class NaverSearch:
                 path = NAVER_ENDPOINTS[kind][0]
                 try:
                     r = await client.get(f"{self.cfg.base_url.rstrip('/')}/{path}",
-                                         params={"query": query, "display": per_kind, "sort": self.cfg.sort})
+                                         params={"query": query, "display": per_kind,
+                                                 "sort": self.cfg.sort_for(kind)})
                     if r.status_code >= 400:
                         try:
                             detail = naver_error_message(r.json())
@@ -346,7 +354,10 @@ class Researcher:
     """
 
     def __init__(self, backends: list[tuple[str, SearchFn]] | None = None, cache: DiskCache | None = None,
-                 vane: VaneConfig | None = None, naver: NaverConfig | None = None):
+                 vane: VaneConfig | None = None, naver: NaverConfig | None = None,
+                 extras: list[tuple[str, SearchFn]] | None = None):
+        # extras: 폴백 사슬이 아니라 **항상 같이 물어보는** 소스 (정형 API). 결과는 웹 검색 결과 앞에 붙는다.
+        self.extras = extras or []
         if backends is None:
             backends = []
             if vane and vane.configured:
@@ -363,13 +374,21 @@ class Researcher:
         query = query.strip()
         if not query:
             return []
-        key = f"{'+'.join(n for n, _ in self.backends)}|{max_results}|{query}"
+        names = "+".join(n for n, _ in self.backends) + ("|x:" + "+".join(n for n, _ in self.extras) if self.extras else "")
+        key = f"{names}|{max_results}|{query}"
         if use_cache:
             hit = self.cache.get(key)
             if hit is not None:
                 self.last_backend = "cache"
                 return hit
-        errors = []
+        extra_rows: list[dict] = []
+        errors: list[str] = []
+        for name, fn in self.extras:
+            try:
+                extra_rows.extend(await fn(query, max_results))
+            except Exception as e:      # 정형 소스가 죽어도 웹 검색은 그대로 간다
+                errors.append(f"{name}: {type(e).__name__}: {str(e)[:120]}")
+
         for name, fn in self.backends:
             try:
                 results = await fn(query, max_results)
@@ -379,12 +398,15 @@ class Researcher:
             if results:
                 self.last_backend = name
                 self.last_error = "; ".join(errors) or None
+                merged = dedupe(extra_rows + results)
                 if use_cache:
-                    self.cache.set(key, results)
-                return results
-        self.last_backend = None
-        self.last_error = "; ".join(errors) or "no results"
-        return []
+                    self.cache.set(key, merged)
+                return merged
+        self.last_backend = "opendata" if extra_rows else None
+        self.last_error = "; ".join(errors) or ("no results" if not extra_rows else None)
+        if extra_rows and use_cache:
+            self.cache.set(key, dedupe(extra_rows))
+        return dedupe(extra_rows)
 
 
 def researcher_from_config(config: dict) -> Researcher:
@@ -401,7 +423,10 @@ def researcher_from_config(config: dict) -> Researcher:
         optimization_mode=vane_cfg.get("optimization_mode", "speed"),
     ) if vane_cfg.get("enabled", False) else None
     cache = DiskCache(ttl=int(rc.get("cache_ttl_seconds", DEFAULT_TTL)))
-    return Researcher(vane=vane, naver=NaverConfig.from_config(rc), cache=cache)
+    from .opendata import OpenDataConfig, OpenDataSources, build_sources     # 순환 import 방지용 지연 import
+    sources = build_sources(OpenDataConfig.from_config(rc))
+    extras = [("opendata", OpenDataSources(sources))] if sources else []
+    return Researcher(vane=vane, naver=NaverConfig.from_config(rc), cache=cache, extras=extras)
 
 
 def today_iso() -> str:

@@ -5,6 +5,7 @@ import pytest
 
 from backend.rag import pipeline as P
 from backend.rag import research as R
+from backend.rag import opendata as O
 from backend.llm.client import LLMResult
 
 
@@ -406,3 +407,103 @@ async def test_one_person_scenario_when_shared_research_covers_everything(tmp_pa
         await P.run_research(client, researcher, form, qid, cfg, cache=cache, fetch=fetch)
     assert counters["search"] + counters["fetch"] == 10
     assert client.calls.count("facts") == 1                      # 사실 추출은 공통 조사 때 한 번뿐
+
+
+# ── 도메인별 상한 + 정형 API 결과(no_fetch) 처리 ──
+
+@pytest.mark.asyncio
+async def test_collect_pages_caps_results_per_domain(tmp_path):
+    """근거가 한 신문사에 쏠리지 않게 같은 도메인은 상한까지만 (작업 7)."""
+    results = ([R.make_result(f"한 신문사 {i}", f"https://news.co.kr/{i}", "요약") for i in range(5)]
+               + [R.make_result("다른 곳", "https://other.co.kr/1", "요약")])
+    researcher = R.Researcher(backends=[("fake", lambda q, n: _aret(results))], cache=R.DiskCache(tmp_path))
+    fetched = []
+
+    async def fetch(url, timeout=15):
+        fetched.append(url)
+        return PAGE_TEXT
+
+    cfg = P.ResearchConfig(max_results_per_query=6, max_pages_to_extract=6, max_pages_per_domain=2)
+    _, pages = await P.collect_pages(researcher, ["q"], cfg, fetch=fetch)
+    assert sum(1 for u in fetched if "news.co.kr" in u) == 2          # 5건 중 2건만
+    assert "https://other.co.kr/1" in fetched
+    assert len(pages) == 3
+
+    cfg0 = P.ResearchConfig(max_results_per_query=6, max_pages_to_extract=6, max_pages_per_domain=0)
+    fetched.clear()
+    await P.collect_pages(researcher, ["q"], cfg0, fetch=fetch)
+    assert len(fetched) == 6                                          # 0 이면 제한 없음
+
+
+@pytest.mark.asyncio
+async def test_collect_pages_uses_stat_snippets_without_fetching(tmp_path):
+    """정형 API 결과는 HTTP fetch 없이 snippet 을 본문으로 쓴다 — 도메인 상한도 적용받지 않는다."""
+    stat = O.stat_result("전국 음식 업종 상가업소 수", "https://sg.sbiz.or.kr/",
+                         "소상공인시장진흥공단 상권정보 기준 전국 '음식' 업종 상가업소는 840,255개다 (2026년 06월 기준 자료).",
+                         "202606")
+    stat2 = O.stat_result("통계표", "https://kosis.kr/statHtml/statHtml.do?orgId=101&tblId=T",
+                          "국가데이터처 「행정구역별 인구수」 최신 수치. 전국 총인구수: 51117378명 (2025)", "2025")
+    web = [R.make_result(f"기사 {i}", f"https://news.co.kr/{i}", "요약 " * 20) for i in range(3)]
+    researcher = R.Researcher(backends=[("fake", lambda q, n: _aret([stat, stat2] + web))],
+                              cache=R.DiskCache(tmp_path))
+    fetched = []
+
+    async def fetch(url, timeout=15):
+        fetched.append(url)
+        return PAGE_TEXT
+
+    cfg = P.ResearchConfig(max_results_per_query=6, max_pages_to_extract=6, max_pages_per_domain=1)
+    _, pages = await P.collect_pages(researcher, ["음식 업종 점포 수"], cfg, fetch=fetch)
+
+    assert not any("sbiz" in u or "kosis" in u for u in fetched)      # 정형 결과는 안 받아온다
+    assert sum(1 for u in fetched if "news.co.kr" in u) == 1          # 웹 결과만 도메인 상한 적용
+    by_url = {p["url"]: p for p in pages}
+    assert "840,255개" in by_url["https://sg.sbiz.or.kr/"]["text"]     # snippet 이 본문으로
+    assert by_url["https://sg.sbiz.or.kr/"]["from_snippet"] is True
+
+
+@pytest.mark.asyncio
+async def test_researcher_merges_extra_sources_ahead_of_web_results(tmp_path):
+    """extras(정형 API)는 폴백이 아니라 항상 같이 물어보고 웹 결과 앞에 붙는다."""
+    web = [R.make_result("웹 기사", "https://news.co.kr/1", "요약")]
+    stat = O.stat_result("통계", "https://kosis.kr/x", "충분히 긴 사실 문장. " * 3)
+
+    async def extra(query, n):
+        return [stat]
+
+    r = R.Researcher(backends=[("ddgs", lambda q, n: _aret(web))], extras=[("opendata", extra)],
+                     cache=R.DiskCache(tmp_path))
+    out = await r.search("1인 가구 통계")
+    assert [x["url"] for x in out] == ["https://kosis.kr/x", "https://news.co.kr/1"]
+    assert r.last_backend == "ddgs"
+
+    again = await r.search("1인 가구 통계")                            # 캐시에도 합쳐진 결과가 들어간다
+    assert [x["url"] for x in again] == [x["url"] for x in out] and r.last_backend == "cache"
+
+
+@pytest.mark.asyncio
+async def test_researcher_returns_extras_even_when_all_web_backends_fail(tmp_path):
+    """웹 검색이 전부 죽어도 정형 API 결과가 있으면 그것만이라도 준다."""
+    async def extra(query, n):
+        return [O.stat_result("통계", "https://kosis.kr/x", "충분히 긴 사실 문장. " * 3)]
+
+    async def dead(query, n):
+        raise RuntimeError("차단")
+
+    r = R.Researcher(backends=[("ddgs", dead)], extras=[("opendata", extra)], cache=R.DiskCache(tmp_path))
+    out = await r.search("1인 가구 통계")
+    assert [x["url"] for x in out] == ["https://kosis.kr/x"] and r.last_backend == "opendata"
+
+
+@pytest.mark.asyncio
+async def test_extra_source_failure_does_not_break_web_search(tmp_path):
+    web = [R.make_result("웹 기사", "https://news.co.kr/1", "요약")]
+
+    async def broken(query, n):
+        raise RuntimeError("정형 소스 오류")
+
+    r = R.Researcher(backends=[("ddgs", lambda q, n: _aret(web))], extras=[("opendata", broken)],
+                     cache=R.DiskCache(tmp_path))
+    out = await r.search("질의")
+    assert [x["url"] for x in out] == ["https://news.co.kr/1"]
+    assert "opendata: RuntimeError" in r.last_error

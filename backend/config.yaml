@@ -89,6 +89,7 @@ research:
   max_results_per_query: 6
   max_pages_to_extract: 6        # trafilatura 본문 추출 페이지 수 상한
   max_pages_to_fetch: 6          # 실제로 받아오는 페이지 수 (예전 12 → 6. 본문 실패가 잦으면 8까지)
+  max_pages_per_domain: 2        # 같은 도메인에서 최대 몇 건까지 쓸지 (근거가 한 신문사에 쏠리는 것 방지). 0 이면 무제한
 
   # 아이디어당 1회 조사 (RESEARCH_PLAN 2단계). 문항 9개가 아이디어 공통 조사 결과를 물려받고,
   # 모자란 각도만 보완 검색한다 (모델이 "충분하다"고 판단하면 보완 검색 0건).
@@ -96,6 +97,18 @@ research:
   share_idea_research: true
   max_followup_queries: 2        # 문항당 보완 검색어 **상한** (개수 고정 아님. 0 이면 공통 조사만 씀)
   max_followup_pages: 3          # 보완 검색으로 본문을 받아올 페이지 수 상한
+  # 정형 공공 API (RESEARCH_PLAN 3단계) — 검색·페이지 fetch 없이 JSON 으로 수치를 바로 가져온다.
+  # 검색어에 그 소스의 키워드가 없으면 요청 자체를 하지 않는다 (backend/rag/opendata.py TRIGGERS).
+  #   kosis     통계·인구·가구·현황·규모…   → 통계표 검색 + 최신 수치   (KOSIS_API_KEY)
+  #   ecos      금리·환율·물가·경기…         → 한국은행 100대 지표        (ECOS_API_KEY)
+  #   kstartup  창업지원·지원사업·공고…      → 정부 창업지원 공고 검색    (DATA_GO_KR_API_KEY)
+  #   sangkwon  상권·업종·점포·소상공인…     → 업종별 전국 상가업소 수    (DATA_GO_KR_API_KEY)
+  # 키 없는 소스는 자동으로 빠진다. 끄려면 enabled: false 한 줄.
+  opendata:
+    enabled: true
+    sources: ["kosis", "ecos", "kstartup", "sangkwon"]
+    timeout: 15
+
   # 네이버 검색 API — NAVER API HUB (2026-06-25 이관, RESEARCH_PLAN 3단계).
   # 키는 ncloud.com 콘솔 > Application Services > NAVER API HUB > Application 등록 > 검색 API 에서 발급하고
   # .env 의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 에 넣는다 (이름은 이관 전과 동일).

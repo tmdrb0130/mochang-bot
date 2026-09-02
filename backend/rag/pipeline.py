@@ -43,6 +43,8 @@ class ResearchConfig:
     share_idea_research: bool = True
     max_followup_queries: int = 2      # 문항당 보완 검색어 **상한**. 모델이 0개를 내면 검색을 아예 안 한다
     max_followup_pages: int = 3        # 보완 검색으로 본문을 받아올 페이지 수 상한
+    # 같은 도메인에서 가져올 페이지 수 상한 (작업 7 — 근거가 한 신문사에 쏠리는 것 방지). 0 이면 제한 없음.
+    max_pages_per_domain: int = 2
 
     @classmethod
     def from_config(cls, config: dict) -> "ResearchConfig":
@@ -56,6 +58,7 @@ class ResearchConfig:
             share_idea_research=bool(rc.get("share_idea_research", True)),
             max_followup_queries=int(rc.get("max_followup_queries", 2)),
             max_followup_pages=int(rc.get("max_followup_pages", 3)),
+            max_pages_per_domain=int(rc.get("max_pages_per_domain", 2)),
             cache_ttl=int(rc.get("cache_ttl_seconds", 7 * 24 * 3600)),
         )
 
@@ -184,6 +187,30 @@ def _url_key(url: str) -> str:
     return (url or "").split("#")[0].rstrip("/")
 
 
+async def _no_fetch() -> str:
+    """fetch 자리에 끼우는 빈 코루틴 — 정형 API 결과는 HTTP 로 받아올 페이지가 없다."""
+    return ""
+
+
+def _cap_by_domain(results: list[dict], limit: int) -> list[dict]:
+    """같은 도메인에서 limit 건까지만. 순위는 유지한다 (작업 7 — 한 신문사·한 글 쏠림 방지).
+    정형 API 결과(no_fetch)는 제한 대상이 아니다 — 소스가 하나뿐인 공식 통계라 쏠림이 문제되지 않는다."""
+    if limit <= 0:
+        return results
+    seen: dict[str, int] = {}
+    out = []
+    for r in results:
+        if r.get("no_fetch"):
+            out.append(r)
+            continue
+        d = domain(r.get("url", ""))
+        if seen.get(d, 0) >= limit:
+            continue
+        seen[d] = seen.get(d, 0) + 1
+        out.append(r)
+    return out
+
+
 async def collect_pages(researcher: Researcher, queries: list[str], cfg: ResearchConfig,
                         fetch=fetch_page, skip_urls: set[str] | None = None,
                         max_pages: int | None = None) -> tuple[list[dict], list[dict]]:
@@ -205,8 +232,11 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
             unique.append(r)
     want = cfg.max_pages_to_extract if max_pages is None else max_pages
     budget = cfg.max_pages_to_fetch or cfg.max_pages_to_extract      # 받아올 페이지 수 (본문 실패 대비 여유 포함)
-    ranked = rank_results(unique)[: min(budget, want) if max_pages is not None else budget]
-    texts = await asyncio.gather(*(fetch(r["url"], cfg.fetch_timeout) for r in ranked))
+    ranked = _cap_by_domain(rank_results(unique), cfg.max_pages_per_domain)
+    ranked = ranked[: min(budget, want) if max_pages is not None else budget]
+    # 정형 API 결과(no_fetch)는 받아올 페이지가 없다 — snippet 이 이미 사실 문장이라 그대로 본문으로 쓴다.
+    texts = await asyncio.gather(*(_no_fetch() if r.get("no_fetch") else fetch(r["url"], cfg.fetch_timeout)
+                                   for r in ranked))
     pages = []
     for r, t in zip(ranked, texts):
         body = t or r.get("snippet") or ""
