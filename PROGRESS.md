@@ -60,6 +60,38 @@
 
 `pytest` **392 passed**, dist-check 통과.
 
+## 같은 밤 — Qwen3.8-27B-FP8 을 GPU2 에 올리고 라마와 A/B (사용자 지시 20:4x)
+
+**배포** (`k8s/vllm-qwen-deployment.yaml`, 파드 `vllm-qwen`, NodePort 30801, 이 PC 터널 30801):
+- 모델 `Qwen/Qwen3.8-27B-FP8` (HF 2026-08-14, 31 GB, 구조 Qwen3_5ForConditionalGeneration). vLLM 0.25.0(서버 기존 이미지) 지원 확인.
+- **서버→huggingface.co 차단(20 B/s)**, hf-mirror.com·ModelScope 4.5 MB/s. 파드 안 huggingface_hub 는 미러를 거부(FileMetadataError)
+  → 호스트에서 curl 3병렬로 `/opt/llm-models/qwen3.8-27b-fp8/` 에 직접 받아 경로로 로드 (20:59~22:31, 81파일 크기 전부 일치).
+- GPU 고정: k8s 자원 요청 대신 `NVIDIA_VISIBLE_DEVICES=<GPU2 UUID>` (GPU0 은 다른 사람 Docker 가 점유). 파드 안 nvidia-smi 로 GPU2 만 보임 확인.
+- 함정 3개: ① 파일 목록을 Windows 에서 만들어 `` 이 URL 에 섞임 → curl 전부 거부 ② `pkill -f` 패턴이 내 SSH 명령줄에 매칭돼 세션 3번 끊김 → `pgrep -x`
+  ③ **서버의 `vllm/vllm-openai:latest` 태그가 사라져 있어(kubelet 이미지 GC) kubelet 이 도커허브에서 8.8 GB 를 다시 받으려다 100 B/s 에 멈춤 →
+  kubelet 이 새 파드를 하나도 못 만드는 상태**(기본 런타임 테스트 파드도 ContainerCreating). `ss -K` 로 그 TCP 연결을 끊자 즉시 풀림. 이미지는 digest 로 고정.
+- `--kv-cache-dtype fp8` 은 뺐다 (미보정 스케일 경고). 로드 5초, 엔진 초기화 183초, GPU2 88 GB(가중치 28 + KV).
+- thinking 은 요청마다 `chat_template_kwargs.enable_thinking=false` 로 끈다 — 켜 두면 1,500 토큰을 전부 추론에 쓰고 본문 0자(실측).
+
+**A/B 실호출** (아이디어 3 × 문항 5, 같은 참고자료(각 8건)·같은 답변·같은 후처리, 5문항 동시. 원본 `docs/measurements/2026-09-02_ab_llama_qwen.json`):
+
+| | 라마 70B AWQ (GPU1) | **Qwen3.8-27B-FP8 (GPU2)** |
+|---|---|---|
+| 성공 | 15/15 | 15/15 |
+| 문항 평균 소요 (5 동시) | 61s | **32s** |
+| 긴 문항 평균 글자 (목표 1,400~1,800) | 1,153자 | **1,609자** |
+| 긴 문항 평균 문단 | 3.2 | **5.1** |
+| 이물 문자(후처리 뒤) | 0 | 0 (후처리 전 스모크에서 `供需` 1건 — 중국어 누출 있음) |
+| 출처 표기 | 0 | 0 |
+| 자동 이어쓰기 발동 | 11/15 | 10/15 |
+| 단일 스트림 속도 | ~35 tok/s | **46~47 tok/s** |
+| 눈으로 본 것 | 문장 반복·되풀이 문단, 관련 없는 인용(설 연휴 47.3%) | 문단 구조 뚜렷, 자연스러움. 단 "반찬가게 3곳을 찾아가 관찰한 결과" 처럼 계획을 이미 한 일로 쓰는 지어냄 있음 |
+
+→ Qwen 이 속도·분량·구조 모두 우위. 지어냄은 양쪽 다 있어 refine ②(입력에 없는 수치·경험 삭제)가 계속 필요.
+
+**전환 준비**: `backend/config.yaml.qwen` (llm·models·research.llm 세 블록만 다름). 사용자 결정 후 `config.yaml` 을 라마 백업(`config.yaml.llama.bak`)으로 두고 교체 → `nssm restart mochang-api`.
+라마 파드는 그대로 두어 언제든 되돌릴 수 있다.
+
 ## 다음 순서
 
 1. 운영 반영: `mochang-api` 재시작 (+ 서버 venv `pip install -r backend/requirements.txt`) **+ 프론트 dist 재빌드·배포 승인** (draft_id 전송은 빌드해야 반영).

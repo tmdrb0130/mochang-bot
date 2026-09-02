@@ -1,0 +1,208 @@
+# LLM 연결 설정 — base_url / api_key / model 세 값만 바꾸면 어떤 OpenAI 호환 서버든 연결됨
+# api_key 에 "${ENV_NAME}" 형식으로 쓰면 환경변수(프로젝트 루트 .env 포함)에서 읽어옴.
+#
+# OpenRouter (무료 테스트):  base_url: https://openrouter.ai/api/v1   api_key: ${OPENROUTER_API_KEY}  model: <아래 목록>
+#   무료 모델(2026-08-31 기준, id 끝 ":free"):
+#     minimax/minimax-m3:free                 ✔ 테스트 통과: Q2 1600자 한국어 40초, 품질 무난 (현재 기본)
+#     nvidia/nemotron-3-super-120b-a12b:free  추론 모델. extra.reasoning 끄지 않으면 본문이 안 나옴. 200초+ 로 느림
+#     google/gemma-4-31b-it:free              한국어 강하지만 무료 풀 429 잦음 (2026-08-31 테스트 시 계속 실패)
+#     z-ai/glm-5.2:free                       무료 풀 429 잦음
+#     openrouter/free                         자동 선택 — 영어로 답하는 모델에 걸릴 수 있어 비추
+#   무료 티어는 분당/일일 요청 제한이 있어 429가 나면 잠시 후 재시도.
+# Ollama (로컬):        base_url: http://localhost:11434/v1   api_key: ollama        model: llama3.3:70b
+# 서버 컴 Ollama:       base_url: http://<서버IP>:11434/v1    api_key: ollama        model: llama3.3:70b
+# vLLM:                base_url: http://<서버IP>:8000/v1     api_key: dummy         model: <서빙 모델명>
+# LiteLLM 프록시(Claude): base_url: http://localhost:4000/v1  api_key: <litellm key> model: claude-sonnet-4-6
+
+llm:
+  # 2026-09-01: OpenRouter 무료 한도(하루 50회) 때문에 여러 사람이 못 쓰는 문제로
+  # 원격 GPU 서버의 vLLM 70B 로 전환. base_url 이 openrouter.ai 가 아니면
+  # daily_request_limit / fallback 로직이 자동으로 꺼진다(client.py is_openrouter).
+  # 주의: SSH 터널이 필요하다 -> ssh -N -L 30800:localhost:30800 gpu
+  # 되돌리려면 config.yaml.openrouter.bak 참고.
+  # 2026-09-02 밤: Qwen3.8-27B-FP8 (GPU 서버 GPU2, 파드 vllm-qwen, NodePort 30801 → SSH 터널 30801).
+  # A/B(아이디어 3 × 문항 5, 같은 참고자료·후처리): 평균 32s vs 라마 61s, 긴 문항 1,609자 vs 1,153자, 이물 0/0.
+  # 라마로 되돌리기: config.yaml.llama.bak 를 config.yaml 로 (라마 파드 vllm/30800 은 계속 떠 있음).
+  base_url: "http://localhost:30801/v1"
+  api_key: "dummy"                        # vLLM 은 키를 검증하지 않음
+  model: "Qwen/Qwen3.8-27B-FP8"
+  max_tokens: 4096                        # 실측 한국어 1.7자/토큰 -> 2000자면 약 1200토큰. 넉넉함
+  temperature: 0.7
+  # Qwen3.8 은 thinking 이 기본 ON — 켜 두면 max_tokens 를 전부 추론에 쓰고 본문이 0자로 온다(실측). 요청마다 끈다.
+  extra: {chat_template_kwargs: {enable_thinking: false}}
+
+# UI에서 고를 수 있는 모델 목록. llm.model 이 기본값. 각 항목에 extra 를 두면 그 모델에만 추가 적용.
+models:
+  # vLLM 서버가 서빙하는 모델은 하나뿐이라 목록도 하나다.
+  # 다른 id 를 고르면 vLLM 이 404 를 낸다.
+  # OpenRouter 로 되돌릴 때 쓸 목록은 config.yaml.openrouter.bak 에 있다.
+  - id: Qwen/Qwen3.8-27B-FP8
+    name: 백석대학교 로컬 LLM
+    note: 무료 한도 없음. 문항당 15~40초.
+
+# 선택 모델이 429/다운이면 목록의 다른 모델로 OpenRouter 가 자동 전환 (`models` 파라미터, 최대 3개 → 선택 모델 + 목록 위쪽 2개).
+# 응답의 model 로 실제 모델 확인.
+fallback: true
+
+# 무료 티어 하루 요청 한도 (OpenRouter 문서: 누적 결제 $10 미만 50회/일, 이상 1000회/일, 공통 20회/분. UTC 00:00 리셋)
+# 백엔드가 요청 수를 backend/.usage.json 에 세어 /health 로 알려준다. $10 충전했으면 1000 으로 바꿀 것.
+daily_request_limit: 50
+
+# ── 동시성 층 (backend/llm/jobs.py) ──
+# 모든 모델 호출은 asyncio.Queue 를 거치고 워커 max_workers 개가 처리 → OpenRouter 로 나가는 동시 요청 수 상한.
+# 무료 티어(20회/분)는 2~3, 유료/로컬 vLLM 이면 4~8. 429 는 지수 백오프(base_delay × 2^n, 최대 max_delay)로 attempts 회 재시도.
+# 2026-09-02 실측 2차 (scripts/gpu_probe.py, --prompt real = 실사용과 같은 3,370토큰 프롬프트 / 생성 795토큰).
+#   동시성 20 → 30 → 45 → 60 → 80 → 100
+#   생성 tok/s  379 → 509 → 574 → 650 → 627 → 640   ← 60 에서 처리량이 평평해진다 (GPU 포화점)
+#   p50(초)      37 →  42 →  55 →  65 →  91 → 115   ← 그 뒤로는 처리량은 그대로인데 대기만 길어진다
+#   KV 캐시     11% → 15% → 22% → 29% → 37% → 45%   ← 메모리는 100 동시에도 절반이 안 된다
+# 실패·서버 대기·preemption 은 전 구간 0. 즉 한계는 메모리가 아니라 **처리량**이고, 포화점은 60.
+# 규칙(꺾이는 지점의 한 단계 아래)대로 총 동시 호출 상한을 45 로 잡았었다 = max_workers(36) + 조사(9).
+# 더 올려도 전체 처리량은 그대로이고 문항당 대기만 길어진다 — 남는 요청은 우리 큐가 대기 순번을 보여주며 잡는 편이 낫다.
+# 2026-09-02 작업 39: 사실 추출을 페이지별 호출로 나눠 조사 1건이 모델을 여러 번 부른다(페이지 수만큼, 동시 3장).
+# 조사 쪽 실제 동시 호출이 워커 수보다 커지므로 본문·조사 워커를 함께 낮춰 총량을 포화점 아래로 유지한다:
+#   본문 24 + 조사 6×(페이지 동시 3) = 최대 42.
+max_workers: 24
+
+# ── 사업계획 골자 공유 (작업 20, docs/OUTLINE_PLAN.md) ──
+# 아이디어당 골자를 1회 만들어(라마 +1회, 이후 캐시) 문항 9개에 같이 넣는다.
+# 문항끼리 서로를 못 봐서 고객·문제·해결책이 문항마다 다른 말로 반복되던 것을 막는다.
+# 끄면 예전처럼 문항마다 독립 생성한다.
+generate:
+  # 생성 후처리 (작업 22) — 라마가 못 지키는 것을 코드가 잡는다.
+  # ① 이물 문자(한자·가나) ② 입력·참고자료에 없는 수치 ③ 라마 상용구 수치(500명·1억·60/20/10/10)
+  # ④ 팀원 없는데 '저희' ⑤ 한 문항 안 같은 통계 재인용. ①②③ 은 문제 문장만 모아 모델에게 1회 고쳐 쓰게 하고,
+  # 고쳐 오지 못하면 그 문장을 버린다. 문항당 모델 호출이 최대 1회 늘어난다.
+  polish:
+    enabled: true
+
+  # 세션2 refine() 연결 (작업 22·27 마무리, 모델 호출 0) — 지어낸 수치·상용구·재진술·금지어 삭제, 1인칭 통일.
+  # 신호에 따라 서버가 재생성한다(문항당 최대 2회): 한도 초과 → shorten.md 압축 후 문단 끝 자름,
+  # 하한 미달 → 이어쓰기 + 되풀이 제거, 짧은 문항의 흠 → 짜임 바꿔 1회 재생성. 끄면 예전처럼 한도에서 자른다.
+  refine:
+    enabled: true
+
+  outline:
+    enabled: true
+    cache_ttl_seconds: 604800     # 7일. 아이디어·인테이크 답변이 바뀌면 키가 달라져 새로 만든다
+
+# ── 짧게 끝난 긴 문항 자동 이어쓰기 (작업 18) ──
+# 라마가 2,000자 문항을 700~900자에서 끝내는 일이 잦다. 목표(한도)의 min_ratio 에 못 미치면
+# 서버가 이어쓰기를 **1회만** 대신 돌린다. 문항당 모델 호출이 최대 1회 늘어난다 — 부담되면 enabled: false.
+# min_limit 미만 한도의 문항(Q1·Q10 = 100자)은 대상이 아니다.
+auto_extend:
+  enabled: true
+  min_ratio: 0.7
+  min_limit: 500
+
+# ── 아이디어·초안 저장소 (backend/storage.py) ──
+# 요청이 끝날 때마다 입력(아이디어·인테이크 답)과 문항별 생성문을 DB 에 남긴다. 모델 호출 없음, 실패해도 서비스에 영향 없음.
+# 기본은 SQLite(WAL) 한 파일. 규모가 커져 PostgreSQL 로 옮길 때는 url 만 바꾼다 (환경변수 MOCHANG_DATABASE_URL 이 우선).
+#   예) url: "postgresql+psycopg://user:pw@host/mochang"   ← pip install psycopg 뒤
+# 사용자 고지 없이 저장한다 (2026-09-02 사용자 결정: 동의 단계가 이탈률을 높임). 읽기: scripts/drafts_report.py
+storage:
+  enabled: true
+  url: "sqlite:///backend/.data/mochang.sqlite"
+
+# 한 클라이언트(IP)가 동시에 진행할 수 있는 작업 수 (POST /jobs/{kind}). 초과하면 429.
+# 인증이 없어 IP 로 구분한다 — 한 명이 문항 9개를 연달아 눌러 큐를 독점하는 것을 막는다.
+# 0 이면 무제한. 프론트가 문항 여러 개를 동시에 돌릴 수 있으므로 너무 낮추지 말 것.
+max_jobs_per_client: 3
+retry:
+  attempts: 3
+  base_delay_seconds: 2
+  max_delay_seconds: 30
+
+# ── 웹 조사(research) ──
+# search(query) 는 vane → ddgs 순으로 시도. vane.enabled=false 면 ddgs(DuckDuckGo, 모델 호출 없음)만 쓴다.
+# Vane 은 검색 1회마다 자체 모델 호출(질의 분류·답변)을 하므로 OpenRouter 무료 한도를 추가로 소모한다 →
+# 한도가 넉넉해질 때(충전 또는 로컬 모델) enabled: true 로. provider id 는 `python -m backend.rag.vane_setup --show` 출력값.
+research:
+  # ── 조사 전용 LLM (검색어 생성 · 웹 본문에서 사실 추출) ──
+  # 지원서 본문 작성은 위의 llm: 이 하고, 조사는 여기 적힌 모델이 한다. 이 블록을 지우면 둘 다 llm: 을 쓴다.
+  # 로컬 70B 는 무료 한도가 없으므로 조사처럼 호출이 잦은 단계에 적합하다.
+  # 주의: base_url 이 SSH 터널이라 `ssh -L 30800:localhost:30800 gpu` 가 켜져 있어야 한다.
+  llm:
+    base_url: "http://localhost:30801/v1"                   # 2026-09-02: 조사도 Qwen (GPU2). 라마는 30800
+    api_key: "dummy"                                        # vLLM 은 키를 검증하지 않음
+    model: "Qwen/Qwen3.8-27B-FP8"
+    max_tokens: 4096
+    temperature: 0.3                                        # 사실 추출·JSON 이라 낮게
+    extra: {chat_template_kwargs: {enable_thinking: false}} # thinking 끄기 (본문 클라이언트와 같은 이유)
+    max_workers: 6                                          # 작업 39 로 9 → 6. 조사 1건이 페이지마다 호출하므로(동시 3장)
+                                                            # 실제 동시 조사 호출은 최대 6×3=18 이다. 본문 24 + 조사 18 = 42 (GPU 포화점 60 아래).
+                                                            # 페이지별로 나눈 뒤 프롬프트는 짧아졌다(2만 → 3천 토큰 안팎)
+
+  cache_ttl_seconds: 604800      # 같은 검색어 결과 디스크 캐시 7일 (backend/.cache/research/)
+  max_queries: 4                 # 아이디어+문항당 생성할 검색어 수 (3~5)
+  max_results_per_query: 6
+  max_pages_to_extract: 6        # trafilatura 본문 추출 페이지 수 상한
+  max_pages_to_fetch: 6          # 실제로 받아오는 페이지 수 (예전 12 → 6. 본문 실패가 잦으면 8까지)
+  max_pages_per_domain: 2        # 같은 도메인에서 최대 몇 건까지 쓸지 (근거가 한 신문사에 쏠리는 것 방지). 0 이면 무제한
+
+  # 아이디어당 1회 조사 (RESEARCH_PLAN 2단계). 문항 9개가 아이디어 공통 조사 결과를 물려받고,
+  # 모자란 각도만 보완 검색한다 (모델이 "충분하다"고 판단하면 보완 검색 0건).
+  # 되돌리려면 share_idea_research: false 한 줄 — 문항마다 처음부터 조사하던 예전 동작으로 돌아간다.
+  share_idea_research: true
+  max_followup_queries: 2        # 문항당 보완 검색어 **상한** (개수 고정 아님. 0 이면 공통 조사만 씀)
+  max_followup_pages: 3          # 보완 검색으로 본문을 받아올 페이지 수 상한
+  # 조사 자료 벡터DB 축적 (docs/RAG_PLAN.md, backend/rag/vectorstore.py).
+  # 지금은 **색인만** 한다 — 조사해온 페이지를 쌓아 두는 단계이고, 쌓인 것으로 웹 검색을 대체하는 조회는 다음 단계다.
+  # 기본 false: 켜면 페이지마다 임베딩 호출(Ollama bge-m3)이 붙고 backend/.vectorstore/ 에 디스크가 쌓인다.
+  # 켜기 전에 `ollama pull bge-m3` 가 끝나 있어야 한다. embed_model 을 비우면 오프라인 임베딩(품질 없음, 테스트용).
+  vectorstore:
+    enabled: true                # 2026-09-02 세션1 결정 — 지금부터 조사 페이지를 쌓는다 (색인만, 조회는 다음 단계)
+    dir: "backend/.vectorstore"
+    embed_model: "bge-m3"
+    ollama_url: "http://localhost:11434"
+    min_score: 0.6               # 조회 단계 유사도 하한. 0.8 은 너무 빡빡했다 —
+                                 # bge-m3 로 같은 주제 문장끼리 재어 보니 0.668 이었다 (세션1 결정: 0.6)
+    min_hits: 5
+    max_age_days: 730
+
+  # 소스 서킷브레이커 (RESEARCH_PLAN 5단계, 작업 19) — 연속 fails 회 실패한 소스는 cooldown 초 동안 건너뛴다.
+  # ddgs 가 봇 판정으로 막히거나 네이버가 429 를 내기 시작하면 뒤따르는 검색어가 전부 같은 벽에 부딪히는 것을 막는다.
+  breaker:
+    fails: 3
+    cooldown_seconds: 300
+
+  # 정형 공공 API (RESEARCH_PLAN 3단계) — 검색·페이지 fetch 없이 JSON 으로 수치를 바로 가져온다.
+  # 검색어에 그 소스의 키워드가 없으면 요청 자체를 하지 않는다 (backend/rag/opendata.py TRIGGERS).
+  #   kosis     통계·인구·가구·현황·규모…   → 통계표 검색 + 최신 수치   (KOSIS_API_KEY)
+  #   ecos      금리·환율·물가·경기…         → 한국은행 100대 지표        (ECOS_API_KEY)
+  #   kstartup  창업지원·지원사업·공고…      → 정부 창업지원 공고 검색    (DATA_GO_KR_API_KEY)
+  #   sangkwon  상권·업종·점포·소상공인…     → 업종별 전국 상가업소 수    (DATA_GO_KR_API_KEY)
+  #   kci       논문·학술·연구·실태…         → KCI 논문 서지정보          (KCI_API_KEY)
+  #             ⚠ KCI 는 메타데이터만 쓰고 벡터DB 에 쌓지 않는다 (RESEARCH_PLAN 이용 준수 사항 1·2항)
+  # 키 없는 소스는 자동으로 빠진다. 끄려면 enabled: false 한 줄.
+  opendata:
+    enabled: true
+    sources: ["kosis", "ecos", "kstartup", "sangkwon", "kci"]
+    timeout: 15
+
+  # 네이버 검색 API — NAVER API HUB (2026-06-25 이관, RESEARCH_PLAN 3단계).
+  # 키는 ncloud.com 콘솔 > Application Services > NAVER API HUB > Application 등록 > 검색 API 에서 발급하고
+  # .env 의 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 에 넣는다 (이름은 이관 전과 동일).
+  # 키가 없으면 백엔드 목록에서 자동으로 빠지고 예전처럼 ddgs 만 쓴다 (키 없이도 그대로 동작).
+  # 한도: 검색 통합 월 775,000건, 키당 50 RPS (초과 429). 일·월 한도와 50/80/100% 알림은 콘솔에서 설정.
+  # kinds 를 늘리면 검색어 1개당 그만큼 요청이 나간다.
+  naver:
+    kinds: ["news", "blog"]      # news | blog | webkr(웹문서) | cafearticle(카페)
+                                 # doc(전문자료)·책·쇼핑은 2026-07-31 종료 — 학술은 KCI/OpenAlex 로
+    sort: "sim"                  # sim(정확도) | date(최신)
+    timeout: 10
+
+  vane:
+    # 2026-09-01 끔. Vane 의 SearXNG 는 httpx 로 검색엔진에 붙는데 DuckDuckGo 가 그 지문을 봇으로 보고 캡차를 준다
+    # (IP 문제가 아니다 — 같은 curl 을 작업 PC/서버에서 쏘면 둘 다 202). 살아남은 엔진이 Bing 하나뿐이라
+    # 한국어 자료 품질이 ddgs 보다 확연히 나빴다. ddgs 는 primp(브라우저 TLS 지문 위장)를 써서 정상 응답을 받는다.
+    # 게다가 Vane 은 검색마다 자체 요약(라마 25~30초)을 만드는데 우리는 그걸 버린다 → 순수 낭비.
+    # 설정은 남겨둔다: ddgs 가 막히면 enabled: true 한 줄로 되살릴 수 있다.
+    enabled: false
+    base_url: "http://localhost:50000"   # SSH 터널 50000 -> 서버 NodePort 30500
+    chat_provider_id: "c3493b45-9630-48e2-be8e-ec42023a1f6b"      # vLLM Llama 70B (2026-09-01 등록)
+    chat_model_key: "casperhansen/llama-3.3-70b-instruct-awq"
+    embedding_provider_id: "7cf7ae74-4613-43cd-a8c0-54a67bf97885" # Transformers (Vane 내장, 로컬 임베딩)
+    embedding_model_key: "Xenova/nomic-embed-text-v1"
+    sources: ["web"]
+    optimization_mode: "speed"
