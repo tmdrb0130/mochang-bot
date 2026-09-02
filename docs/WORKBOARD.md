@@ -27,7 +27,7 @@
 - **소유권 예외 (세션1 승인)**: 세션2 가 `backend/rag/vectorstore.py`, `tests/test_vectorstore.py` 를 새로 만들고,
   `backend/requirements.txt` 에 llama-index 2줄만 추가한다. 그 외 `backend/**` 는 여전히 세션3 구역 — `pipeline.py` 는 건드리지 않는다.
 - 세션2 완료 조건: fake embedding 으로 upsert(중복 url 재색인 없음)·query(score 붙음)·신선도 컷·is_sufficient 가 mock 테스트로 통과.
-  Ollama 실호출은 사용자가 `ollama pull bge-m3` 한 뒤 1건만 (한도 무관, 로컬).
+  ✅ 10:3x `bge-m3` 로컬 Ollama 설치 완료(세션1) — 세션2 는 mock 통과 후 실호출 1건으로 실제 임베딩 차원·persist 확인 가능.
 - 세션3 연결(1단계 색인만 → 2단계 조회)은 세션2 커밋 뒤, 작업 12 3단계 어댑터 다음에.
 
 ### 작업 13 상세 — GPU 상한 실측 확대 (세션3 + 사용자)
