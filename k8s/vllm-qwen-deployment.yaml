@@ -41,7 +41,9 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: vllm
-          image: vllm/vllm-openai:latest
+          # 서버에 있는 이미지(라마 파드와 동일, vLLM 0.25.0)를 digest 로 고정 — 'latest' 태그는 서버에서 사라져 있어
+          # 태그로 쓰면 kubelet 이 도커허브에서 8.8GB 를 새로 받으려 한다 (2026-09-02 22:3x ContainerCreating 7분 멈춤의 원인).
+          image: vllm/vllm-openai@sha256:fc56161ee42a011aeee78b65d0a81b6683c7d04402fd40503d14d4d6c98f07cb
           imagePullPolicy: IfNotPresent
           args:
             - --model
@@ -52,8 +54,8 @@ spec:
             - "32768"
             - --gpu-memory-utilization
             - "0.90"
-            - --kv-cache-dtype
-            - fp8
+            # --kv-cache-dtype fp8 은 뺐다: 체크포인트에 k/v scale 보정값이 없어 vLLM 이 "uncalibrated q_scale/prob_scale 1.0,
+            # 정확도 문제 가능" 경고를 낸다 (2026-09-02 첫 기동 로그). 96GB 중 가중치 28GB 라 bf16 KV 로도 캐시가 넉넉하다.
             - --reasoning-parser
             - qwen3
             - --limit-mm-per-prompt
