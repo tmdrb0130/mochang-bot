@@ -8,3 +8,7 @@ httpx
 ddgs
 trafilatura
 lxml_html_clean
+
+# RAG 벡터DB (backend/rag/vectorstore.py) — 임베딩은 로컬 Ollama bge-m3
+llama-index-core
+llama-index-embeddings-ollama
