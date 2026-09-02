@@ -1,4 +1,5 @@
 """조사 파이프라인 — 모델·검색·HTTP 전부 가짜. 특히 '지어낸 quote 는 버려진다'를 검증."""
+import asyncio
 import json
 
 import pytest
@@ -105,6 +106,88 @@ async def test_extract_facts_returns_empty_on_bad_json_or_no_pages(form):
     assert await P.extract_facts(FakeClient(["x"]), form, {}, [], P.ResearchConfig()) == []
     pages = [{"url": "u", "title": "t", "text": PAGE_TEXT}]
     assert await P.extract_facts(FakeClient(["이건 JSON 아님"]), form, {}, pages, P.ResearchConfig()) == []
+
+
+# ── 작업 39: 사실 추출을 페이지별 호출로 분리 ──
+
+PAGE_B_TEXT = ("경기도 조사에서 반찬가게 사장 10명 중 7명이 재고 관리에 어려움을 겪는다고 답했다. "
+               "같은 조사에서 폐기 비용은 월평균 38만 원으로 집계됐다.")
+
+
+def _page(url, text, title="문서", kind="news"):
+    return {"url": url, "title": title, "date": "2026-03-01", "text": text, "source_type": kind}
+
+
+@pytest.mark.asyncio
+async def test_extract_facts_calls_the_model_once_per_page_with_only_that_page(form):
+    """페이지 하나당 한 번씩 부른다 — 프롬프트에 그 페이지 본문만 들어가고, 본문은 자르지 않는다."""
+    pages = [_page("https://kostat.go.kr/x", PAGE_TEXT), _page("https://gg.go.kr/y", PAGE_B_TEXT)]
+    a = json.dumps([{"fact": "하루 폐기율 23%", "quote": "하루 폐기율은 평균 23%로 나타났다",
+                     "source_title": "통계", "url": "https://kostat.go.kr/x", "date": "2026-03-01"}], ensure_ascii=False)
+    b = json.dumps([{"fact": "10명 중 7명이 재고 관리에 어려움", "quote": "10명 중 7명이 재고 관리에 어려움을 겪는다고 답했다",
+                     "source_title": "경기도", "url": "https://gg.go.kr/y", "date": None}], ensure_ascii=False)
+    client = FakeClient([a, b])
+    facts = await P.extract_facts(client, form, {"label": "Q2", "title": "배경", "body": ""}, pages, P.ResearchConfig())
+
+    assert len(client.calls) == 2
+    assert client.calls[0]["user"].count("<문서 1>") == 1 and "gg.go.kr" not in client.calls[0]["user"]
+    assert PAGE_TEXT in client.calls[0]["user"]                  # 본문을 자르지 않는다
+    assert PAGE_B_TEXT in client.calls[1]["user"] and "kostat" not in client.calls[1]["user"]
+    assert [f["fact"] for f in facts] == ["하루 폐기율 23%", "10명 중 7명이 재고 관리에 어려움"]
+
+
+@pytest.mark.asyncio
+async def test_extract_facts_survives_one_bad_page_and_dedupes_same_quote(form):
+    """한 페이지가 깨진 JSON·오류여도 나머지 페이지의 사실은 남고, 같은 quote 는 한 번만 담는다."""
+    same = json.dumps([{"fact": "하루 폐기율 23%", "quote": "하루 폐기율은 평균 23%로 나타났다",
+                        "source_title": "통계", "url": "https://a.kr/1", "date": None}], ensure_ascii=False)
+    pages = [_page("https://a.kr/1", PAGE_TEXT), _page("https://b.kr/2", PAGE_TEXT), _page("https://c.kr/3", PAGE_TEXT)]
+    client = FakeClient(["JSON 아님", same, same])
+    facts = await P.extract_facts(client, form, {}, pages, P.ResearchConfig())
+    assert len(client.calls) == 3 and [f["fact"] for f in facts] == ["하루 폐기율 23%"]
+
+
+@pytest.mark.asyncio
+async def test_extract_facts_runs_at_most_three_pages_at_a_time(form):
+    """조사 워커 안에서 페이지 병렬은 최대 3장 — 워커 수를 낮춘 근거(config.yaml)와 짝이다."""
+    live, peak = 0, 0
+
+    class SlowClient:
+        def __init__(self):
+            self.calls = 0
+
+        async def complete(self, system, user, model=None):
+            nonlocal live, peak
+            live += 1
+            peak = max(peak, live)
+            self.calls += 1
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            live -= 1
+            return LLMResult(text="[]", model="fake")
+
+    client = SlowClient()
+    pages = [_page(f"https://ex{i}.kr/", PAGE_TEXT) for i in range(8)]
+    await P.extract_facts(client, form, {}, pages, P.ResearchConfig())
+    assert client.calls == 8 and peak == P.EXTRACT_CONCURRENCY == 3
+
+
+@pytest.mark.asyncio
+async def test_extract_facts_takes_turns_between_pages_up_to_the_total_cap(form):
+    """합칠 때 페이지를 번갈아 담는다 — 한 문서가 8칸을 다 차지하면 근거가 한쪽으로 쏠린다."""
+    def reply(prefix, quotes):
+        return json.dumps([{"fact": f"{prefix}{i}", "quote": q, "source_title": "t", "url": f"https://{prefix}.kr/"}
+                           for i, q in enumerate(quotes)], ensure_ascii=False)
+
+    pages = [_page("https://a.kr/", PAGE_TEXT), _page("https://b.kr/", PAGE_B_TEXT)]
+    client = FakeClient([
+        reply("a", ["하루 폐기율은 평균 23%로 나타났다", "1인 가구의 62%가 주 3회 이상 배달을 이용한다",
+                    "반찬가게 120곳과 1인 가구 800명을 대상으로 진행됐다"]),
+        reply("b", ["10명 중 7명이 재고 관리에 어려움을 겪는다고 답했다", "폐기 비용은 월평균 38만 원으로 집계됐다"]),
+    ])
+    facts = await P.extract_facts(client, form, {}, pages, P.ResearchConfig())
+    assert [f["fact"] for f in facts] == ["a0", "b0", "a1", "b1", "a2"]    # 각 페이지의 1순위부터 번갈아
+    assert len(facts) <= P.MAX_FACTS
 
 
 def test_format_references_includes_source_year_and_rules():
@@ -235,6 +318,8 @@ class ScriptedClient:
         self.facts = list(facts)
         self.followups = list(followups)
         self.calls = []
+        self._facts_used = False        # 작업 39: 사실 추출은 페이지마다 호출된다 —
+        #  한 '조사 라운드' 안의 페이지들은 같은 대본을 보고, 다음 라운드(검색어·보완 검색어 호출)에서 대본이 넘어간다.
 
     def stage(self, system: str) -> str:
         if "이미 조사가 한 번 끝난 상태" in system:
@@ -246,11 +331,16 @@ class ScriptedClient:
     async def complete(self, system, user, model=None):
         stage = self.stage(system)
         self.calls.append(stage)
+        if stage in ("queries", "followup"):
+            if self._facts_used:                 # 새 조사 라운드 시작 → 사실 대본을 다음 것으로
+                _next(self.facts, "[]")
+                self._facts_used = False
         if stage == "queries":
             return LLMResult(text=json.dumps(_next(self.queries, []), ensure_ascii=False), model="fake")
         if stage == "followup":
             return LLMResult(text=json.dumps(_next(self.followups, []), ensure_ascii=False), model="fake")
-        return LLMResult(text=_next(self.facts, "[]"), model="fake")
+        self._facts_used = True
+        return LLMResult(text=(self.facts[0] if self.facts else "[]"), model="fake")
 
 
 def facts_json(*rows) -> str:
@@ -299,7 +389,8 @@ async def test_run_research_reuses_shared_facts_and_only_searches_the_gap(tmp_pa
     assert [f["fact"] for f in out["facts"]][0] == "표본은 반찬가게 120곳"   # 문항 전용 사실이 앞
     assert out["shared_facts_used"] == 2 and len(out["facts"]) == 3          # 문항 1 + 공통 2
     assert out["references"] and out["cached"] is False
-    assert client.calls == ["queries", "facts", "followup", "facts"]   # 공통 조사 2회 + 보완 2회
+    # 공통 조사: 검색어 1 + 페이지 2장 추출 2 / 이 문항: 보완 검색어 1 + 페이지 1장 추출 1 (작업 39 — 페이지별 호출)
+    assert client.calls == ["queries", "facts", "facts", "followup", "facts"]
     assert counters == {"search": 3, "fetch": 3}                       # 공통 2검색+2fetch, 보완 1검색+1fetch
 
 
@@ -385,10 +476,12 @@ async def test_one_person_scenario_external_requests_before_and_after(tmp_path, 
     before = await _one_person_scenario(tmp_path / "before", form, share=False)
     after = await _one_person_scenario(tmp_path / "after", form, share=True)
 
-    # 예전: 조사 10회 × (검색어 4 + 페이지 6) = 100건
-    assert before == {"search": 40, "fetch": 60, "총 외부 요청": 100, "모델 호출": 20}
+    # 예전: 조사 10회 × (검색어 4 + 페이지 6) = 100건. 모델 호출은 10 × (검색어 1 + 페이지 6) = 70
+    # (작업 39 전에는 페이지 6장을 한 번에 넣어 20회였다 — 외부 요청 수는 그대로다)
+    assert before == {"search": 40, "fetch": 60, "총 외부 요청": 100, "모델 호출": 70}
     # 지금: 공통 조사 1회(4+6) + 문항 9개 × (보완 검색어 2 + 페이지 3) = 55건
-    assert after == {"search": 22, "fetch": 33, "총 외부 요청": 55, "모델 호출": 20}
+    # 모델 호출은 공통(1+6) + 문항 9 × (보완 1 + 페이지 3) = 43
+    assert after == {"search": 22, "fetch": 33, "총 외부 요청": 55, "모델 호출": 43}
     assert after["총 외부 요청"] <= before["총 외부 요청"] * 0.6
 
 
@@ -406,7 +499,8 @@ async def test_one_person_scenario_when_shared_research_covers_everything(tmp_pa
     for qid in QUESTION_IDS:
         await P.run_research(client, researcher, form, qid, cfg, cache=cache, fetch=fetch)
     assert counters["search"] + counters["fetch"] == 10
-    assert client.calls.count("facts") == 1                      # 사실 추출은 공통 조사 때 한 번뿐
+    # 사실 추출은 공통 조사 때만 — 페이지 6장이라 호출 6회(작업 39), 문항 9개는 한 번도 부르지 않는다
+    assert client.calls.count("facts") == 6
 
 
 # ── 도메인별 상한 + 정형 API 결과(no_fetch) 처리 ──

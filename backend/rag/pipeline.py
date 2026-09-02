@@ -22,7 +22,9 @@ from .research import DiskCache, Researcher, domain
 
 MAX_PAGE_CHARS = 6000
 MIN_BODY_CHARS = 40      # 이보다 짧은 본문/스니펫은 사실 추출에 못 쓴다
-MAX_FACTS = 8
+MAX_FACTS = 8            # 조사 1회가 돌려주는 사실 수 상한 (페이지별 결과를 합친 뒤)
+MAX_FACTS_PER_PAGE = 4   # 페이지 한 장에서 뽑을 사실 수 상한 (작업 39 — 페이지별 호출)
+EXTRACT_CONCURRENCY = 3  # 조사 1건 안에서 동시에 도는 페이지 추출 호출 수 (조사 워커 6개 × 3 = 최대 18)
 # 이 소스에서 온 페이지는 벡터DB 에 쌓지 않는다 — KCI 이용 준수 사항 2항(원천 데이터 영구 보유 금지).
 # source_type 뿐 아니라 **도메인**으로도 막는다: ddgs·네이버가 kci.go.kr 문서를 물어 오는 경우가 실제로 있어
 # (backend/.cache 에 사례 다수) 그 페이지가 색인되면 같은 조항을 어기게 된다.
@@ -393,48 +395,85 @@ def _verify_quotes(facts: list[dict], pages: list[dict]) -> list[dict]:
     return kept
 
 
-async def extract_facts(client: LLMClient, form: dict, meta: dict, pages: list[dict], cfg: ResearchConfig) -> list[dict]:
-    if not pages:
-        return []
-    system = assemble.render("research/extract_facts.md", max_facts=MAX_FACTS)
-    docs = []
-    for i, p in enumerate(pages, 1):
-        docs.append(f"<문서 {i}>\n제목: {p.get('title', '')}\nURL: {p['url']}\n날짜: {p.get('date') or '미상'}\n"
-                    f"본문:\n{p['text']}\n</문서 {i}>")
+async def _extract_from_page(client: LLMClient, form: dict, meta: dict, page: dict,
+                             cfg: ResearchConfig) -> list[dict]:
+    """페이지 하나에서 사실을 뽑는다 (작업 39). 본문은 자르지 않는다 — collect_pages 가 이미 MAX_PAGE_CHARS 로 맞춰 온다."""
+    system = assemble.render("research/extract_facts.md", max_facts=MAX_FACTS_PER_PAGE)
+    doc = (f"<문서 1>\n제목: {page.get('title', '')}\nURL: {page['url']}\n날짜: {page.get('date') or '미상'}\n"
+           f"본문:\n{page['text']}\n</문서 1>")
     user = "\n\n".join([
         f"[문항] {meta.get('label', '')}. {meta.get('title', '')}",
         f"[문항 의도]\n{meta.get('body', '')[:800]}",
         f"[아이디어]\n{form.get('idea', '')}",
-        "[수집한 웹 문서]\n" + "\n\n".join(docs),
+        "[수집한 웹 문서]\n" + doc,
     ])
-    res = await client.complete(system, user, model=form.get("model"))
     try:
+        res = await client.complete(system, user, model=form.get("model"))
         raw_facts = _parse_json_array(res.text)
     except Exception:
-        return []
-    facts = _verify_quotes(raw_facts, pages)
-    kind_by_url = {_url_key(p.get("url", "")): p.get("source_type", "") for p in pages}
+        return []                       # 한 페이지가 실패해도 나머지 페이지의 사실은 살린다
+    facts = _verify_quotes(raw_facts, [page])
+    kind = page.get("source_type", "")
     out = []
-    for f in facts[:MAX_FACTS]:
-        out.append({
+    for f in facts[:MAX_FACTS_PER_PAGE]:
+        row = {
             # 어느 소스에서 온 근거인지 (프론트가 KCI 배지·출처 표기에 쓴다 — 세션2 요청)
-            "source_kind": kind_by_url.get(_url_key(str(f.get("url", ""))), ""),
+            "source_kind": kind,
             "fact": str(f.get("fact", "")).strip(),
             "quote": str(f.get("quote", "")).strip(),
-            "source_title": str(f.get("source_title", "")).strip(),
-            "url": str(f.get("url", "")).strip(),
+            "source_title": str(f.get("source_title", "")).strip() or str(page.get("title", "")).strip(),
+            "url": str(f.get("url", "")).strip() or str(page.get("url", "")).strip(),
             "date": (str(f["date"]).strip() if f.get("date") not in (None, "", "null") else None),
-            "publisher": str(f.get("publisher") or domain(str(f.get("url", "")))).strip(),
+            "publisher": str(f.get("publisher") or domain(str(page.get("url", "")))).strip(),
             "use_for": str(f.get("use_for", "")).strip(),
             # 문항별 배분에 쓰는 각도 (작업 33). 모델이 안 붙였으면 배분 단계가 단서로 추정한다
             "angle": str(f.get("angle", "")).strip().lower() if str(f.get("angle", "")).strip().lower()
             in ("problem", "competitor", "pricing", "trend") else "",
-        })
-    for row in out:
+        }
         # 경쟁 서비스 사실은 프론트·골자가 알아볼 수 있게 표시 (KCI 표시는 그대로 둔다)
         if row["angle"] == "competitor" and row["source_kind"] != "kci":
             row["source_kind"] = "competitor"
+        out.append(row)
     return out
+
+
+def _dedupe_facts(rows: list[list[dict]], limit: int = MAX_FACTS) -> list[dict]:
+    """페이지별 결과를 합친다 — 같은 quote 는 한 번만, 페이지를 **번갈아** 뽑아 한 문서가 자리를 다 차지하지 않게.
+
+    페이지 순서는 collect_pages 가 신뢰도로 정렬해 둔 것이라, 각 페이지의 1순위 사실이 먼저 온다."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for i in range(max((len(r) for r in rows), default=0)):
+        for row in rows:
+            if i >= len(row):
+                continue
+            key = _norm(row[i].get("quote", ""))[:120]
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(row[i])
+            if len(out) >= limit:
+                return out
+    return out
+
+
+async def extract_facts(client: LLMClient, form: dict, meta: dict, pages: list[dict], cfg: ResearchConfig) -> list[dict]:
+    """수집한 페이지에서 인용할 사실을 뽑는다.
+
+    작업 39: 예전에는 페이지 6개를 **한 프롬프트**에 담아 1회 호출했다(≈2만 토큰). 그러면
+    ① 뒤쪽 문서일수록 라마가 흘려 읽어 사실이 앞 문서에 쏠리고 ② 한 번 JSON 파싱이 깨지면 조사 전체가 0건이 된다.
+    이제 **페이지 하나당 한 번씩** 부르고 결과를 합친다 — 프롬프트가 짧아 정확도가 오르고, 한 장이 실패해도 나머지는 남는다.
+    대신 호출 수가 페이지 수만큼 늘어나므로 **조사 워커 안에서 동시 EXTRACT_CONCURRENCY 장까지만** 돌린다."""
+    if not pages:
+        return []
+    limiter = asyncio.Semaphore(EXTRACT_CONCURRENCY)
+
+    async def one(page: dict) -> list[dict]:
+        async with limiter:
+            return await _extract_from_page(client, form, meta, page, cfg)
+
+    rows = await asyncio.gather(*(one(p) for p in pages), return_exceptions=True)
+    return _dedupe_facts([r for r in rows if isinstance(r, list)])
 
 
 # ────────────────────────── 5) 참고자료 섹션 ──────────────────────────
