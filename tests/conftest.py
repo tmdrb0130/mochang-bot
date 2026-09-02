@@ -52,3 +52,16 @@ def _outline_off(request):
     generate._outline_cfg = {"enabled": False}
     yield
     generate._outline_cfg = saved
+
+
+@pytest.fixture(autouse=True)
+def _refine_off(request):
+    """refine() 연결(작업 22·27 마무리)도 기본으로 꺼 둔다 — 켜져 있으면 가짜 응답의 수치가 '지어낸 것' 으로 지워지고
+    하한 미달 신호로 이어쓰기 호출이 붙어 생성 자체를 보는 테스트가 흔들린다. tests/test_refine_hook.py 가 켜서 본다."""
+    if request.node.get_closest_marker("refine"):
+        yield
+        return
+    saved = generate._refine_cfg
+    generate._refine_cfg = {"enabled": False}
+    yield
+    generate._refine_cfg = saved

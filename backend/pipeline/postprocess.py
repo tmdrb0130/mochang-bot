@@ -44,7 +44,7 @@ import re
 
 # 문단은 살린다. 한도 초과분을 "문단 끝에서만" 자르려면 문단 경계가 남아 있어야 한다 (작업 27).
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n+")
-_SENTENCE_SPLIT = re.compile(r"(?<=[.다!?])\s+")
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")   # "다" 뒤 공백으로도 끊으면 "주말마다 같은…" 이 두 문장이 된다 (세션3 수정)
 # 이보다 짧은 조각은 문장으로 안 보고 규칙 판정에서 건너뛴다 (제목·군더더기).
 MIN_SENTENCE = 8
 

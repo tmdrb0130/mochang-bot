@@ -69,6 +69,12 @@ generate:
   polish:
     enabled: true
 
+  # 세션2 refine() 연결 (작업 22·27 마무리, 모델 호출 0) — 지어낸 수치·상용구·재진술·금지어 삭제, 1인칭 통일.
+  # 신호에 따라 서버가 재생성한다(문항당 최대 2회): 한도 초과 → shorten.md 압축 후 문단 끝 자름,
+  # 하한 미달 → 이어쓰기 + 되풀이 제거, 짧은 문항의 흠 → 짜임 바꿔 1회 재생성. 끄면 예전처럼 한도에서 자른다.
+  refine:
+    enabled: true
+
   outline:
     enabled: true
     cache_ttl_seconds: 604800     # 7일. 아이디어·인테이크 답변이 바뀌면 키가 달라져 새로 만든다
