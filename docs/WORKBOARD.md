@@ -442,6 +442,18 @@
     없어도 URL·publisher 로 동작). 지금 `/research` 응답의 fact 에는 `source_kind` 가 없다.
   - ⏸ **배포 대기** — 공개 번들은 아직 `index-vkBBBKoM.js`(KCI 표기 없음)다. 승인해 주시면 `npx vite build`.
 
+
+- **공개 배포 2 (사용자 승인, 2026-09-02)** — `npx vite build`.
+  **새 번들: `index-D6Y4UlY6.js` / `index-lAf1A43D.css`** (이전 `index-vkBBBKoM.js` / `index-Da5jo6yn.css` → 교체됨).
+  배포 내용은 `1bd6ca3` (작업 17 UI — KCI 출처 표기). 빌드 전 프론트 미커밋 변경 없음, `frontend/.env` 없음 확인.
+  - 공개 URL `https://bustartup.kr:50001/` 이 `assets/index-D6Y4UlY6.js` 참조 → nginx 가 새 번들 서빙 중.
+  - 검증: 공개 URL 에서 번들을 직접 받아 `한국학술지인용색인` 1건 확인.
+    번들 문자열 — `KCI(한국학술지인용색인) 데이터 활용` 1 · `논문 서지정보` 1 · 판정 정규식 `kci\.go\.kr` 1 ·
+    `source_kind` 1. 직전 배포분(`차례를 기다리는 중` 2 · `서버와 연결이 끊겼어요` 1)도 그대로 살아 있다.
+  - 이로써 **KCI 준수 사항 4항(화면 상시 표기)은 공개 서비스에 반영됐다.** 남은 KCI 항목은 세션3 몫
+    (1항 `no_fetch` · 2항 벡터DB 색인 제외 · 3항 왜곡 금지 · 5항 파기 스크립트).
+  - 📌 워커 36+9(`054a51f`)는 **여전히 운영 미반영** — 프론트 정적 파일만 바꾼 배포라 `mochang-api` 재시작이 따로 필요하다.
+
 ### 세션3 (백엔드)
 
 - 시작 — 작업 2(V4), 작업 6 백엔드 몫, 작업 12 1단계.
