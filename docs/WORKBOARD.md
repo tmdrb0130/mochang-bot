@@ -131,7 +131,10 @@
 - [x] dist 재빌드(=배포) 시점 — 08:57 사용자 승인으로 배포 완료 (`index-CG-vzjlN.js`).
   ⚠️ 09-02 08:18 세션2가 문법 검증용 `npx vite build` 로 미검증 작업본을 오배포 → 직전 커밋 빌드로 복구 진행.
   재발 방지: 문법 검증은 `--outDir dist-check` 로 (CLAUDE.md·TEAMWORK 규칙화 완료)
-- [ ] **API 키 발급** (사용자만 가능, 작업 12 3단계 전제 — 상세 한도는 RESEARCH_PLAN 참조):
+- [~] **API 키 발급** (사용자만 가능, 작업 12 3단계 전제 — 상세 한도는 RESEARCH_PLAN 참조):
+  - ✅ **네이버 (API HUB) 09:4x 발급 완료** — `.env` 에 `NAVER_CLIENT_ID/SECRET` 들어감. 세션1이 파이썬으로 실호출 1건
+    (`/search/v1/news` query=창업) → 200, UTF-8 한글 정상, total 478만. **세션3: 어댑터를 HUB 규격으로 고친 뒤 실키 검증 1~2건 가능.**
+    운영 `mochang-api` 는 아직 재시작 전(구 어댑터라 재시작해도 네이버 호출은 실패함 → 어댑터 수정 후 재시작).
   - 네이버 → **NAVER API HUB** (ncloud.com 계정 → 콘솔 > Application Services > NAVER API HUB > Application 등록 > 검색 API).
     developers.naver.com 은 신규 신청 종료. 뉴스·블로그·웹문서 공용, 전문자료는 종료됨. 콘솔에서 한도 알림 설정
   - KCI OpenAPI (kci.go.kr) — 학술 근거용 키. OpenAlex·Semantic Scholar 는 키 불필요
@@ -339,7 +342,7 @@
   → 2단계는 "아이디어 단위 공통 조사 1회(검색어 4개)를 먼저 하고, 문항별로는 그 결과로 못 채우는
   각도만 1~2개 추가"가 맞다. 문항당 4개 고정을 없애는 것이 핵심 (조사 10회 → 1회 + 보완).
   아이디어별 편차가 크므로(58% vs 36%) 문항 보완 검색어 수는 고정하지 말고 상한만 두는 쪽.
-- 완료 — **작업 12 3단계 선작업: 네이버 검색 API 어댑터** (`23ad8de`). 테스트 96 passed, 실호출 0.
+- 완료 — **작업 12 3단계 선작업: 네이버 검색 API 어댑터** (`23ad8de`). 테스트 96 passed, 실호출 0. *(구 규격 — 아래 정정으로 대체됨)*
   - `NaverSearch` — kinds(news/blog/doc/webkr) 각각 요청 1회, `<b>` 태그·엔티티 제거, originallink 우선,
     유형 하나가 실패해도 나머지는 살림. `_norm_date` 가 네이버 날짜 2종(pubDate, postdate) 인식.
   - **키가 없으면 백엔드 목록에 아예 안 들어간다** → 지금은 예전과 100% 동일하게 ddgs 단독.
@@ -412,6 +415,24 @@
     (작업 ID 폴링이 404 가 된다) — 사용자가 붙어 있는 낮 시간대는 피할 것.
   - 재시작 뒤 확인: `GET /jobs` 의 `max_workers` 가 30 인지. 그 다음 부하 체감은
     `scripts/load_test.py --n 100 --jobs` 로 큐 쪽만 따로 볼 수 있다(모델은 가짜라 GPU 부하 없음).
+- 완료 — **작업 12 3단계 정정: NaverSearch 를 NAVER API HUB 규격으로** (`6c7e9bc`). 테스트 106 passed, **실호출 0**.
+  상태판 "🔴 3단계 정정" 5개 항목 전부 반영:
+  - ① `base_url` → `https://naverapihub.apigw.ntruss.com/search/v1`, 경로 `/{kind}` (`.json` 없음)
+  - ② 인증 헤더 → `X-NCP-APIGW-API-KEY-ID` / `X-NCP-APIGW-API-KEY` (구 `X-Naver-Client-*` 삭제).
+    **`.env` 이름은 `NAVER_CLIENT_ID` / `NAVER_CLIENT_SECRET` 그대로** — NCP 콘솔의 Client ID/Secret 을 그 이름에 넣으면 된다.
+  - ③ `doc`(전문자료) 제거(2026-07-31 종료). 대신 `webkr`(웹문서)·`cafearticle`(카페 글, 고객 불만 근거)을 넣었다.
+    학술 근거는 KCI(`KCI_API_KEY`) → OpenAlex/Semantic Scholar(키 불필요) 자리로 비워 둔다.
+  - ④ 오류 본문 2형태 모두 파싱(`naver_error_message`): 평면 `{"errorCode","errorMessage"}` /
+    중첩 `{"error":{"errorCode","message"}}`. **429 는 남은 유형을 더 쏘지 않고 중단**하고
+    `SearchRateLimited` 로 올려 ddgs 폴백 — 5단계 서킷브레이커가 그대로 잡을 신호 타입이다.
+    429 가 아닌 오류(500 등)는 유형 하나만 건너뛰고 나머지는 살린다. 오류 문자열은 `NaverSearch.last_error`.
+  - ⑤ `display` 1~100 로 제한, 한도 주석 25,000/일 → **월 775,000건·키당 50 RPS** 로 정정 (config.yaml 포함).
+  - 동작 변화 없음 확인: **키가 없으면 백엔드 목록에서 빠져 지금도 ddgs 단독**이다. 키가 들어오면 `naver → ddgs`.
+  - 남은 3단계 작업(키 필요 없음): KCI/OpenAlex 어댑터, 정형 API(KOSIS·ECOS·data.go.kr) 별도 경로 설계.
+- 📌 세션1에게 — 키가 발급되면 `.env` 에 이 이름으로 넣어 주세요 (코드가 이 이름을 읽습니다):
+  `NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `DATA_GO_KR_API_KEY`, `KOSIS_API_KEY`, `ECOS_API_KEY`,
+  `KCI_API_KEY`, `KIPRIS_API_KEY`. 지금 코드가 실제로 쓰는 건 네이버 2개뿐이고 나머지는 어댑터를 만들 때 씁니다.
+  `.env.example`(루트, 제 구역 밖)에도 같은 줄을 넣어 두면 다른 PC 에서 헤매지 않습니다.
 - 다음 후보 (세션3) — ① 작업 12 **4단계(캐시 키 정규화)** — 아이디어를 고쳐도 조사를 재활용하게 만드는 단계라
   2단계 다음으로 효과가 크다. ② 정형 API(KOSIS·ECOS·data.go.kr)는 "검색 → 페이지 fetch" 가 아니라 JSON 직조회라
   `Researcher` 백엔드 인터페이스에 안 맞는다 — 별도 경로(질의 유형 분류 → 통계 조회 → 사실 직생성) 설계부터 필요.
