@@ -45,10 +45,21 @@ class ResearchConfig:
     max_followup_pages: int = 3        # 보완 검색으로 본문을 받아올 페이지 수 상한
     # 같은 도메인에서 가져올 페이지 수 상한 (작업 7 — 근거가 한 신문사에 쏠리는 것 방지). 0 이면 제한 없음.
     max_pages_per_domain: int = 2
+    # ── 벡터DB 축적 (RAG_PLAN, backend/rag/vectorstore.py) ──
+    # 지금은 **색인만** 한다 — 조사해온 페이지를 쌓아 두는 단계. 조회(웹 검색 대체)는 다음 단계에서 붙인다.
+    # 기본 False: 켜면 임베딩 호출이 늘고 디스크에 쌓이므로 사용자 결정 뒤에 켠다.
+    vectorstore_enabled: bool = False
+    vectorstore_dir: str = "backend/.vectorstore"
+    vectorstore_embed_model: str = "bge-m3"      # Ollama 모델명. 빈 값이면 오프라인 임베딩(품질 없음 — 테스트용)
+    vectorstore_ollama_url: str = "http://localhost:11434"
+    vectorstore_min_score: float = 0.8
+    vectorstore_min_hits: int = 5
+    vectorstore_max_age_days: int = 730
 
     @classmethod
     def from_config(cls, config: dict) -> "ResearchConfig":
         rc = (config or {}).get("research") or {}
+        vs = rc.get("vectorstore") or {}
         return cls(
             max_queries=int(rc.get("max_queries", 4)),
             max_results_per_query=int(rc.get("max_results_per_query", 6)),
@@ -59,6 +70,13 @@ class ResearchConfig:
             max_followup_queries=int(rc.get("max_followup_queries", 2)),
             max_followup_pages=int(rc.get("max_followup_pages", 3)),
             max_pages_per_domain=int(rc.get("max_pages_per_domain", 2)),
+            vectorstore_enabled=bool(vs.get("enabled", False)),
+            vectorstore_dir=str(vs.get("dir", "backend/.vectorstore")),
+            vectorstore_embed_model=str(vs.get("embed_model", "bge-m3")),
+            vectorstore_ollama_url=str(vs.get("ollama_url", "http://localhost:11434")),
+            vectorstore_min_score=float(vs.get("min_score", 0.8)),
+            vectorstore_min_hits=int(vs.get("min_hits", 5)),
+            vectorstore_max_age_days=int(vs.get("max_age_days", 730)),
             cache_ttl=int(rc.get("cache_ttl_seconds", 7 * 24 * 3600)),
         )
 
@@ -187,6 +205,37 @@ def _url_key(url: str) -> str:
     return (url or "").split("#")[0].rstrip("/")
 
 
+_vector_store = None          # 프로세스당 하나 (색인 저장소를 열어 두는 비용이 크다)
+
+
+def get_vector_store(cfg: ResearchConfig):
+    """설정이 켜져 있을 때만 벡터 저장소를 연다. llama_index import 도 이때 처음 일어난다."""
+    global _vector_store
+    if not cfg.vectorstore_enabled:
+        return None
+    if _vector_store is None:
+        from .vectorstore import VectorStore, ollama_embedding
+        embed = (ollama_embedding(cfg.vectorstore_embed_model, cfg.vectorstore_ollama_url)
+                 if cfg.vectorstore_embed_model else None)
+        _vector_store = VectorStore(cfg.vectorstore_dir, embed_model=embed,
+                                    min_score=cfg.vectorstore_min_score, min_hits=cfg.vectorstore_min_hits,
+                                    max_age_days=cfg.vectorstore_max_age_days)
+    return _vector_store
+
+
+async def index_pages(pages: list[dict], cfg: ResearchConfig) -> int:
+    """조사해온 페이지를 벡터DB 에 쌓는다 (색인만 — 조회는 다음 단계).
+
+    LlamaIndex 는 동기라 to_thread 로 감싼다. **색인 실패는 조사를 막지 않는다** — 부가 기능이다."""
+    store = get_vector_store(cfg)
+    if store is None or not pages:
+        return 0
+    try:
+        return await asyncio.to_thread(store.upsert_pages, pages)
+    except Exception:
+        return 0
+
+
 async def _no_fetch() -> str:
     """fetch 자리에 끼우는 빈 코루틴 — 정형 API 결과는 HTTP 로 받아올 페이지가 없다."""
     return ""
@@ -244,6 +293,7 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
             pages.append({**r, "text": body, "from_snippet": not bool(t)})
         if len(pages) >= want:
             break
+    await index_pages(pages, cfg)          # 벡터DB 축적 (기본 꺼짐)
     return unique, pages
 
 

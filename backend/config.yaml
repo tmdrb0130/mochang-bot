@@ -97,6 +97,19 @@ research:
   share_idea_research: true
   max_followup_queries: 2        # 문항당 보완 검색어 **상한** (개수 고정 아님. 0 이면 공통 조사만 씀)
   max_followup_pages: 3          # 보완 검색으로 본문을 받아올 페이지 수 상한
+  # 조사 자료 벡터DB 축적 (docs/RAG_PLAN.md, backend/rag/vectorstore.py).
+  # 지금은 **색인만** 한다 — 조사해온 페이지를 쌓아 두는 단계이고, 쌓인 것으로 웹 검색을 대체하는 조회는 다음 단계다.
+  # 기본 false: 켜면 페이지마다 임베딩 호출(Ollama bge-m3)이 붙고 backend/.vectorstore/ 에 디스크가 쌓인다.
+  # 켜기 전에 `ollama pull bge-m3` 가 끝나 있어야 한다. embed_model 을 비우면 오프라인 임베딩(품질 없음, 테스트용).
+  vectorstore:
+    enabled: false
+    dir: "backend/.vectorstore"
+    embed_model: "bge-m3"
+    ollama_url: "http://localhost:11434"
+    min_score: 0.8               # 조회 단계에서 쓸 유사도 하한 (지금은 저장만 하므로 미사용)
+    min_hits: 5
+    max_age_days: 730
+
   # 정형 공공 API (RESEARCH_PLAN 3단계) — 검색·페이지 fetch 없이 JSON 으로 수치를 바로 가져온다.
   # 검색어에 그 소스의 키워드가 없으면 요청 자체를 하지 않는다 (backend/rag/opendata.py TRIGGERS).
   #   kosis     통계·인구·가구·현황·규모…   → 통계표 검색 + 최신 수치   (KOSIS_API_KEY)

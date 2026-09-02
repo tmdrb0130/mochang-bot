@@ -507,3 +507,82 @@ async def test_extra_source_failure_does_not_break_web_search(tmp_path):
     out = await r.search("질의")
     assert [x["url"] for x in out] == ["https://news.co.kr/1"]
     assert "opendata: RuntimeError" in r.last_error
+
+
+# ── 작업 9 연결: 조사해온 페이지를 벡터DB 에 색인 (기본 꺼짐, 색인만) ──
+
+class FakeStore:
+    def __init__(self, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    def upsert_pages(self, pages):
+        if self.fail:
+            raise RuntimeError("색인 실패")
+        self.calls.append([p["url"] for p in pages])
+        return len(pages)
+
+
+@pytest.mark.asyncio
+async def test_vectorstore_is_off_by_default(tmp_path, monkeypatch):
+    """기본값에서는 저장소를 열지도 않는다 — llama_index import 도 임베딩 호출도 없다."""
+    opened = []
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: opened.append(cfg) or None)
+    cfg = P.ResearchConfig(max_pages_to_extract=2)
+    assert cfg.vectorstore_enabled is False
+
+    researcher = R.Researcher(backends=[("fake", lambda q, n: _aret(fake_results("https://a.co.kr/1")))],
+                              cache=R.DiskCache(tmp_path))
+    _, pages = await P.collect_pages(researcher, ["q"], cfg, fetch=make_fetch({"https://a.co.kr/1": PAGE_TEXT}))
+    assert pages and opened == [cfg]         # 물어는 보되 None 이라 아무 일도 안 한다
+
+
+@pytest.mark.asyncio
+async def test_collect_pages_indexes_pages_when_enabled(tmp_path, monkeypatch):
+    store = FakeStore()
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: store)
+    cfg = P.ResearchConfig(max_pages_to_extract=2, vectorstore_enabled=True)
+    researcher = R.Researcher(backends=[("fake", lambda q, n: _aret(fake_results("https://a.co.kr/1")))],
+                              cache=R.DiskCache(tmp_path))
+
+    _, pages = await P.collect_pages(researcher, ["q"], cfg, fetch=make_fetch({"https://a.co.kr/1": PAGE_TEXT}))
+    assert store.calls == [["https://a.co.kr/1"]]          # 본문까지 있는 page dict 를 그대로 넘긴다
+    assert pages[0]["text"] == PAGE_TEXT                    # 조사 결과는 그대로
+
+
+@pytest.mark.asyncio
+async def test_indexing_failure_does_not_break_research(tmp_path, monkeypatch):
+    """색인은 부가 기능이다 — 실패해도 조사 결과는 그대로 나와야 한다."""
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: FakeStore(fail=True))
+    cfg = P.ResearchConfig(max_pages_to_extract=2, vectorstore_enabled=True)
+    researcher = R.Researcher(backends=[("fake", lambda q, n: _aret(fake_results("https://a.co.kr/1")))],
+                              cache=R.DiskCache(tmp_path))
+    _, pages = await P.collect_pages(researcher, ["q"], cfg, fetch=make_fetch({"https://a.co.kr/1": PAGE_TEXT}))
+    assert [p["url"] for p in pages] == ["https://a.co.kr/1"]
+
+
+@pytest.mark.asyncio
+async def test_index_pages_runs_off_the_event_loop(monkeypatch):
+    """LlamaIndex 는 동기다 — 이벤트 루프를 막지 않도록 to_thread 로 감싼다."""
+    import asyncio
+    store = FakeStore()
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: store)
+    called = {}
+    real_to_thread = asyncio.to_thread
+
+    async def watched(fn, *a, **kw):
+        called["used"] = True
+        return await real_to_thread(fn, *a, **kw)
+
+    monkeypatch.setattr(P.asyncio, "to_thread", watched)
+    n = await P.index_pages([{"url": "https://a.co.kr/1", "text": PAGE_TEXT}],
+                            P.ResearchConfig(vectorstore_enabled=True))
+    assert n == 1 and called.get("used") is True
+
+
+def test_vectorstore_config_is_read_from_yaml():
+    cfg = P.ResearchConfig.from_config({"research": {"vectorstore": {
+        "enabled": True, "dir": "x/y", "embed_model": "", "min_score": 0.7, "min_hits": 3, "max_age_days": 365}}})
+    assert cfg.vectorstore_enabled and cfg.vectorstore_dir == "x/y" and cfg.vectorstore_embed_model == ""
+    assert (cfg.vectorstore_min_score, cfg.vectorstore_min_hits, cfg.vectorstore_max_age_days) == (0.7, 3, 365)
+    assert P.ResearchConfig.from_config({}).vectorstore_enabled is False       # 설정이 없으면 꺼짐
