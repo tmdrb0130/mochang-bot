@@ -1,7 +1,7 @@
 """모두의 창업 신청서 자동 작성기 — FastAPI 백엔드 (MVP 뼈대).
 
 실행 (프로젝트 루트에서):  uvicorn backend.main:app --reload --port 8000
-엔드포인트: /health, /models, /intake, /research, /generate, /extend, /verify, /generate/dry-run,
+엔드포인트: /health, /models, /intake, /research, /generate, /extend, /verify, /translate, /generate/dry-run,
            /jobs/{kind} (제출) · /jobs/{id} (폴링) · /jobs (큐 상태)
 Q6(사업 분야)·Q10 공개 여부는 사람이 프론트에서 직접 고른다 — AI 호출 없음.
 """
@@ -21,7 +21,7 @@ from .llm.jobs import TooManyJobs
 from . import finisher as finisher_mod
 from . import storage as storage_mod
 from . import timing
-from .pipeline import assemble, generate, intake, verify
+from .pipeline import assemble, generate, intake, translate, verify
 from .rag import pipeline as research_pipeline
 from .rag.research import researcher_from_config
 
@@ -309,6 +309,19 @@ async def verify_endpoint(req: VerifyRequest):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+class TranslateRequest(BaseModel):
+    """외국인 지원자용 읽기 번역 (2026-09-03). 신청서는 한국어로만 만들고 제출도 한국어 — 번역은 이해용이다."""
+    lang: str                          # en | zh | ja (pipeline/translate.py LANG_NAMES)
+    texts: list[str]                   # 한국어 원문 목록. 하나면 평문 모드(문항 본문), 여럿이면 목록 모드(카드 문구)
+    model: str | None = None
+
+
+@app.post("/translate")
+async def translate_endpoint(req: TranslateRequest):
+    """→ {lang, translations: [원문과 같은 길이], model}. 실패한 항목은 ""."""
+    return await translate.translate_texts(research_client, req.texts, req.lang, req.model)
+
+
 # ── 비동기 작업: 제출 → 작업 ID → 폴링 ──
 # 긴 작업(문항 생성 30~60초, 조사 1~2분)을 HTTP 연결을 붙잡지 않고 처리. 대기 순번(position)을 보여줄 수 있다.
 
@@ -320,12 +333,17 @@ _JOB_KINDS = {
     "intake_regenerate": (IntakeRegenerateRequest, lambda f: _intake_regenerate_full(f)),
     "research": (ResearchRequest, lambda f: research_pipeline.run_research(research_client, researcher, f, f["question_id"], research_cfg)),
     "verify": (VerifyRequest, lambda f: verify.verify_text(client, {k: v for k, v in f.items() if k != "text"}, f["question_id"], f["text"])),
+    # 번역은 조사 클라이언트(우선순위 0, 워커 80)로 — 외국인이 화면을 읽으려고 기다리는 대화형 작업이라 본문 생성 뒤에 세우지 않는다.
+    "translate": (TranslateRequest, lambda f: translate.translate_texts(research_client, f["texts"], f["lang"], f.get("model"))),
 }
 # 인테이크·조사 작업은 **조사 큐**(research_client.queue, 워커 수 = research.llm.max_workers)에서 돈다.
 # 본문 큐에 넣으면 웹 검색·페이지 수집으로 수십 초씩 네트워크를 기다리는 동안 본문 워커를 점유해 생성이 굶고,
 # 반대로 생성이 몰리면 인테이크가 그 뒤에 선다(40명 실측: 카드 생성 대기 최대 3분 47초). 큐를 나누면 서로 막지 않는다.
 # 조사 큐 워커 안에서 부르는 LLM 호출은 중첩 제출 없이 바로 나간다(jobs.py _in_worker) — 동시 호출 ≤ 워커 × 페이지 동시(3).
-_RESEARCH_KINDS = {"intake", "intake_regenerate", "research"}
+_RESEARCH_KINDS = {"intake", "intake_regenerate", "research", "translate"}
+# IP 당 동시 작업 제한(max_jobs_per_client)을 안 받는 종류. 번역은 조사·생성이 슬롯 3개를 다 쓰는 동안에도 들어와야 한다
+# (카드가 뜨자마자 카드 번역, 문항이 끝나자마자 본문 번역). 호출당 몇 초짜리 짧은 작업이고 storage 에도 남기지 않는다.
+_UNLIMITED_KINDS = {"translate"}
 
 
 def _queue_for(kind: str):
@@ -355,7 +373,7 @@ def _client_key(request: Request) -> str:
 
 @app.post("/jobs/{kind}")
 async def submit_job(kind: str, body: dict, request: Request):
-    """kind ∈ generate|extend|intake|intake_regenerate|research|verify. 본문은 해당 동기 엔드포인트와 같다. → {job_id, position}
+    """kind ∈ generate|extend|intake|intake_regenerate|research|verify|translate. 본문은 해당 동기 엔드포인트와 같다. → {job_id, position}
     같은 IP 가 동시에 가질 수 있는 작업은 config.yaml max_jobs_per_client 건까지 — 넘으면 429."""
     if kind not in _JOB_KINDS:
         raise HTTPException(status_code=404, detail=f"알 수 없는 작업 종류: {kind}")
@@ -367,7 +385,7 @@ async def submit_job(kind: str, body: dict, request: Request):
         # 결과가 나오면 DB 에 남기고(아이디어·초안, storage.py) 그대로 job.result 가 된다.
         # intake 는 _intake_full 안에서 이미 저장하므로 여기서 다시 저장하지 않는다(kind 가 저장 대상이 아니어서 무해).
         job = q.submit(lambda: _persisted(kind, form, runner(form), owner) if kind != "intake" else _intake_full(form, owner),
-                       kind=kind, owner=owner)
+                       kind=kind, owner=None if kind in _UNLIMITED_KINDS else owner)
     except TooManyJobs as e:
         raise HTTPException(status_code=429, detail=str(e),
                             headers={"Retry-After": "10"})

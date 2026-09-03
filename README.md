@@ -130,7 +130,7 @@ http://localhost:5173 을 열면 화면 상단에 `모델: minimax/minimax-m3:fr
 ```
 mochang-bot/
 ├── backend/                    # Python · FastAPI
-│   ├── main.py                 #   API: /health /models /intake /intake/regenerate /generate /extend /research /verify /jobs /drafts
+│   ├── main.py                 #   API: /health /models /intake /intake/regenerate /generate /extend /research /verify /translate /jobs /drafts
 │   ├── storage.py              #   아이디어·초안 DB (SQLAlchemy, 기본 SQLite WAL) — 요청이 끝날 때 입력·생성문을 남김
 │   ├── config.yaml             #   LLM 연결 설정 (base_url / api_key / model) — 여기만 바꾸면 모델 교체
 │   ├── llm/client.py           #   OpenAI 호환 클라이언트 (OpenRouter · Ollama · vLLM · LiteLLM 공용)
@@ -229,7 +229,8 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 | `POST /extend` | 기존 글 뒤에 새 근거·사례만 이어쓰기 |
 | `POST /research` | 아이디어+문항 → 검색어 → 웹 검색(Vane/ddgs) → 본문 추출 → 출처 있는 사실 JSON (모델 2회). `facts` 를 `/generate` 의 `references` 로 넘기면 [웹 참고자료] 주입 |
 | `POST /verify` | 생성문이 문항 md 의 [필수 요소]를 담았는지 모델 판정 → `missing`, `unsupported_claims`, `score` |
-| `POST /jobs/{kind}` | 위 작업들을 비동기로 제출 → `{job_id, position}` (kind: generate·extend·intake·intake_regenerate·research·verify) |
+| `POST /translate` | 외국인 지원자용 **읽기 번역** (2026-09-03): `{lang: en|zh|ja, texts: [한국어…]}` → `{lang, translations: [같은 길이]}`. 하나면 평문 모드(문항 본문), 여럿이면 목록 모드(카드 질문·보기·힌트, 40개씩 호출). 조사 클라이언트(우선순위 0)로 돌고 IP 동시 제한을 안 받는다. 신청서는 한국어로만 만들고 제출도 한국어 — 프론트가 초안 아래에 병기할 뿐이다 (`backend/pipeline/translate.py`, `prompts/translate*.md`) |
+| `POST /jobs/{kind}` | 위 작업들을 비동기로 제출 → `{job_id, position}` (kind: generate·extend·intake·intake_regenerate·research·verify·translate) |
 | `GET /jobs/{id}` | `{status, position, result, error}` 폴링 |
 | `GET /jobs` | 큐 상태 (워커 수, 대기, 실행 중) |
 | `GET /drafts/{draft_id}` | 저장된 초안 한 벌 — 입력(아이디어·인테이크 답) + 문항별 생성 이력. 모든 요청은 끝날 때 `backend/storage.py` 가 DB 에 남긴다 (기본 SQLite `backend/.data/mochang.sqlite`, `config.yaml storage.url`/`MOCHANG_DATABASE_URL` 로 PostgreSQL 전환). 목록 조회는 없음 — 운영자는 `scripts/drafts_report.py`. 응답의 `finisher: {enabled, in_progress}` 는 마무리 작업자(`backend/finisher.py`: 생성 도중 나간 학생의 빈 문항을 낮은 우선순위로 채움)가 이 초안을 채우는 중인지. 프론트는 재접속·`?draft=<id>` 링크로 이걸 받아 빈 문항을 채운다 |

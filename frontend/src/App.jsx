@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as api from "./api.js";
+import { LANGS, LANG_NAMES, LangContext, loadLang, makeT, saveLang, useLang } from "./i18n.jsx";
 
 // ───────────────────────── 데이터 정의 ─────────────────────────
 // 문항 의도·작성 지침은 백엔드 backend/prompts/ 의 md 파일이 단일 출처. 여기엔 UI 표시용 메타만 둔다.
@@ -58,6 +59,7 @@ async function runLimited(tasks, limit) {
 // value: { answer: string | string[] | null, unknown: bool } | undefined
 // 모든 카드가 다중 선택. 답은 항상 배열. number 카드는 보기 + "몇 명" 숫자를 함께 받는다.
 function CardOptions({ card, value, onChange, compact = false }) {
+  const { t, tr } = useLang();               // tr: 카드 문구(한국어) → 화면 언어 번역 (없으면 원문). 답은 한국어 원문으로 저장된다.
   const [other, setOther] = useState("");
   const isNumber = card.type === "number";
   const picked = value?.answer;
@@ -94,32 +96,32 @@ function CardOptions({ card, value, onChange, compact = false }) {
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
         {card.options.map((o) => (
-          <button key={o.label} onClick={() => toggle(o.label)} title={o.source ? `${o.hint}
-근거: ${o.source}` : o.hint}
+          <button key={o.label} onClick={() => toggle(o.label)} title={o.source ? `${tr(o.hint)}
+${t("opt.source")}${o.source}` : tr(o.hint)}
             className={`${btn} rounded-lg border text-left ${isOn(o.label) ? "border-indigo-600 bg-indigo-50 text-indigo-900" : "border-slate-200 hover:border-slate-400"}`}>
-            {isOn(o.label) && <span className="mr-1">✓</span>}{o.label}
+            {isOn(o.label) && <span className="mr-1">✓</span>}{tr(o.label)}
             {/* 웹 조사에서 근거가 나온 보기에만 출처를 붙인다 — 지어낸 보기와 구분된다 */}
             {o.source && <span className="ml-1.5 text-[10px] text-sky-700 bg-sky-100 rounded px-1 py-0.5 align-middle">{o.source}</span>}
           </button>
         ))}
         <button onClick={() => onChange({ answer: null, unknown: true })}
           className={`${btn} rounded-lg border ${value?.unknown ? "border-amber-500 bg-amber-50 text-amber-900" : "border-dashed border-slate-300 text-slate-500 hover:border-slate-400"}`}>
-          모르겠어요
+          {t("opt.unknown")}
         </button>
       </div>
-      {!compact && <p className="text-xs text-slate-400">여러 개 골라도 됩니다.{hints.length > 0 && ` → ${hints.join(" / ")}`}</p>}
+      {!compact && <p className="text-xs text-slate-400">{t("opt.multi")}{hints.length > 0 && ` → ${hints.map(tr).join(" / ")}`}</p>}
       <div className="flex gap-2 flex-wrap">
         {isNumber && (
-          <input type="number" min="0" value={count} onChange={(e) => setCount(e.target.value)} placeholder="몇 명?"
+          <input type="number" min="0" value={count} onChange={(e) => setCount(e.target.value)} placeholder={t("opt.count")}
             className={`${compact ? "text-xs py-1" : "text-sm py-2"} px-3 rounded-lg border border-slate-300 w-24`} />
         )}
         <input value={other} onChange={(e) => setOther(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitOther()}
-          placeholder="기타 — 직접 한 줄 입력 후 Enter"
+          placeholder={t("opt.other.ph")}
           className={`${compact ? "text-xs py-1" : "text-sm py-2"} px-3 rounded-lg border border-slate-300 flex-1 min-w-[200px]`} />
       </div>
       {pickedList.filter((p) => !labels.includes(base(p))).map((p) => (
-        <button key={p} onClick={() => commit(pickedList.filter((x) => x !== p))} title="클릭하면 제거"
-          className="inline-block mr-2 text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 hover:bg-red-50 hover:text-red-700">기타: {p} ×</button>
+        <button key={p} onClick={() => commit(pickedList.filter((x) => x !== p))} title={t("opt.remove")}
+          className="inline-block mr-2 text-xs px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 hover:bg-red-50 hover:text-red-700">{t("opt.other")}{p} ×</button>
       ))}
     </div>
   );
@@ -127,17 +129,18 @@ function CardOptions({ card, value, onChange, compact = false }) {
 
 // "다른 보기 보기" — 보기가 안 맞을 때 메모(선택)와 함께 그 카드만 다시 생성
 function RegenerateBar({ slot, state, onNote, onRun, compact = false }) {
+  const { t } = useLang();
   const busy = state?.busy;
   const size = compact ? "text-xs py-1" : "text-xs py-1.5";
   return (
     <div className="space-y-1">
       <div className="flex gap-2 flex-wrap items-center">
         <input value={state?.note || ""} onChange={(e) => onNote(slot, e.target.value)} onKeyDown={(e) => e.key === "Enter" && !busy && onRun(slot)}
-          placeholder="보기가 안 맞나요? 이유를 한 줄 적으면 더 잘 맞춰요 (선택)" disabled={busy}
+          placeholder={t("regen.ph")} disabled={busy}
           className={`${size} px-3 rounded-lg border border-slate-200 flex-1 min-w-[220px] disabled:bg-slate-50`} />
         <button onClick={() => onRun(slot)} disabled={busy}
           className={`${size} px-3 rounded-lg border border-indigo-200 text-indigo-700 hover:bg-indigo-50 disabled:text-slate-400 disabled:border-slate-200`}>
-          {busy ? "다시 만드는 중…" : `다른 보기 보기${state?.count ? ` (${state.count})` : ""}`}
+          {busy ? t("regen.busy") : `${t("regen.btn")}${state?.count ? ` (${state.count})` : ""}`}
         </button>
       </div>
       {state?.error && <p className="text-xs text-red-600">{state.error}</p>}
@@ -161,21 +164,20 @@ const isKciFact = (f) =>
 // ───────────────────────── 웹 조사 근거 패널 ─────────────────────────
 // 백엔드 /research 결과. 조사는 로컬 라마 70B 가 하고, 이 사실들이 [웹 참고자료] 로 작성 모델에 넘어간다.
 function ResearchPanel({ state, warm = true }) {
+  const { t } = useLang();
   const [open, setOpen] = useState(false);
   if (!state) return null;
   // 아이디어 공통 조사는 이 아이디어의 첫 문항에서만 실제로 돈다 (모델 호출 4회) — 나머지 문항보다 몇 배 느리다.
   // 문구가 같으면 첫 문항에서 멈춘 것처럼 보이므로, 아직 조사 결과가 하나도 없을 때는 그렇다고 알린다.
-  if (state.busy) return <div className="px-4 py-2 text-xs text-slate-500 bg-sky-50 border-b border-sky-100">{warm
-    ? "웹에서 근거 자료를 조사하는 중… (백석대학교 로컬 LLM)"
-    : "아이디어 공통 조사부터 합니다 — 처음 한 번만 1~2분 걸려요 (백석대학교 로컬 LLM)"}</div>;
-  if (state.error) return <div className="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-b border-amber-100">조사 실패 — 참고자료 없이 작성합니다. ({state.error})</div>;
+  if (state.busy) return <div className="px-4 py-2 text-xs text-slate-500 bg-sky-50 border-b border-sky-100">{warm ? t("rs.busy") : t("rs.first")}</div>;
+  if (state.error) return <div className="px-4 py-2 text-xs text-amber-700 bg-amber-50 border-b border-amber-100">{t("rs.fail", { e: state.error })}</div>;
   const facts = state.facts || [];
-  if (!facts.length) return <div className="px-4 py-2 text-xs text-slate-500 bg-slate-50 border-b border-slate-200">조사에서 인용할 만한 근거를 못 찾았습니다. 참고자료 없이 작성했습니다.</div>;
+  if (!facts.length) return <div className="px-4 py-2 text-xs text-slate-500 bg-slate-50 border-b border-slate-200">{t("rs.none")}</div>;
   const hasKci = facts.some(isKciFact);
   return (
     <div className="bg-sky-50 border-b border-sky-100">
       <button onClick={() => setOpen((v) => !v)} className="w-full px-4 py-2 text-xs text-left text-sky-800 hover:bg-sky-100">
-        조사 근거 {facts.length}건{state.cached ? " (캐시)" : ""} — 검색어: {(state.queries || []).join(" / ")} {open ? "▲" : "▼"}
+        {t("rs.head", { n: facts.length, cached: state.cached ? t("rs.cached") : "", q: (state.queries || []).join(" / ") })} {open ? "▲" : "▼"}
       </button>
       {open && (
         <ol className="px-5 pb-3 space-y-2 text-xs text-slate-700 list-decimal">
@@ -186,9 +188,9 @@ function ResearchPanel({ state, warm = true }) {
                 {isKciFact(f) && (
                   <span className="mr-1.5 px-1 py-0.5 rounded bg-white border border-sky-300 text-sky-800 text-[10px] align-middle" title={KCI_NOTICE}>KCI</span>
                 )}
-                {f.publisher || f.source_title || "출처 미상"}{f.date ? `, ${String(f.date).slice(0, 4)}` : ""}
+                {f.publisher || f.source_title || t("rs.unknown")}{f.date ? `, ${String(f.date).slice(0, 4)}` : ""}
                 {f.use_for ? ` · ${f.use_for}` : ""}
-                {f.url && <> · <a href={f.url} target="_blank" rel="noreferrer" className="text-sky-700 underline">원문</a></>}
+                {f.url && <> · <a href={f.url} target="_blank" rel="noreferrer" className="text-sky-700 underline">{t("rs.orig")}</a></>}
               </div>
             </li>
           ))}
@@ -197,7 +199,7 @@ function ResearchPanel({ state, warm = true }) {
       {/* KCI 항목이 섞여 있으면 패널 안에서도 출처를 밝힌다 (준수 사항 4항). 접힌 상태에서도 보인다. */}
       {hasKci && (
         <div className="px-4 pb-2 text-[11px] text-sky-800">
-          {KCI_NOTICE} · 논문은 서지정보(제목·저자·연도·학술지)만 인용합니다.
+          {KCI_NOTICE}{t("rs.kci")}
         </div>
       )}
     </div>
@@ -208,18 +210,19 @@ function ResearchPanel({ state, warm = true }) {
 // 생성은 큐에 들어간다. 사람이 몰리면 몇 분 기다릴 수 있으므로 "지금 몇 번째인지"를 보여준다 —
 // 진행 표시가 없으면 멈춘 것으로 오해하고 새로고침·재시도해서 큐를 더 밀리게 만든다.
 function JobProgress({ info }) {
-  if (!info) return <div className="text-xs text-slate-500 mb-2">작업을 대기열에 넣는 중…</div>;
+  const { t } = useLang();
+  if (!info) return <div className="text-xs text-slate-500 mb-2">{t("job.queueing")}</div>;
   const { status, position, busy } = info;
   const label = status === "resuming"
-    ? "새로고침 전에 맡긴 작업을 이어받는 중…"
+    ? t("job.resuming")
     : busy
-    ? "먼저 넣은 작업이 끝나기를 기다리는 중… (한 번에 3건까지)"
+    ? t("job.busy")
     : status === "queued"
-      ? (position == null ? "대기열에서 차례를 기다리는 중…"
-        : position === 0 ? "대기 중 — 다음 차례입니다"
-        : `대기 중 — 앞에 ${position}건`)
-      : status === "running" ? "작성 중… (보통 30~60초)"
-      : "처리 중…";
+      ? (position == null ? t("job.waiting")
+        : position === 0 ? t("job.next")
+        : t("job.ahead", { n: position }))
+      : status === "running" ? t("job.running")
+      : t("job.processing");
   return <div className="text-xs text-slate-500 mb-2">{label}</div>;
 }
 
@@ -351,6 +354,20 @@ export default function ModooWriter() {
     draftIdea: "",
   });
   const [texts, setTexts] = useState(saved?.texts ?? {});   // texts[qid][styleId] = string
+  // ── 화면 언어 (2026-09-03, 외국인 지원자) ──
+  // 문구는 i18n.jsx 사전, 초안·카드는 한국어 그대로 두고 /jobs/translate 로 읽기 번역을 병기한다. 서버로 가는 값은 전부 한국어.
+  const [lang, setLangState] = useState(() => loadLang());
+  const t = useMemo(() => makeT(lang), [lang]);
+  const setLang = (id) => { setLangState(id); saveLang(id); };
+  const foreign = lang !== "ko";
+  useEffect(() => { document.documentElement.lang = lang; document.title = t("app.title"); }, [lang, t]);
+  // 카드 문구 번역: { lang, map: { 한국어 원문: 번역 }, error } — 원문을 키로 두어 카드가 재생성돼도 새 문구만 번역한다.
+  const [cardI18n, setCardI18n] = useState(saved?.cardI18n ?? null);
+  const [cardBusy, setCardBusy] = useState(false);
+  const tr = (text) => (foreign && cardI18n?.lang === lang && cardI18n.map?.[text]) || text;
+  // 초안 번역: trans[qid][lang] = { text, source(번역 당시 한국어 원문), error } — 원문이 바뀌면 stale 로 보여주고 버튼으로 다시 번역한다.
+  const [trans, setTrans] = useState(saved?.trans ?? {});
+  const [transBusy, setTransBusy] = useState({});                 // transBusy["qid|lang"] = true
   const [status, setStatus] = useState(saved?.status ?? {}); // status[qid][styleId] = 'loading' | 'done' | 'error'
   const [errors, setErrors] = useState({}); // errors[qid][styleId] = message
   const [picked, setPicked] = useState(saved?.picked ?? {}); // picked[qid] = styleId
@@ -465,8 +482,9 @@ export default function ModooWriter() {
     const leanResearch = Object.fromEntries(
       Object.entries(researchState).map(([qid, v]) => { const { pages: _pages, ...rest } = v || {}; return [qid, rest]; })
     );
-    saveState({ step, form, texts, status: cleanStatus, picked, intake, answers, cardIdx, modelUsed, researchState: leanResearch, researchKey: researchKeyRef.current });
-  }, [step, form, texts, status, picked, intake, answers, cardIdx, modelUsed, researchState]);
+    saveState({ step, form, texts, status: cleanStatus, picked, intake, answers, cardIdx, modelUsed, researchState: leanResearch, researchKey: researchKeyRef.current,
+      cardI18n, trans });
+  }, [step, form, texts, status, picked, intake, answers, cardIdx, modelUsed, researchState, cardI18n, trans]);
 
   // 마운트 시점 클로저(이어받기)가 잡은 texts 는 곧 낡는다 — "무엇이 아직 비었는지" 는 항상 최신값으로 판단해야 한다.
   const textsRef = useRef(texts);
@@ -487,10 +505,10 @@ export default function ModooWriter() {
   const IDEA_MIN = 10;
   const ideaLen = form.idea.trim().length;
   const blockers = [
-    ideaLen < IDEA_MIN && `아이디어를 ${IDEA_MIN}자 이상 적어주세요 (지금 ${ideaLen}자)`,
-    form.styles.length === 0 && "글 스타일을 하나 이상 골라주세요",
-    server === null && "백엔드 연결 확인 중…",
-    server && !server.ok && "백엔드에 연결되지 않았어요 (상단 안내 참고)",
+    ideaLen < IDEA_MIN && t("blk.idea", { min: IDEA_MIN, n: ideaLen }),
+    form.styles.length === 0 && t("blk.style"),
+    server === null && t("blk.checking"),
+    server && !server.ok && t("blk.down"),
   ].filter(Boolean);
   const canStart = blockers.length === 0;
 
@@ -585,9 +603,7 @@ export default function ModooWriter() {
       setStat(q.id, style.id, "done");
       setPicked((p) => (p[q.id] ? p : { ...p, [q.id]: style.id }));
     } catch (e) {
-      setErr(q.id, style.id, e instanceof api.JobExpiredError
-        ? "새로고침 전에 돌던 작업을 이어받지 못했어요 (서버에서 만료됨). 다시 생성해 주세요."
-        : String(e.message || e));
+      setErr(q.id, style.id, e instanceof api.JobExpiredError ? t("dr.expired") : String(e.message || e));
       setStat(q.id, style.id, "error");
     } finally {
       forgetJob(key);
@@ -676,7 +692,7 @@ export default function ModooWriter() {
     try {
       const r = await api.intakeRegenerate(formForApi(), [slot], seen, prev.note || "", keep);
       const fresh = r.cards?.find((c) => c.slot === slot);
-      if (!fresh) throw new Error(r.error || "새 보기를 만들지 못했어요.");
+      if (!fresh) throw new Error(r.error || t("regen.fail"));
       setIntake((p) => ({ ...p, cards: p.cards.map((c) => (c.slot === slot ? fresh : c)) }));
       setRegen((p) => ({ ...p, [slot]: { ...prev, busy: false, seen: seen[slot], count: (prev.count || 0) + 1, note: "" } }));
     } catch (e) {
@@ -784,7 +800,7 @@ export default function ModooWriter() {
         setAutoFill(row.finisher?.enabled && left > 0 ? { remaining: left, inProgress: row.finisher?.in_progress || [] } : null);
         setStep(2);
       } catch (e) {
-        alert(`저장된 초안을 찾지 못했어요. ${e.message || e}`);
+        alert(`${t("dr.notfound")}${e.message || e}`);
       }
     })();
   }, []);
@@ -808,6 +824,98 @@ export default function ModooWriter() {
     await runQuestionJob(q, style, (opts) => api.extend(formForApi(), q.id, style.id, current, references, opts));
   }
 
+  // ── 읽기 번역 (2026-09-03) ──
+  // 카드 문구: 인테이크가 오거나 언어를 바꾸면 아직 번역 안 된 한국어 문구만 모아 한 번에 번역한다 (목록 모드, 40개씩 호출).
+  const cardStrings = () => {
+    const out = new Set();
+    if (intake?.summary) out.add(intake.summary);
+    for (const sl of intake?.slots || []) if (sl.label) out.add(sl.label);
+    for (const c of intake?.cards || []) {
+      for (const v of [c.question, c.why, c.label]) if (v) out.add(v);
+      for (const o of c.options || []) { if (o.label) out.add(o.label); if (o.hint) out.add(o.hint); }
+    }
+    return [...out];
+  };
+  useEffect(() => {
+    if (!foreign || !intake || cardBusy) return;
+    const have = cardI18n?.lang === lang ? cardI18n.map || {} : {};
+    const todo = cardStrings().filter((sKo) => !(sKo in have));
+    if (!todo.length) return;
+    let cancelled = false;
+    setCardBusy(true);
+    api.translate(todo, lang)
+      .then((r) => {
+        if (cancelled) return;
+        const map = { ...have };
+        // 실패한 항목("")도 키를 만들어 둔다 — 매번 다시 시도하지 않는다. 화면엔 원문이 보인다.
+        todo.forEach((sKo, i) => { map[sKo] = r.translations?.[i] || ""; });
+        setCardI18n({ lang, map, error: "" });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        const map = { ...have };
+        todo.forEach((sKo) => { map[sKo] = ""; });          // 실패해도 키를 남겨 무한 재시도를 막는다 (원문 표시)
+        setCardI18n({ lang, map, error: String(e.message || e) });
+      })
+      .finally(() => { if (!cancelled) setCardBusy(false); });
+    return () => { cancelled = true; };
+  }, [foreign, lang, intake, cardI18n]);
+
+  // 문항 본문: 평문 모드 1회. 원문(source)을 같이 저장해 학생이 글을 고치면 "이전 원문 기준" 으로 표시한다.
+  const TRANSLATE_PARALLEL = 3;
+  async function translateQuestion(q, koText) {
+    const key = `${q.id}|${lang}`;
+    if (!foreign || !koText.trim() || transBusy[key]) return;
+    setTransBusy((p) => ({ ...p, [key]: true }));
+    try {
+      const r = await api.translate([koText], lang);
+      const out = (r.translations?.[0] || "").trim();
+      if (!out) throw new Error("empty");
+      setTrans((p) => ({ ...p, [q.id]: { ...(p[q.id] || {}), [lang]: { text: out, source: koText, error: "" } } }));
+    } catch (e) {
+      setTrans((p) => ({ ...p, [q.id]: { ...(p[q.id] || {}), [lang]: { ...(p[q.id]?.[lang] || {}), source: koText, error: String(e.message || e) } } }));
+    } finally {
+      setTransBusy((p) => { const { [key]: _drop, ...rest } = p; return rest; });
+    }
+  }
+  // 초안·제출 화면에서 완성된 문항 중 이 언어 번역이 없는 것을 자동으로 번역한다 (동시 3개). 실패한 것은 버튼으로만 다시.
+  useEffect(() => {
+    if (!foreign || (step !== 2 && step !== 3)) return;
+    let slots = TRANSLATE_PARALLEL - Object.keys(transBusy).length;
+    for (const q of activeQuestions) {
+      if (slots <= 0) break;
+      const cur = picked[q.id] || selectedStyles[0]?.id;
+      const text = texts[q.id]?.[cur] || "";
+      if (!text.trim() || status[q.id]?.[cur] !== "done") continue;
+      const cur_t = trans[q.id]?.[lang];
+      if (cur_t?.text || cur_t?.error || transBusy[`${q.id}|${lang}`]) continue;
+      translateQuestion(q, text);
+      slots--;
+    }
+  }, [foreign, lang, step, texts, status, picked, transBusy, trans]);
+
+  // 초안 아래에 붙는 번역 상자. 한국어 화면에서는 아무것도 안 그린다.
+  function renderTranslation(q, text) {
+    if (!foreign || !text) return null;
+    const cur_t = trans[q.id]?.[lang];
+    const busy = !!transBusy[`${q.id}|${lang}`];
+    const stale = !!cur_t?.text && cur_t.source !== text;
+    return (
+      <div className="mt-3 p-3 rounded-lg bg-emerald-50 border border-emerald-100 text-sm">
+        <div className="text-[11px] text-emerald-800 mb-1 flex items-center justify-between gap-2 flex-wrap">
+          <span>{t("tr.head", { lang: LANG_NAMES[lang] })}</span>
+          {!busy && (stale || cur_t?.error || !cur_t?.text) && (
+            <button onClick={() => translateQuestion(q, text)} className="underline">{cur_t?.text ? t("tr.redo") : t("tr.show")}</button>
+          )}
+        </div>
+        {busy && <div className="text-xs text-slate-500">{t("tr.busy")}</div>}
+        {!busy && stale && <div className="text-xs text-amber-700 mb-1">{t("tr.stale")}</div>}
+        {!busy && cur_t?.error && !cur_t?.text && <div className="text-xs text-red-600">{t("tr.fail")}{cur_t.error}</div>}
+        {cur_t?.text && <p className="whitespace-pre-wrap leading-relaxed text-slate-700">{cur_t.text}</p>}
+      </div>
+    );
+  }
+
   // 복사는 조용히 실패할 수 있다 (비보안 컨텍스트·권한 거부). 알려주지 않으면 붙여넣기가 안 되는 이유를 모른다.
   function copy(key, value) {
     const mark = (k, ms) => { setCopied(k); setTimeout(() => setCopied(""), ms); };
@@ -816,23 +924,37 @@ export default function ModooWriter() {
     navigator.clipboard.writeText(value).then(() => mark(key, 1500), fail);
   }
   // 복사 버튼 문구 — 성공은 1.5초, 실패는 3초 동안 바뀐다.
-  const copyLabel = (key, idle = "복사", done = "복사됨") =>
-    copied === key ? done : copied === `${key}!` ? "복사 안 됨 — 직접 선택하세요" : idle;
+  const copyLabel = (key, idle = t("copy"), done = t("copied")) =>
+    copied === key ? done : copied === `${key}!` ? t("copy.fail") : idle;
 
   const doneCount = activeQuestions.filter((q) => picked[q.id] && texts[q.id]?.[picked[q.id]]).length;
   const missingCount = missingPairs(texts).length;
 
   // ───────── 렌더 ─────────
   return (
-    <div className="min-h-screen bg-white text-slate-900" style={{ fontFamily: "'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic',sans-serif" }}>
+    <LangContext.Provider value={{ lang, t, tr }}>
+    <div className="min-h-screen bg-white text-slate-900" style={{ fontFamily: "'Apple SD Gothic Neo','Noto Sans KR','Malgun Gothic','Noto Sans SC','Noto Sans JP',sans-serif" }}>
       <header className="border-b border-slate-200">
-        <div className="max-w-5xl mx-auto px-5 py-5 flex items-end justify-between gap-4 flex-wrap">
+        <div className="max-w-5xl mx-auto px-5 pt-3 flex justify-end">
+          {/* 언어 선택 (2026-09-03). 화면 문구만 바뀐다 — 초안은 한국어로 만들어지고 외국어 화면에선 번역을 병기한다. */}
+          <div className="flex items-center gap-1 text-xs" role="group" aria-label={t("lang.label")}>
+            <span className="text-slate-400 mr-1" aria-hidden="true">🌐</span>
+            {LANGS.map((l) => (
+              <button key={l.id} onClick={() => setLang(l.id)} lang={l.id} aria-pressed={lang === l.id}
+                className={`px-2 py-0.5 rounded-md border ${lang === l.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 text-slate-600 hover:border-slate-400"}`}>
+                {l.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="max-w-5xl mx-auto px-5 pb-5 pt-2 flex items-end justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">모두의 창업 신청서 작성 도우미</h1>
-            <p className="text-sm text-slate-500 mt-1">아이디어 한 문단이면 됩니다. 문항별 초안을 받아서 다듬고, 붙여넣기만 하세요.</p>
+            <h1 className="text-2xl font-bold tracking-tight">{t("app.title")}</h1>
+            <p className="text-sm text-slate-500 mt-1">{t("app.subtitle")}</p>
           </div>
           <nav className="flex gap-1 text-sm">
-            {["아이디어 입력", "정보 보충", "초안 고르기", "제출용 정리"].map((n, i) => {
+            {[0, 1, 2, 3].map((i) => {
+              const n = t(`step.${i}`);
               const started = Object.keys(status).length > 0;
               const enabled = i === 0 || (i === 1 && intake?.cards?.length > 0) || (i === 2 && started) || (i === 3 && doneCount > 0);
               return (
@@ -845,15 +967,15 @@ export default function ModooWriter() {
           </nav>
         </div>
         <div className="max-w-5xl mx-auto px-5 pb-3 text-xs flex items-center gap-4 flex-wrap">
-          {server === null && <span className="text-slate-400">백엔드 연결 확인 중…</span>}
+          {server === null && <span className="text-slate-400">{t("hdr.checking")}</span>}
           {server?.ok && (
             <>
               {/* 고를 수 있는 모델이 하나뿐이면 드롭다운은 고르라는 신호만 주고 할 일이 없다 → 글자로만 보여준다. */}
               {models.length <= 1 ? (
-                <span className="text-slate-600">모델 {models[0]?.name || server.model}</span>
+                <span className="text-slate-600">{t("hdr.model")} {models[0]?.name || server.model}</span>
               ) : (
                 <label className="flex items-center gap-2 text-slate-600">
-                  <span>모델</span>
+                  <span>{t("hdr.model")}</span>
                   <select value={form.model || ""} onChange={(e) => setForm({ ...form, model: e.target.value })}
                     className="px-2 py-1 rounded-md border border-slate-300 bg-white text-xs max-w-[220px]">
                     {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -868,24 +990,24 @@ export default function ModooWriter() {
                 const tone = remaining <= 0 ? "bg-red-50 text-red-700 border-red-200"
                   : remaining <= 10 ? "bg-amber-50 text-amber-800 border-amber-200"
                   : "bg-slate-50 text-slate-600 border-slate-200";
-                const breakdown = Object.entries(byModel).map(([id, n]) => `${shortModel(id)} ${n}회`).join(", ");
+                const breakdown = Object.entries(byModel).map(([id, n]) => `${shortModel(id)} ${n}`).join(", ");
                 const tip = [
-                  "OpenRouter 무료 한도는 계정(API 키) 단위 — 어떤 무료 모델을 써도 같은 숫자가 줄어듭니다. 모델별 한도는 없습니다.",
-                  breakdown && `오늘 모델별 사용: ${breakdown}`,
-                  `분당 20회 별도. ${server.usage.reset}에 초기화`,
+                  t("hdr.usage.tip1"),
+                  breakdown && t("hdr.usage.tip2", { b: breakdown }),
+                  t("hdr.usage.tip3", { reset: server.usage.reset }),
                 ].filter(Boolean).join("\n");
                 return (
                   <span className={`ml-auto px-2 py-0.5 rounded-md border cursor-help ${tone}`} title={tip}>
-                    오늘 무료 요청 {used}/{limit}회{remaining <= 0 ? " · 한도 도달" : remaining <= 10 ? ` · ${remaining}회 남음` : ""}
+                    {t("hdr.usage", { used, limit })}{remaining <= 0 ? t("hdr.usage.limit") : remaining <= 10 ? t("hdr.usage.left", { n: remaining }) : ""}
                   </span>
                 );
               })()}
-              {server.fallback && <span className="text-slate-400" title="선택 모델이 429/다운이면 목록의 다른 모델로 자동 전환">자동 폴백 켜짐</span>}
+              {server.fallback && <span className="text-slate-400" title={t("hdr.fallback.tip")}>{t("hdr.fallback")}</span>}
             </>
           )}
           {server && !server.ok && (
             /* 공개 서비스라 일반 사용자가 본다 — 실행 명령 대신 사람 말로. 주소·원인은 title 에만 남겨 개발자가 확인한다. */
-            <span className="text-red-600" title={`${api.API_BASE} 연결 실패: ${server.error || ""}`}>서버와 연결이 끊겼어요. 잠시 후 새로고침해 주세요.</span>
+            <span className="text-red-600" title={`${api.API_BASE} 연결 실패: ${server.error || ""}`}>{t("hdr.down")}</span>
           )}
         </div>
       </header>
@@ -897,31 +1019,33 @@ export default function ModooWriter() {
               {/* 트랙이 하나뿐이라 선택 화면 대신 안내만 둔다. 로컬 트랙을 되살리려면
                   TRACKS 에 항목을 되돌리고 이 절을 버튼 목록으로 바꾸면 된다. */}
               <section>
-                <h2 className="font-semibold mb-2">지원 분야</h2>
+                <h2 className="font-semibold mb-2">{t("in.track")}</h2>
                 <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
-                  <div className="font-medium">{TRACKS[form.track].name}</div>
-                  <div className="text-xs text-slate-500 mt-1 leading-relaxed">{TRACKS[form.track].desc}</div>
+                  <div className="font-medium">{t(`track.${form.track}.name`)}</div>
+                  <div className="text-xs text-slate-500 mt-1 leading-relaxed">{t(`track.${form.track}.desc`)}</div>
                 </div>
               </section>
 
               <section>
-                <h2 className="font-semibold mb-1">아이디어를 설명해 주세요</h2>
-                <p className="text-xs text-slate-500 mb-2">누구의 어떤 불편을, 무엇으로, 어떻게 해결하는지. 생각난 계기가 있으면 같이 적어주세요. 길수록 초안이 좋아집니다.</p>
+                <h2 className="font-semibold mb-1">{t("in.idea")}</h2>
+                <p className="text-xs text-slate-500 mb-2">{t("in.idea.help")}</p>
+                {/* 외국어 화면: 자기 언어로 써도 된다는 안내. 초안은 한국어로 나오고(프롬프트가 고정) 번역이 병기된다. */}
+                {foreign && <p className="text-xs text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 mb-2">{t("in.idea.foreign")}</p>}
                 <textarea value={form.idea} onChange={(e) => setForm(withDraft({ ...form, idea: e.target.value }))} rows={8}
-                  placeholder="예) 자취하는 20대는 배달 음식이 지겨운데 요리는 부담스럽다. 동네 반찬가게와 연결해 그날 남은 반찬을 저녁 7시 이후 할인 꾸러미로 예약·수령하는 앱을 만들고 싶다. 내가 직접 반찬가게 사장님께 여쭤보니 매일 20~30%가 폐기된다고 했다…"
+                  placeholder={t("in.idea.ph")}
                   className="w-full p-3 rounded-lg border border-slate-300 focus:border-indigo-600 focus:outline-none text-sm leading-relaxed" />
                 <div className="text-xs text-slate-400 text-right">
-                  {form.idea.length}자
-                  {ideaLen < IDEA_MIN && ` · ${IDEA_MIN}자 이상 적어주세요`}
-                  {ideaLen >= IDEA_MIN && ideaLen < 60 && " · 짧아도 되지만, 누구의 어떤 불편인지 한 줄 더 적으면 초안이 훨씬 구체적이 돼요"}
+                  {t("in.chars", { n: form.idea.length })}
+                  {ideaLen < IDEA_MIN && t("in.idea.min", { min: IDEA_MIN })}
+                  {ideaLen >= IDEA_MIN && ideaLen < 60 && t("in.idea.short")}
                 </div>
               </section>
 
               <section>
-                <h2 className="font-semibold mb-1">본인의 경력·경험·기술</h2>
-                <p className="text-xs text-slate-500 mb-2">Q8에 그대로 반영됩니다. 없는 건 지어내지 않으니, 아이디어와 조금이라도 관련 있는 건 다 적어주세요.</p>
+                <h2 className="font-semibold mb-1">{t("in.cap")}</h2>
+                <p className="text-xs text-slate-500 mb-2">{t("in.cap.help")}</p>
                 <textarea value={form.capability} onChange={(e) => setForm({ ...form, capability: e.target.value })} rows={4}
-                  placeholder="예) 식품회사 영업 3년, 동네 반찬가게 5곳과 이미 친분, 노코드 앱 제작 경험, 인스타 팔로워 4천명…"
+                  placeholder={t("in.cap.ph")}
                   className="w-full p-3 rounded-lg border border-slate-300 focus:border-indigo-600 focus:outline-none text-sm leading-relaxed" />
               </section>
             </div>
@@ -930,30 +1054,31 @@ export default function ModooWriter() {
               {/* "현재 창업 여부"(사업자 선택)는 2026-09-03 뺐다 — 사업자 여부·Q7 은 모두의 창업 사이트에서 직접 입력한다.
                   isBusiness 는 항상 false 라 Q7-1 은 안 나온다. 백엔드 스키마·프롬프트(q7_1)는 그대로 살아 있다. */}
               <section>
-                <h2 className="font-semibold mb-2">팀원 수 (본인 제외)</h2>
+                <h2 className="font-semibold mb-2">{t("in.team")}</h2>
+                {/* value 는 한국어 원문(서버 스키마) — 표시만 번역한다 */}
                 <select value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}
                   className="w-full p-2 rounded-lg border border-slate-300 text-sm bg-white">
-                  {TEAM_OPTIONS.map((t) => <option key={t}>{t}</option>)}
+                  {TEAM_OPTIONS.map((opt) => <option key={opt} value={opt}>{t(`team.${opt}`)}</option>)}
                 </select>
               </section>
 
               <section>
-                <h2 className="font-semibold mb-2">사업 분야 (Q6)</h2>
+                <h2 className="font-semibold mb-2">{t("in.field")}</h2>
                 <select value={form.field} onChange={(e) => setForm({ ...form, field: e.target.value })}
                   className="w-full p-2 rounded-lg border border-slate-300 text-sm bg-white">
-                  <option value="">나중에 고르기</option>
-                  {TRACKS[form.track].fields.map((f) => <option key={f} value={f}>{f}</option>)}
+                  <option value="">{t("in.field.later")}</option>
+                  {TRACKS[form.track].fields.map((f) => <option key={f} value={f}>{t(`field.${f}`)}</option>)}
                 </select>
               </section>
 
               <section>
-                <h2 className="font-semibold mb-1">아이디어 자랑 글 (Q10)</h2>
-                <p className="text-xs text-slate-500 mb-2">홈페이지에 공개되어 '좋아요'를 받는 항목입니다.</p>
+                <h2 className="font-semibold mb-1">{t("in.q10")}</h2>
+                <p className="text-xs text-slate-500 mb-2">{t("in.q10.help")}</p>
                 <div className="flex gap-2">
                   {[true, false].map((v) => (
                     <button key={String(v)} onClick={() => setForm({ ...form, q10Public: v })}
                       className={`flex-1 py-2 rounded-lg border text-sm ${form.q10Public === v ? "border-indigo-600 bg-indigo-50" : "border-slate-200"}`}>
-                      {v ? "공개" : "비공개"}
+                      {v ? t("in.public") : t("in.private")}
                     </button>
                   ))}
                 </div>
@@ -961,23 +1086,21 @@ export default function ModooWriter() {
 
               <section>
 <div className="mb-4 p-3 rounded-lg bg-sky-50 border border-sky-100 text-xs text-slate-600">
-                  <span className="font-medium text-slate-800">웹 조사가 함께 진행됩니다.</span> 아이디어와 문항마다 웹을 검색해
-                  출처가 확인된 사실만 모으고, 그 근거 위에서 보기와 초안을 만듭니다. 조사는 백석대학교 로컬 LLM 이 하므로 무료 한도를 쓰지 않습니다.
-                  문항당 40~60초가 더 걸립니다.
+                  <span className="font-medium text-slate-800">{t("in.research.head")}</span>{t("in.research.body")}
                 </div>
                 {/* 스타일도 하나뿐이라 선택 UI 를 접었다 (작업 11). STYLES 에 항목을 되돌리면 여기를 버튼 목록으로 되살린다. */}
-                <h2 className="font-semibold mb-2">글 스타일</h2>
+                <h2 className="font-semibold mb-2">{t("in.style")}</h2>
                 <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
-                  <div className="font-medium text-sm">{STYLES[0].name}</div>
-                  <div className="text-xs text-slate-500 mt-1">{STYLES[0].desc}</div>
+                  <div className="font-medium text-sm">{t(`style.${STYLES[0].id}.name`)}</div>
+                  <div className="text-xs text-slate-500 mt-1">{t(`style.${STYLES[0].id}.desc`)}</div>
                 </div>
               </section>
 
               <button onClick={startIntake} disabled={!canStart || intakeBusy}
                 className="w-full py-3 rounded-lg bg-indigo-600 text-white font-medium disabled:bg-slate-300 disabled:cursor-not-allowed">
-                {intakeBusy ? (intakePos != null && intakePos > 0 ? `대기 중 — 앞에 ${intakePos}명` : "아이디어를 읽고 있어요…") : "신청서 초안 만들기"}
+                {intakeBusy ? (intakePos != null && intakePos > 0 ? t("in.start.wait", { n: intakePos }) : t("in.start.reading")) : t("in.start")}
               </button>
-              {intakeBusy && <p className="text-xs text-slate-500 text-center">설명이 충분하면 바로 초안을 만들고, 부족한 부분이 있으면 몇 가지 골라달라고 할게요.</p>}
+              {intakeBusy && <p className="text-xs text-slate-500 text-center">{t("in.start.hint")}</p>}
               {!canStart && (
                 <ul className="text-xs text-slate-500 space-y-0.5">
                   {blockers.map((b) => <li key={b}>· {b}</li>)}
@@ -994,36 +1117,37 @@ export default function ModooWriter() {
           return (
             <div className="max-w-2xl mx-auto space-y-6">
               <div>
-                <h2 className="text-lg font-semibold">{intake.ready ? "설명이 충분해요 — 몇 가지만 더 고르면 좋아요" : "몇 가지만 골라주세요"}</h2>
+                <h2 className="text-lg font-semibold">{intake.ready ? t("card.title.ready") : t("card.title")}</h2>
                 <p className="text-sm text-slate-500 mt-1">
-                  {intake.ready ? "건너뛰어도 초안은 만들어집니다. " : ""}
-                  정답이 아니어도 됩니다. 가장 가까운 것을 고르면 AI가 그걸 바탕으로 씁니다. 모르면 "모르겠어요" — 지어내지 않고 가정으로 씁니다.
-                  보기가 내 상황과 안 맞으면 <b>다른 보기 보기</b> — 이미 고른 보기는 남기고 나머지만 바뀝니다.
+                  {intake.ready ? t("card.skip.hint") : ""}
+                  {t("card.help1")}<b>{t("card.help.btn")}</b>{t("card.help2")}
                 </p>
+                {foreign && cardBusy && <p className="text-xs text-indigo-700 mt-2">{t("card.translating", { lang: LANG_NAMES[lang] })}</p>}
+                {foreign && !cardBusy && cardI18n?.error && <p className="text-xs text-amber-700 mt-2">{t("card.translate.fail")}</p>}
               </div>
 
               {(intake.summary || known.length > 0) && (
                 <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-600 space-y-1">
-                  {intake.summary && <div><span className="font-medium text-slate-700">AI가 이해한 아이디어:</span> {intake.summary}</div>}
-                  {known.length > 0 && <div><span className="font-medium text-slate-700">설명에서 확인됨:</span> {known.map((s) => s.label).join(" · ")}</div>}
+                  {intake.summary && <div><span className="font-medium text-slate-700">{t("card.understood")}</span> {tr(intake.summary)}</div>}
+                  {known.length > 0 && <div><span className="font-medium text-slate-700">{t("card.confirmed")}</span> {known.map((s) => tr(s.label)).join(" · ")}</div>}
                 </div>
               )}
 
               {card && (
                 <section className="border border-slate-200 rounded-xl p-5 space-y-4">
                   <div className="flex items-center justify-between text-xs text-slate-400">
-                    <span>{cardIdx + 1} / {cards.length} · {card.label}</span>
-                    <span>{card.why}</span>
+                    <span>{cardIdx + 1} / {cards.length} · {tr(card.label)}</span>
+                    <span>{tr(card.why)}</span>
                   </div>
-                  <h3 className="font-semibold text-base">{card.question}</h3>
+                  <h3 className="font-semibold text-base">{tr(card.question)}</h3>
                   <CardOptions key={`${card.slot}-${regen[card.slot]?.count || 0}`} card={card} value={answers[card.slot]} onChange={(v) => setAnswer(card.slot, v)} />
                   <RegenerateBar slot={card.slot} state={regen[card.slot]} onNote={setRegenNote} onRun={regenerateCard} />
                   <div className="flex items-center justify-between pt-2 flex-wrap gap-2">
-                    <button onClick={() => setCardIdx(Math.max(cardIdx - 1, 0))} disabled={cardIdx === 0} className="text-sm text-slate-500 underline disabled:text-slate-300">이전</button>
+                    <button onClick={() => setCardIdx(Math.max(cardIdx - 1, 0))} disabled={cardIdx === 0} className="text-sm text-slate-500 underline disabled:text-slate-300">{t("card.prev")}</button>
                     <div className="flex gap-2">
-                      <button onClick={generateAll} className="px-3 py-2 text-sm rounded-lg border border-slate-300">나머지 건너뛰고 바로 만들기</button>
+                      <button onClick={generateAll} className="px-3 py-2 text-sm rounded-lg border border-slate-300">{t("card.skip")}</button>
                       <button onClick={nextCard} className="px-4 py-2 text-sm rounded-lg bg-indigo-600 text-white">
-                        {cardIdx + 1 >= cards.length ? "초안 만들기" : "다음"}
+                        {cardIdx + 1 >= cards.length ? t("card.make") : t("card.next")}
                       </button>
                     </div>
                   </div>
@@ -1032,7 +1156,7 @@ export default function ModooWriter() {
 
               <div className="flex gap-1 justify-center">
                 {cards.map((c, i) => (
-                  <button key={c.slot} onClick={() => setCardIdx(i)} title={c.label}
+                  <button key={c.slot} onClick={() => setCardIdx(i)} title={tr(c.label)}
                     className={`w-2.5 h-2.5 rounded-full ${i === cardIdx ? "bg-indigo-600" : answers[c.slot]?.unknown ? "bg-amber-400" : answers[c.slot]?.answer ? "bg-emerald-500" : "bg-slate-200"}`} />
                 ))}
               </div>
@@ -1043,33 +1167,33 @@ export default function ModooWriter() {
         {step === 2 && (
           <div className="space-y-8">
             {intake?.summary && (
-              <p className="text-xs text-slate-500">AI가 이해한 아이디어: {intake.summary}{answeredCount > 0 && ` · 보충 답변 ${answeredCount}개 반영`}</p>
+              <p className="text-xs text-slate-500">{t("dr.understood")}{tr(intake.summary)}{answeredCount > 0 && t("dr.answers", { n: answeredCount })}</p>
             )}
             {autoFill && (
               <p className="text-xs text-indigo-700 bg-indigo-50 rounded-lg px-3 py-2">
-                서버가 남은 {autoFill.remaining}개 문항을 뒤에서 만들고 있어요. 이 화면을 닫아도 계속 만들어지고, 다시 열면 채워져 있습니다.
+                {t("dr.autofill", { n: autoFill.remaining })}
               </p>
             )}
             {form.draftId && (
               <p className="text-xs text-slate-500 break-all">
-                이 초안 링크 (다른 PC·폰에서 이어 보기): <span className="font-mono">{draftLinkFor(form.draftId)}</span>{" "}
-                <button onClick={() => copy("link", draftLinkFor(form.draftId))} className="underline">{copied === "link" ? "복사됨" : copied === "link!" ? "복사 실패" : "복사"}</button>
+                {t("dr.link")}<span className="font-mono">{draftLinkFor(form.draftId)}</span>{" "}
+                <button onClick={() => copy("link", draftLinkFor(form.draftId))} className="underline">{copied === "link" ? t("copied") : copied === "link!" ? t("copy.fail.short") : t("copy")}</button>
               </p>
             )}
             <div className="flex items-center justify-between flex-wrap gap-3">
               <p className="text-sm text-slate-600">
-                {running ? "초안을 만드는 중입니다. 완성된 문항부터 읽고 골라두세요." : `${doneCount}/${activeQuestions.length}개 문항 선택됨. 글은 직접 고쳐도 됩니다.`}
+                {running ? t("dr.generating") : t("dr.picked", { done: doneCount, total: activeQuestions.length })}
               </p>
               <div className="flex gap-2">
                 {/* 새로고침 등으로 중간에 끊기면 큐에 못 들어간 문항이 남는다 — 이어서 만들 수단을 눈에 보이게 둔다. */}
                 {!running && missingCount > 0 && Object.keys(status).length > 0 && (
-                  <button onClick={generateMissing} className="px-3 py-1.5 text-sm rounded-lg border border-indigo-300 text-indigo-700">남은 {missingCount}개 계속 만들기</button>
+                  <button onClick={generateMissing} className="px-3 py-1.5 text-sm rounded-lg border border-indigo-300 text-indigo-700">{t("dr.continue", { n: missingCount })}</button>
                 )}
-                <button onClick={() => setStep(0)} className="px-3 py-1.5 text-sm rounded-lg border border-slate-300">입력 수정</button>
+                <button onClick={() => setStep(0)} className="px-3 py-1.5 text-sm rounded-lg border border-slate-300">{t("dr.edit")}</button>
                 {/* 저장본까지 비우고 처음부터. 새로고침으로는 안 지워지므로 명시적 버튼이 필요하다. */}
-                <button onClick={() => { if (confirm("지금까지 만든 초안과 조사 결과가 모두 지워집니다. 계속할까요?")) { try { localStorage.removeItem(SAVE_KEY); sessionStorage.removeItem(JOBS_KEY); } catch { /* 접근 차단 */ } location.reload(); } }}
-                  className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 text-slate-500">새로 시작</button>
-                <button onClick={() => setStep(3)} disabled={doneCount === 0} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white disabled:bg-slate-300">제출용으로 정리</button>
+                <button onClick={() => { if (confirm(t("dr.restart.confirm"))) { try { localStorage.removeItem(SAVE_KEY); sessionStorage.removeItem(JOBS_KEY); } catch { /* 접근 차단 */ } location.reload(); } }}
+                  className="px-3 py-1.5 text-sm rounded-lg border border-slate-300 text-slate-500">{t("dr.restart")}</button>
+                <button onClick={() => setStep(3)} disabled={doneCount === 0} className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white disabled:bg-slate-300">{t("dr.final")}</button>
               </div>
             </div>
 
@@ -1083,7 +1207,7 @@ export default function ModooWriter() {
                   <div className="px-5 pt-4 pb-3 flex items-start justify-between gap-4 flex-wrap">
                     <div>
                       <div className="text-xs text-indigo-600 font-semibold">{q.label}</div>
-                      <h3 className="font-semibold">{q.title}</h3>
+                      <h3 className="font-semibold">{t(`q.${q.id}`)}</h3>
                     </div>
                     <div className="flex gap-1">
                       {selectedStyles.map((s) => {
@@ -1095,7 +1219,7 @@ export default function ModooWriter() {
                             {ss === "loading" && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />}
                             {ss === "error" && <span className="w-2 h-2 rounded-full bg-red-500" />}
                             {isPick && ss === "done" && <span className="w-2 h-2 rounded-full bg-emerald-400" />}
-                            {s.name}
+                            {t(`style.${s.id}.name`)}
                           </button>
                         );
                       })}
@@ -1110,14 +1234,14 @@ export default function ModooWriter() {
                     {/* 조사는 3개씩 병렬로 돈다 — 아직 차례가 안 온 문항은 상태가 아예 없어서 제목만 있는 빈 카드로 보였다. */}
                     {!st && running && (
                       <>
-                        {!researchState[q.id]?.busy && <div className="text-xs text-slate-500 mb-2">차례를 기다리는 중…</div>}
+                        {!researchState[q.id]?.busy && <div className="text-xs text-slate-500 mb-2">{t("dr.waiting")}</div>}
                         <div className="h-32 rounded-lg bg-slate-50" />
                       </>
                     )}
                     {st === "error" && (
                       <div className="p-4 rounded-lg bg-red-50 text-sm text-red-700 flex justify-between items-center gap-3">
-                        <span>생성에 실패했어요. {errors[q.id]?.[cur] ? <span className="text-red-600">{errors[q.id][cur]}</span> : "무료 모델은 잠시 후 다시 시도하면 대개 됩니다."}</span>
-                        <button onClick={() => generateOne(q, STYLES.find((s) => s.id === cur))} className="underline shrink-0">다시 생성</button>
+                        <span>{t("dr.fail")}{errors[q.id]?.[cur] ? <span className="text-red-600">{errors[q.id][cur]}</span> : t("dr.fail.hint")}</span>
+                        <button onClick={() => generateOne(q, STYLES.find((s) => s.id === cur))} className="underline shrink-0">{t("dr.retry")}</button>
                       </div>
                     )}
                     {(st === "done" || (st === "loading" && text)) && (
@@ -1130,35 +1254,37 @@ export default function ModooWriter() {
                         </div>
                         <div className="mt-2 flex items-center justify-between flex-wrap gap-2 text-xs text-slate-500">
                           <span>
-                            {text.length} / {q.limit}자
+                            {t("dr.chars", { n: text.length, limit: q.limit })}
                             {modelUsed[q.id]?.[cur] && (
                               <span className={`ml-2 ${modelUsed[q.id][cur] !== form.model ? "text-amber-600" : "text-slate-400"}`}
-                                title={modelUsed[q.id][cur] !== form.model ? "선택한 모델이 막혀서 다른 모델로 자동 전환됨" : "실제 응답한 모델"}>
-                                · {shortModel(modelUsed[q.id][cur])}{modelUsed[q.id][cur] !== form.model && " (폴백)"}
+                                title={modelUsed[q.id][cur] !== form.model ? t("dr.fallback.tip") : t("dr.model.tip")}>
+                                · {shortModel(modelUsed[q.id][cur])}{modelUsed[q.id][cur] !== form.model && t("dr.fallback")}
                               </span>
                             )}
                           </span>
                           <div className="flex gap-3">
                             {q.limit > 100 && q.limit - text.length >= 150 && (
                               <button onClick={() => extend(q, STYLES.find((s) => s.id === cur))} disabled={st === "loading"} className="underline disabled:text-slate-300">
-                                {st === "loading" ? "이어쓰는 중…" : "내용 더 보태기"}
+                                {st === "loading" ? t("dr.extending") : t("dr.extend")}
                               </button>
                             )}
-                            <button onClick={() => generateOne(q, STYLES.find((s) => s.id === cur))} disabled={st === "loading"} className="underline disabled:text-slate-300">새로 생성</button>
+                            <button onClick={() => generateOne(q, STYLES.find((s) => s.id === cur))} disabled={st === "loading"} className="underline disabled:text-slate-300">{t("dr.new")}</button>
                             <button onClick={() => copy(q.id + cur, text)} className="underline">{copyLabel(q.id + cur)}</button>
                             {cardsForQuestion(q.id).length > 0 && (
                               <button onClick={() => setAssistOpen((p) => ({ ...p, [q.id]: !p[q.id] }))} className="underline text-indigo-600">
-                                {assistOpen[q.id] ? "정보 보태기 닫기" : "정보 보태기"}
+                                {assistOpen[q.id] ? t("dr.assist.close") : t("dr.assist")}
                               </button>
                             )}
                           </div>
                         </div>
+                        {/* 외국어 화면: 완성된 한국어 초안 아래에 읽기 번역 (2026-09-03) */}
+                        {st === "done" && renderTranslation(q, text)}
                         {assistOpen[q.id] && (
                           <div className="mt-3 p-4 rounded-lg bg-indigo-50/50 border border-indigo-100 space-y-4">
-                            <p className="text-xs text-slate-600">이 문항에 들어갈 정보입니다. 고치거나 채운 뒤 <b>새로 생성</b>(다시 쓰기) 또는 <b>내용 더 보태기</b>(이어쓰기)를 누르면 반영됩니다.</p>
+                            <p className="text-xs text-slate-600">{t("dr.assist.help1")}<b>{t("dr.new")}</b>{t("dr.assist.help2")}<b>{t("dr.extend")}</b>{t("dr.assist.help3")}</p>
                             {cardsForQuestion(q.id).map((c) => (
                               <div key={c.slot} className="space-y-1.5">
-                                <div className="text-xs font-medium text-slate-700">{c.question} <span className="text-slate-400 font-normal">· {c.label}</span></div>
+                                <div className="text-xs font-medium text-slate-700">{tr(c.question)} <span className="text-slate-400 font-normal">· {tr(c.label)}</span></div>
                                 <CardOptions key={`${c.slot}-${regen[c.slot]?.count || 0}`} card={c} value={answers[c.slot]} onChange={(v) => setAnswer(c.slot, v)} compact />
                                 <RegenerateBar slot={c.slot} state={regen[c.slot]} onNote={setRegenNote} onRun={regenerateCard} compact />
                               </div>
@@ -1178,28 +1304,37 @@ export default function ModooWriter() {
           <div className="space-y-6">
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div>
-                <h2 className="font-semibold text-lg">제출용 정리</h2>
-                <p className="text-sm text-slate-500">modoo.or.kr 도전하기 화면을 옆에 열고 문항 순서대로 붙여넣으세요.</p>
+                <h2 className="font-semibold text-lg">{t("fn.title")}</h2>
+                <p className="text-sm text-slate-500">{t("fn.help")}</p>
               </div>
+              {/* 전체 복사는 한국어 제출용이라 문항 제목도 한국어(q.title) 그대로 */}
               <button onClick={() => copy("all", activeQuestions.map((q) => `[${q.label}] ${q.title}\n${texts[q.id]?.[picked[q.id]] || "(미작성)"}`).join("\n\n"))}
-                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm">{copyLabel("all", "전체 복사", "전체 복사됨")}</button>
+                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm">{copyLabel("all", t("copy.all"), t("copied.all"))}</button>
             </div>
+
+            {/* 외국어 화면에만: 최종 제출은 한국어로 (2026-09-03 요청). 번역문 말고 한국어 원문을 붙여넣으라는 빨간 안내. */}
+            {foreign && (
+              <div role="alert" className="p-4 rounded-lg bg-red-50 border-2 border-red-400 text-red-800 text-sm space-y-1">
+                <div className="font-semibold">{t("fn.korean.only")}</div>
+                <div className="text-xs text-red-700" lang="ko">{makeT("ko")("fn.korean.only")}</div>
+              </div>
+            )}
 
             <div className="grid md:grid-cols-2 gap-3 text-sm">
               {/* 2026-09-03: "직접 입력할 항목"(Q5·Q6·Q7·Q9·Q10·Q11·멘토 기관) 목록을 빼고, 이 화면이 실제 신청이 아니라는 안내로 바꿨다. */}
               <div className="p-4 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-900">
-                <div className="font-medium mb-1">이 화면은 실제 신청이 아닙니다</div>
+                <div className="font-medium mb-1">{t("fn.notreal")}</div>
                 <ul className="space-y-1">
-                  <li>여기서 만든 글은 AI 가 지원서 작성을 도와준 <b>초안</b>입니다. 모두의 창업 사이트에 접수된 것이 아닙니다.</li>
-                  <li>실제 신청은 <b>모두의 창업 사이트(modoo.or.kr)의 신청서 화면</b>에 이 글을 복사·붙여넣기 해서 직접 해야 합니다. 나머지 항목(사업 분야, 창업 여부, 팀원 수, 서약서 등)도 그 화면에서 입력합니다.</li>
-                  <li>AI 가 <b>가상으로 만든 본인의 경험·경력·수치·사례</b>가 섞여 있을 수 있습니다. 반드시 본인이 확인한 사실로 바꿔 넣으세요.</li>
+                  <li>{t("fn.notreal.1a")}<b>{t("fn.notreal.1b")}</b>{t("fn.notreal.1c")}</li>
+                  <li>{t("fn.notreal.2a")}<b>{t("fn.notreal.2b")}</b>{t("fn.notreal.2c")}</li>
+                  <li>{t("fn.notreal.3a")}<b>{t("fn.notreal.3b")}</b>{t("fn.notreal.3c")}</li>
                 </ul>
               </div>
               <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">
-                <div className="font-medium mb-1">제출 전에 확인하세요</div>
+                <div className="font-medium mb-1">{t("fn.check")}</div>
                 <ul className="space-y-1">
-                  <li>초안의 수치·사례는 본인이 확인한 사실로 바꿔 넣으세요. 심사에서 사실 확인이 있을 수 있어요.</li>
-                  <li>다른 정부 공모전 수상작이거나 이미 상용화된 아이디어는 선정이 취소될 수 있습니다.</li>
+                  <li>{t("fn.check.1")}</li>
+                  <li>{t("fn.check.2")}</li>
                 </ul>
               </div>
             </div>
@@ -1211,17 +1346,18 @@ export default function ModooWriter() {
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div>
                       <span className="text-xs text-indigo-600 font-semibold">{q.label}</span>
-                      <h3 className="font-semibold text-sm">{q.title}</h3>
+                      <h3 className="font-semibold text-sm">{t(`q.${q.id}`)}</h3>
                     </div>
                     <button onClick={() => copy("final" + q.id, text)} disabled={!text}
                       className="px-3 py-1 text-xs rounded-lg border border-slate-300 disabled:text-slate-300 shrink-0">{copyLabel("final" + q.id)}</button>
                   </div>
                   {text ? (
-                    <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-700">{text}</p>
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-700" lang="ko">{text}</p>
                   ) : (
-                    <p className="text-sm text-slate-400">아직 고르지 않았어요. <button onClick={() => setStep(2)} className="underline">초안 고르기</button>로 돌아가세요.</p>
+                    <p className="text-sm text-slate-400">{t("fn.unpicked")}<button onClick={() => setStep(2)} className="underline">{t("fn.back")}</button>{t("fn.back.suffix")}</p>
                   )}
-                  <div className="text-xs text-slate-400 mt-2">{text.length} / {q.limit}자</div>
+                  <div className="text-xs text-slate-400 mt-2">{t("dr.chars", { n: text.length, limit: q.limit })}</div>
+                  {renderTranslation(q, text)}
                 </section>
               );
             })}
@@ -1232,10 +1368,13 @@ export default function ModooWriter() {
       {/* KCI 이용 준수 사항 4항 — 화면 어디에 있든 보이도록 모든 단계 아래에 상시 표시한다. */}
       <footer className="border-t border-slate-200 mt-12">
         <div className="max-w-5xl mx-auto px-5 py-4 text-xs text-slate-500 flex flex-wrap gap-x-3 gap-y-1">
-          <span>{KCI_NOTICE}</span>
-          <span className="text-slate-400">학술 근거는 논문 서지정보(제목·저자·연도·학술지)만 인용합니다.</span>
+          {/* KCI 표기는 한국어 원문을 항상 남기고, 외국어 화면엔 번역을 덧붙인다 */}
+          <span lang="ko">{KCI_NOTICE}</span>
+          {foreign && <span>{t("ft.kci")}</span>}
+          <span className="text-slate-400">{t("ft.note")}</span>
         </div>
       </footer>
     </div>
+    </LangContext.Provider>
   );
 }

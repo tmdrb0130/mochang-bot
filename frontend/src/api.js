@@ -163,3 +163,11 @@ export function health() {
 export function models() {
   return request("/models");
 }
+
+/** 읽기 번역 (2026-09-03, 외국인 지원자용) → { lang, translations: [원문과 같은 길이], model }
+ *  lang: en | zh | ja. texts 가 하나면 평문 모드(문항 본문 2,000자), 여럿이면 목록 모드(카드 질문·보기·힌트).
+ *  신청서는 한국어로만 만들고 제출도 한국어 — 이 결과는 화면에 병기하는 이해용이다. 실패한 항목은 "" (원문을 그대로 보여준다).
+ *  조사 큐에서 돌고 IP 동시 제한을 안 받으므로 생성·조사가 도는 중에도 429 없이 들어간다. */
+export function translate(texts, lang, opts) {
+  return runJob("translate", { lang, texts }, opts);
+}
