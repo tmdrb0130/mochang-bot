@@ -248,6 +248,9 @@ function migrate(saved) {
     ...saved.form,
     track: TRACKS[saved.form.track] ? saved.form.track : "tech",
     styles: styles.length ? styles : [styleIds[0]],
+    // 사업자 선택 UI 를 뺀 뒤(2026-09-03) 옛 저장본의 true 가 Q7-1 을 되살리지 않게
+    isBusiness: false,
+    currentItem: "",
     // 초안 id 가 생기기 전 저장본 — 지금 아이디어로 새 초안을 연다
     draftId: saved.form.draftId || api.newDraftId(),
     draftIdea: saved.form.draftIdea ?? saved.form.idea ?? "",
@@ -768,8 +771,8 @@ export default function ModooWriter() {
         const row = await api.getDraft(id);
         const styles = [...new Set((row.generations || []).map((g) => g.style).filter((sid) => STYLES.some((x) => x.id === sid)))];
         setForm((f) => ({
-          ...f, track: TRACKS[row.track] ? row.track : "tech", idea: row.idea || "", isBusiness: !!row.is_business,
-          currentItem: row.current_item || "", team: row.team || "팀원 없음", capability: row.capability || "",
+          ...f, track: TRACKS[row.track] ? row.track : "tech", idea: row.idea || "", isBusiness: false, currentItem: "",
+          team: row.team || "팀원 없음", capability: row.capability || "",
           styles: styles.length ? styles : [STYLES[0].id], draftId: id, draftIdea: row.idea || "",
         }));
         restoredAnswersRef.current = row.answers || [];
@@ -924,23 +927,8 @@ export default function ModooWriter() {
             </div>
 
             <div className="md:col-span-2 space-y-7">
-              <section>
-                <h2 className="font-semibold mb-2">현재 창업 여부</h2>
-                <div className="flex gap-2">
-                  {[false, true].map((v) => (
-                    <button key={String(v)} onClick={() => setForm({ ...form, isBusiness: v })}
-                      className={`flex-1 py-2 rounded-lg border text-sm ${form.isBusiness === v ? "border-indigo-600 bg-indigo-50" : "border-slate-200"}`}>
-                      {v ? "현재 사업자" : "사업자 아님"}
-                    </button>
-                  ))}
-                </div>
-                {form.isBusiness && (
-                  <textarea value={form.currentItem} onChange={(e) => setForm({ ...form, currentItem: e.target.value })} rows={3}
-                    placeholder="현재 운영 중인 사업 (업종, 아이템, 업력)" className="mt-2 w-full p-3 rounded-lg border border-slate-300 text-sm" />
-                )}
-                <p className="text-xs text-slate-500 mt-2">공고일 기준 사업자등록 여부. 사업자면 Q7-1이 추가됩니다.</p>
-              </section>
-
+              {/* "현재 창업 여부"(사업자 선택)는 2026-09-03 뺐다 — 사업자 여부·Q7 은 모두의 창업 사이트에서 직접 입력한다.
+                  isBusiness 는 항상 false 라 Q7-1 은 안 나온다. 백엔드 스키마·프롬프트(q7_1)는 그대로 살아 있다. */}
               <section>
                 <h2 className="font-semibold mb-2">팀원 수 (본인 제외)</h2>
                 <select value={form.team} onChange={(e) => setForm({ ...form, team: e.target.value })}
@@ -1198,22 +1186,18 @@ export default function ModooWriter() {
             </div>
 
             <div className="grid md:grid-cols-2 gap-3 text-sm">
-              <div className="p-4 rounded-lg bg-slate-50 border border-slate-200">
-                <div className="font-medium mb-1">직접 입력할 항목</div>
-                <ul className="text-slate-600 space-y-1">
-                  <li>Q5 소개 영상 링크 (선택)</li>
-                  <li>Q6 사업 분야: {form.field || "아직 안 고름 — 제출 화면에서 선택"}</li>
-                  <li>Q7 창업 여부: {form.isBusiness ? "현재 사업자" : "사업자 아님"}</li>
-                  <li>Q9 팀원 수: {form.team}</li>
-                  <li>Q10 공개 여부: {form.q10Public ? "공개 (자랑 글 붙여넣기)" : "비공개 (안내 문장 또는 빈칸)"}</li>
-                  <li>Q11 서약서 동의 3개</li>
-                  <li>03. 멘토 기관 (예: 충남 &gt; 백석대학교 산학협력단)</li>
+              {/* 2026-09-03: "직접 입력할 항목"(Q5·Q6·Q7·Q9·Q10·Q11·멘토 기관) 목록을 빼고, 이 화면이 실제 신청이 아니라는 안내로 바꿨다. */}
+              <div className="p-4 rounded-lg bg-indigo-50 border border-indigo-200 text-indigo-900">
+                <div className="font-medium mb-1">이 화면은 실제 신청이 아닙니다</div>
+                <ul className="space-y-1">
+                  <li>여기서 만든 글은 AI 가 지원서 작성을 도와준 <b>초안</b>입니다. 모두의 창업 사이트에 접수된 것이 아닙니다.</li>
+                  <li>실제 신청은 <b>모두의 창업 사이트(modoo.or.kr)의 신청서 화면</b>에 이 글을 복사·붙여넣기 해서 직접 해야 합니다. 나머지 항목(사업 분야, 창업 여부, 팀원 수, 서약서 등)도 그 화면에서 입력합니다.</li>
+                  <li>AI 가 <b>가상으로 만든 본인의 경험·경력·수치·사례</b>가 섞여 있을 수 있습니다. 반드시 본인이 확인한 사실로 바꿔 넣으세요.</li>
                 </ul>
               </div>
               <div className="p-4 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">
                 <div className="font-medium mb-1">제출 전에 확인하세요</div>
                 <ul className="space-y-1">
-                  <li>이미지는 전체 문항 합쳐 최대 10장까지만 첨부됩니다.</li>
                   <li>초안의 수치·사례는 본인이 확인한 사실로 바꿔 넣으세요. 심사에서 사실 확인이 있을 수 있어요.</li>
                   <li>다른 정부 공모전 수상작이거나 이미 상용화된 아이디어는 선정이 취소될 수 있습니다.</li>
                 </ul>
