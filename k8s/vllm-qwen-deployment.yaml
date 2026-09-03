@@ -1,4 +1,4 @@
-# Qwen3.8-27B-FP8 vLLM — GPU 서버 GPU2 (2026-09-02, 라마 70B 와 나란히 띄워 A/B 비교용)
+# Qwen3.8-27B-FP8 vLLM — GPU 서버 GPU2 (2026-09-02). 2026-09-03 부터 GPU1 복제본(vllm-qwen-b)과 같은 Service 로 묶임.
 #
 # 적용:   ssh gpu 'kubectl apply -f -' < k8s/vllm-qwen-deployment.yaml
 # 확인:   ssh gpu 'kubectl get pods -l app=vllm-qwen; kubectl logs deploy/vllm-qwen --tail=20'
@@ -24,6 +24,7 @@ metadata:
   namespace: default
   labels:
     app: vllm-qwen
+    serving: qwen          # 2026-09-03: Service 공통 라벨 (GPU1 복제본 k8s/vllm-qwen-b-deployment.yaml 머리말 참고)
 spec:
   replicas: 1
   strategy:
@@ -35,6 +36,7 @@ spec:
     metadata:
       labels:
         app: vllm-qwen
+        serving: qwen
     spec:
       runtimeClassName: nvidia
       enableServiceLinks: false
@@ -100,7 +102,7 @@ metadata:
 spec:
   type: NodePort
   selector:
-    app: vllm-qwen
+    serving: qwen          # 2026-09-03: GPU2(vllm-qwen) + GPU1(vllm-qwen-b) 두 파드를 번갈아 쓴다
   ports:
     - port: 8000
       targetPort: 8000

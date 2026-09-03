@@ -1,0 +1,94 @@
+# Qwen3.8-27B-FP8 vLLM 두 번째 복제본 — GPU 서버 GPU1 (2026-09-03, 라마 70B 를 내리고 그 자리에)
+#
+# 목적: 40명 동시 실측(docs/LOAD_TEST_2026-09-03.md 4절)에서 상한이 GPU 1장의 연산 총량으로 확인됨(KV 최고 44%, preemption 0).
+#       같은 모델을 GPU1 에 하나 더 띄우고 기존 Service `vllm-qwen`(NodePort 30801)이 두 파드를 번갈아 쓰게 해 처리량을 2배로.
+#       앱(config.yaml base_url 30801)·SSH 터널·nginx 는 손대지 않는다. 분배는 k8s Service(kube-proxy, 연결 단위)가 한다.
+#
+# 무중단 적용 순서 (기존 파드 vllm-qwen 은 내내 응답한다) — 2026-09-03 10:44~10:57 이 순서대로 적용 완료, 사용자 영향 0:
+#   0. 백업: k8s/backup/vllm-llama-2026-09-03.yaml (라마 deploy+svc. image 가 'latest' 라 재생성 때는 digest 로 바꿔야 한다)
+#   1. ssh gpu 'kubectl delete deploy vllm; kubectl delete svc vllm'          # 라마(GPU1, 30800) 내림
+#   2. ssh gpu 'kubectl apply -f -' < k8s/vllm-qwen-b-deployment.yaml         # 이 파일. 모델 로드 3~5분
+#   3. ssh gpu 'kubectl get pods -l serving=qwen'                              # vllm-qwen-b 가 1/1 Running 될 때까지
+#   4. ssh gpu 'kubectl label pod -l app=vllm-qwen serving=qwen'              # 기존 파드에 공통 라벨 (재시작 없음)
+#   5. ssh gpu "kubectl patch svc vllm-qwen --type=json -p '[{\"op\":\"remove\",\"path\":\"/spec/selector/app\"}]'"
+#      ⚠ 기본(strategic merge) patch 로 selector 에 serving=qwen 을 "추가"하면 기존 app=vllm-qwen 키가 남아 AND 조건이 되어
+#        여전히 GPU2 파드만 잡는다 (2026-09-03 10:51 실제로 겪음). app 키를 지워 selector 가 {serving: qwen} 만 되게 한다.
+#      확인: ssh gpu 'kubectl get endpointslice -l kubernetes.io/service-name=vllm-qwen'  → IP 두 개, 둘 다 ready=true
+#   6. 기존 배포의 템플릿에도 serving=qwen 을 넣어 파드가 다시 떠도 라벨을 잃지 않게 한다 (k8s/vllm-qwen-deployment.yaml 수정본 apply).
+#      Recreate 전략이라 기존 파드가 3~5분 내려가는데 그동안 vllm-qwen-b 가 혼자 받는다 → 한가한 때에.
+#   되돌리기: 5번 selector 를 app=vllm-qwen 으로 patch 하면 즉시 기존 파드만 쓴다.
+#
+# 라벨 설계: Deployment 마다 selector 는 고유(app=vllm-qwen / app=vllm-qwen-b)로 두고, Service 만 공통 라벨 serving=qwen 으로
+#   고른다. 두 Deployment 가 같은 selector 를 쓰면 컨트롤러가 서로의 파드를 넘본다(k8s 문서가 금지).
+# GPU 지정: k8s/vllm-qwen-deployment.yaml 과 같은 이유로 자원 요청 없이 NVIDIA_VISIBLE_DEVICES 로 GPU1(UUID) 고정.
+#   (라마는 nvidia.com/gpu: 1 자원 요청으로 GPU1 을 받았었다 — 내리면 그 자리가 빈다.)
+# 나머지 인자(이미지 digest, 모델 경로, priority 스케줄링, thinking, KV)는 GPU2 파드와 동일 — 근거는 그 파일 머리말.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-qwen-b
+  namespace: default
+  labels:
+    app: vllm-qwen-b
+    serving: qwen
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm-qwen-b
+  template:
+    metadata:
+      labels:
+        app: vllm-qwen-b
+        serving: qwen
+    spec:
+      runtimeClassName: nvidia
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai@sha256:fc56161ee42a011aeee78b65d0a81b6683c7d04402fd40503d14d4d6c98f07cb
+          imagePullPolicy: IfNotPresent
+          args:
+            - --model
+            - /root/.cache/huggingface/qwen3.8-27b-fp8      # hostPath /opt/llm-models/qwen3.8-27b-fp8 (GPU2 파드와 공유, 읽기만)
+            - --served-model-name
+            - Qwen/Qwen3.8-27B-FP8
+            - --max-model-len
+            - "32768"
+            - --gpu-memory-utilization
+            - "0.90"
+            - --reasoning-parser
+            - qwen3
+            - --scheduling-policy
+            - priority
+            - --limit-mm-per-prompt
+            - '{"image": 0, "video": 0}'
+            - --port
+            - "8000"
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: GPU-6c064aa0-ef35-6a41-3a62-4751e103533f   # nvidia-smi index 1 (라마가 쓰던 자리)
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+            - name: HF_HUB_OFFLINE
+              value: "1"
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          startupProbe:                # 모델 로드가 끝나 /health 가 200 이 될 때까지 Service 엔드포인트에 안 들어간다
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            failureThreshold: 8640
+          volumeMounts:
+            - name: model-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: model-cache
+          hostPath:
+            path: /opt/llm-models
+            type: DirectoryOrCreate

@@ -1,6 +1,49 @@
-# PROGRESS — 2026-09-02 저녁 (아이디어·초안 DB 저장, 작업 40)
+# PROGRESS — 2026-09-03 오전 (GPU1 라마 내리고 Qwen 복제본 2개 — 처리량 2배)
 
-> 이 절이 최신. 같은 날 낮·전날 기록은 아래에 그대로 둠.
+> 이 절이 최신. 아래 절들은 그대로 둠.
+
+## 한 것
+
+40명 부하 테스트(docs/LOAD_TEST_2026-09-03.md)가 "상한 = GPU 1장의 연산 총량" 으로 끝나서, 사용자 결정으로 **GPU1 의 라마 70B 를 내리고
+같은 Qwen3.8-27B-FP8 을 하나 더 띄워** 기존 Service `vllm-qwen`(NodePort 30801)이 두 파드를 번갈아 쓰게 했다. 앱·터널·nginx 는 그대로.
+
+- `k8s/vllm-qwen-b-deployment.yaml` — GPU1(UUID `GPU-6c064aa0…`) 복제본. 인자는 GPU2 파드와 동일, 라벨 `serving=qwen`.
+  머리말에 무중단 적용 순서·되돌리기·selector 패치 함정.
+- `k8s/vllm-qwen-deployment.yaml` — 기존 GPU2 배포 템플릿에도 `serving=qwen`, Service selector 를 `{serving: qwen}` 으로.
+- `k8s/backup/vllm-llama-2026-09-03.yaml` — 지운 라마 배포·서비스 원본(image 가 `latest` 라 재생성 때는 digest 로 바꿔야 한다).
+- `backend/config.yaml` — 본문·조사 워커 **40 → 80** (포화점 40 은 GPU 1장 기준). **아직 미적용: `nssm restart mochang-api` 필요.**
+- `tests/test_load.py` — "동시 50 = 워커 수" 가정을 `max_workers + 20` 요청으로. 392 passed.
+
+## 서버 적용 (2026-09-03 10:44~10:57, 사용자 영향 0 — API 큐 비어 있을 때, 4xx/5xx 0건)
+
+1. 10:44 `kubectl delete deploy,svc vllm` → GPU1 119 MiB.
+2. 10:46 복제본 apply → 10:50 `1/1 Running` (모델 로드 4분). 파드 IP 로 직접 생성 확인.
+3. 10:51 기존 파드 `label serving=qwen` + Service selector 변경. **함정**: strategic merge patch 는 selector 에 키를 "추가" 해서
+   `app=vllm-qwen AND serving=qwen` 이 되어 여전히 파드 하나만 잡았다 → `--type=json` 으로 `app` 키 제거. 그 뒤 엔드포인트 2개.
+4. 10:52 기존 배포 apply(Recreate) → GPU2 파드 4분 재시작, 그동안 GPU1 파드가 혼자 받음 → 10:56 둘 다 ready=true.
+5. 터널 30801 로 생성 6건 → GPU2 4건 · GPU1 2건 으로 분배 확인. GPU1·GPU2 각 88 GB 점유.
+
+## 실호출 여부
+
+vLLM 직접 호출로 두 파드 응답 확인만 했다(짧은 프롬프트 7건). 앱을 통한 40명 재측정은 아직 안 함.
+
+## 결정·예상
+
+- 두 장 쓰는 방식 3안 중 **복제본 2개 + 같은 Service** 채택. 역할 분리(조사 GPU / 생성 GPU)는 파도 시간대에 한쪽이 놀아 처리량 손해,
+  텐서 병렬은 PCIe 라 이득 작고 한 장 문제면 전체 다운.
+- 예상(LOAD_TEST 4절 선형 가정): 40명 전원 완료 17~20분 → 약 10분, 첫 초안 10분 → 5~6분, 인테이크 4~7분 → 2~4분. 혼자 쓸 때는 변화 없음.
+- 분배는 kube-proxy 가 **연결 단위**로 한다. openai 클라이언트가 keep-alive 풀을 쓰므로 정확히 반반은 아니고 대략 나뉜다(6건 실측 4:2).
+- 라마 되돌리기(`switch_model.py llama`)는 라마 파드가 없어 **지금은 못 쓴다**. 필요하면 백업 매니페스트를 digest 로 고쳐 다시 띄운다.
+
+## 다음 순서
+
+1. 사용자: 큐가 빈 때(`/health` running 0·queued 0) 관리자 창에서 `nssm restart mochang-api` → 워커 80/80 적용 (5초 끊김, 진행 중 작업 소실).
+2. `scripts/live_load_test.py` 40명 재측정 → LOAD_TEST 문서에 5차로 추가. 워커 80 이 맞는지(포화 무릎) 확인, 필요하면 60~100 조정.
+3. 그다음 손잡이: 문항당 여러 번 나가는 4천 토큰 프롬프트(본문·폴리시·이어쓰기) 합치기 → 같은 GPU 로 1.3~1.5배.
+
+---
+
+# PROGRESS — 2026-09-02 저녁 (아이디어·초안 DB 저장, 작업 40)
 
 ## 한 것
 
