@@ -25,7 +25,21 @@ export function newDraftId() {
   return `d${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
+// ── 테스트 모드 (2026-09-03) ──
+// 주소에 ?test=1 을 붙여 열면 이 탭의 모든 요청에 X-Mochang-Test 헤더가 붙어 서버가 **서비스 DB 에 남기지 않는다**(백업 DB 에만, is_test=1).
+// 운영자가 사이트에서 직접 테스트할 때 실사용 데이터와 섞이지 않게. ?test=0 으로 끈다. 탭을 닫으면 풀린다(sessionStorage).
+const TEST_KEY = "modoo-writer-test-mode";
+export function testMode() {
+  try {
+    const q = new URLSearchParams(location.search).get("test");
+    if (q === "1" || q === "true") sessionStorage.setItem(TEST_KEY, "1");
+    else if (q === "0" || q === "false") sessionStorage.removeItem(TEST_KEY);
+    return sessionStorage.getItem(TEST_KEY) === "1";
+  } catch { return false; }
+}
+
 async function request(path, options) {
+  if (testMode()) options = { ...(options || {}), headers: { ...((options && options.headers) || {}), "X-Mochang-Test": "1" } };
   const res = await fetch(`${API_BASE}${path}`, options);
   if (!res.ok) {
     let detail = "";

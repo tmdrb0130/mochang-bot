@@ -209,3 +209,42 @@ async def test_jobs_with_test_header_skip_service_db(tmp_path):
                 assert bak.get_draft("hdr-test-000001") is not None
     finally:
         M.client._complete = saved
+
+
+# ── is_test 표시와 삭제 도구: 실사용 행은 어떤 인자로도 안 지워진다 (2026-09-03) ──
+
+def test_test_flag_only_on_backup_and_delete_refuses_real_rows(tmp_path):
+    st, bak = _pair(tmp_path)
+    real = {"draft_id": "real-0000000009", "idea": "실사용", "track": "tech", "team": "팀원 없음"}
+    test = {"draft_id": "test-0000000009", "idea": "테스트", "track": "tech", "team": "팀원 없음"}
+    gen = {"question_id": "q1", "style": "logic", "text": "t", "model": "m"}
+    asyncio.run(st.record("generate", {**real, "question_id": "q1", "style": "logic"}, gen, "1.1.1.1"))
+    asyncio.run(st.record("generate", {**test, "question_id": "q1", "style": "logic"}, gen, "10.0.0.1", test=True))
+    rows = {r["draft_id"]: r for r in bak.list_drafts()}
+    assert rows["real-0000000009"]["is_test"] is False and rows["test-0000000009"]["is_test"] is True
+    assert [r["draft_id"] for r in st.list_drafts()] == ["real-0000000009"]
+    # 이미 실사용으로 들어온 초안은 뒤에 test 요청이 와도 테스트로 안 바뀐다
+    asyncio.run(st.record("generate", {**real, "question_id": "q2", "style": "logic"}, gen, "10.0.0.1", test=True))
+    assert {r["draft_id"]: r["is_test"] for r in bak.list_drafts()}["real-0000000009"] is False
+    # 삭제: 실사용 id 를 콕 집어도 안 지워진다. 테스트만 지워진다
+    assert bak.delete_drafts(["real-0000000009"]) == []
+    assert bak.get_draft("real-0000000009") is not None
+    assert bak.delete_drafts(["real-0000000009", "test-0000000009"]) == ["test-0000000009"]
+    assert bak.get_draft("test-0000000009") is None and bak.get_draft("real-0000000009") is not None
+    assert st.delete_drafts() == []                                  # 서비스 DB 엔 테스트 행이 없다
+
+
+def test_init_adds_is_test_column_to_old_db(tmp_path):
+    """v2 DB(is_test 열 없음)를 열면 ALTER TABLE 로 붙이고 기존 행은 실사용(0)."""
+    import sqlite3
+    path = tmp_path / "old.sqlite"
+    with sqlite3.connect(path) as c:
+        c.execute("create table drafts (draft_id varchar(64) primary key, idea text not null default '', track varchar(16), is_business boolean, "
+                  "current_item text, team text, capability text, answers text, owner varchar(64), model varchar(160), request_count integer, "
+                  "created_at datetime not null, updated_at datetime not null)")
+        c.execute("insert into drafts (draft_id, idea, created_at, updated_at) values ('old-000000000001', '옛 초안', '2026-09-01 00:00:00', '2026-09-01 00:00:00')")
+    st = S.Storage("sqlite:///" + path.as_posix())
+    st.init()
+    rows = st.list_drafts()
+    assert rows and rows[0]["draft_id"] == "old-000000000001" and rows[0]["is_test"] is False
+    assert st.delete_drafts(["old-000000000001"]) == []

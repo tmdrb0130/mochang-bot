@@ -1,3 +1,32 @@
+# PROGRESS — 2026-09-03 오후 3차 (언어 전환 시 카드 번역 유실 + 테스트 데이터 격리 완성) — **코드 커밋됨, 재시작·재빌드 대기**
+
+> 이 절이 최신. 아래 두 절(오후 1·2차)도 아직 배포 안 됨 — 재시작 1번 + 재빌드 1번이면 셋 다 올라간다.
+
+## 사용자 관찰 "정보 보충에서 영어는 되는데 중국어·일본어로 바꾸면 번역이 안 된다"
+
+원인 2개 (둘 다 13:20 배포본): ① 번역 도중 언어를 바꾸면 cleanup 이 요청을 버리고 cardBusy 가 안 내려가 멈춤(2차 절에서 고침).
+② 카드 번역 지도를 **언어 하나만** 보관(`cardI18n{lang,map}`) → 영어→중국어로 바꾸면 영어 지도를 버리고 새로 받는데 ①에 걸리면 아무것도 안 나옴.
+→ `App.jsx`: `cardI18n{maps:{en,zh,ja}}` 언어별 보관(옛 저장본은 시작 때 변환), 요청 결과는 **요청 당시 언어** 지도에 합침, 바꾼 언어는 다음 effect 가 받음. 언어를 오가도 재번역 없음.
+
+## 테스트 데이터 격리 (사용자 결정: "실사용 데이터는 어떤 일이 있어도 안 날아가게")
+
+- `drafts.is_test` 열 (SCHEMA_VERSION 3, 기존 DB 는 init 이 `ALTER TABLE` 로 붙임, 기존 행 = 0). `record(test=True)` → 서비스 DB 건너뛰고 백업에 is_test=1.
+  이미 실사용으로 들어온 초안은 뒤에 test 요청이 와도 테스트로 안 바뀐다(insert 때만 찍음).
+- `Storage.delete_drafts(ids=None)`: **is_test=1 인 행만** 지운다. 실사용 id 를 콕 집어도 무시. `scripts/drafts_delete.py` 재작성(`--list [--backup]`, `--tests --yes`, `<id> --yes`) — 실사용 행은 "거부" 로 표시하고 안 지움.
+- 브라우저 테스트 모드: 주소 `?test=1` → `api.js testMode()` 가 sessionStorage 에 기억하고 모든 요청에 `X-Mochang-Test` 헤더. 헤더에 노란 배지 "테스트 모드 — 서비스 DB 에 저장 안 됨"(4개 언어). `?test=0` 으로 끔. 주의: 테스트 모드 초안은 서비스 DB 에 없어 `?draft=` 개인 링크 복원이 안 된다.
+- 사용자 확인: "AI 영화제 플랫폼"(`7fc3b43d`) 은 실제 사용자 것 → 그대로 둠. 13:22 영어 "AI diet management app"(`72d5e24c`, 이 PC IP) 은 판단 못 받음 → 그대로 둠(is_test 없어 도구로도 못 지움).
+- 앞으로 내가(클로드) 테스트할 때는 `scripts/foreign_e2e.py`·`load_test.py`(헤더 자동) 또는 `?test=1` 만 쓴다. 지워 달라고 하면 `drafts_delete.py --tests --yes --backup`.
+
+테스트 **430 passed**. `dist-check` 빌드 통과.
+
+## 다음 순서
+
+1. `nssm restart mochang-api` + `cd frontend; npx vite build`. 재시작 때 서비스 DB 에 is_test 열이 붙는다(무해).
+2. 배포 뒤 English → 中文 → 日本語 로 바꿔 가며 정보 보충 카드가 각각 번역되는지, `?test=1` 배지가 뜨는지 확인.
+3. 40명 부하 재측정 → LOAD_TEST 5차.
+
+---
+
 # PROGRESS — 2026-09-03 오후 2차 (다국어 **배포·실측** + 카드 번역 멈춤 버그 + 서비스/백업 DB 분리) — **코드 커밋됨, 재시작·재빌드 대기**
 
 > 이 절이 최신. 아래 절들은 그대로 둠.

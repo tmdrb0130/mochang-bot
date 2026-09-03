@@ -42,7 +42,7 @@ log = logging.getLogger("mochang.storage")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_URL = "sqlite:///backend/.data/mochang.sqlite"
-SCHEMA_VERSION = 2      # 2: research 테이블 (2026-09-03). 테이블 추가는 create_all 이 하므로 이행 코드는 없다.
+SCHEMA_VERSION = 3      # 2: research 테이블 (2026-09-03). 3: drafts.is_test (2026-09-03, 열 추가는 init 이 ALTER TABLE 로).
 
 # 프론트가 보내는 draft_id 형식 (UUID 등). 이 밖의 값은 무시하고 해시로 대체한다 — DB 키에 임의 문자열이 들어오지 않게.
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -70,6 +70,9 @@ drafts = Table(
     Column("owner", String(64)),                    # 제출 클라이언트(IP). 인증이 없어 남용 추적용
     Column("model", String(160)),
     Column("request_count", Integer, default=0),    # 이 초안으로 들어온 요청 수 (인테이크·생성·이어쓰기·조사·검증)
+    # 테스트로 만들어진 초안 (요청 헤더 X-Mochang-Test). 서비스 DB 에는 들어오지 않고 백업 DB 에서만 1 이다.
+    # 삭제 도구(delete_drafts)는 이 표시가 있는 행만 지운다 — 실사용 행은 어떤 옵션으로도 지우지 않는다 (2026-09-03 사용자 결정).
+    Column("is_test", Boolean, nullable=False, default=False, server_default="0"),
     Column("created_at", DateTime, nullable=False),
     Column("updated_at", DateTime, nullable=False, index=True),
 )
@@ -195,6 +198,10 @@ class Storage:
             engine = create_engine(url, pool_pre_ping=True)
         metadata.create_all(engine)
         with engine.begin() as conn:
+            # v3 이행: 기존 DB 에 is_test 열이 없으면 붙인다 (create_all 은 새 테이블만 만든다). 기존 행은 전부 0 = 실사용.
+            cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(drafts)").fetchall()} if self.is_sqlite else None
+            if cols is not None and "is_test" not in cols:
+                conn.exec_driver_sql("ALTER TABLE drafts ADD COLUMN is_test BOOLEAN NOT NULL DEFAULT 0")
             row = conn.execute(select(schema_meta.c.value).where(schema_meta.c.key == "version")).first()
             if row is None:
                 conn.execute(schema_meta.insert().values(key="version", value=str(SCHEMA_VERSION)))
@@ -216,14 +223,15 @@ class Storage:
             self.backup.close()
 
     # ── 쓰기 (동기; 스레드에서 부른다) ──
-    def upsert_draft(self, form: dict, owner: str | None = None) -> str:
-        """아이디어·입력·인테이크 답을 저장하고 draft_id 를 돌려준다. 있으면 최신 입력으로 갱신. 백업에도 같은 행."""
-        did = self._upsert_draft(form, owner)
+    def upsert_draft(self, form: dict, owner: str | None = None, test: bool = False) -> str:
+        """아이디어·입력·인테이크 답을 저장하고 draft_id 를 돌려준다. 있으면 최신 입력으로 갱신. 백업에도 같은 행.
+        test=True 는 새 행에만 is_test=1 을 찍는다 — 이미 실사용으로 들어온 초안은 테스트로 바뀌지 않는다."""
+        did = self._upsert_draft(form, owner, test)
         if self.backup:
-            self._mirror("upsert_draft", self.backup._upsert_draft, form, owner)
+            self._mirror("upsert_draft", self.backup._upsert_draft, form, owner, test)
         return did
 
-    def _upsert_draft(self, form: dict, owner: str | None = None) -> str:
+    def _upsert_draft(self, form: dict, owner: str | None = None, test: bool = False) -> str:
         assert self.engine is not None
         did = draft_id_for(form)
         now = datetime.now()
@@ -244,7 +252,7 @@ class Storage:
                 return did
         try:
             with self.engine.begin() as conn:
-                conn.execute(drafts.insert().values(draft_id=did, request_count=1, created_at=now, **values))
+                conn.execute(drafts.insert().values(draft_id=did, request_count=1, created_at=now, is_test=bool(test), **values))
         except IntegrityError:
             # 같은 초안의 첫 요청 둘이 동시에 들어온 경우(문항 여러 개 동시 생성) — 다른 쪽이 먼저 넣었으니 갱신으로
             with self.engine.begin() as conn:
@@ -308,10 +316,10 @@ class Storage:
             ))
             return res.inserted_primary_key[0] if res.inserted_primary_key else None
 
-    def _record_sync(self, kind: str, form: dict, result: Any, owner: str | None) -> None:
+    def _record_sync(self, kind: str, form: dict, result: Any, owner: str | None, test: bool = False) -> None:
         if not form.get("idea"):
             return
-        did = self.upsert_draft(form, owner)
+        did = self.upsert_draft(form, owner, test)
         if kind in _TEXT_KINDS and isinstance(result, dict):
             self.add_generation(did, kind, form, result)
         elif kind in _RESEARCH_KINDS and isinstance(result, dict):
@@ -327,11 +335,32 @@ class Storage:
         try:
             if test:
                 if self.backup is not None and self.backup.engine is not None:
-                    await asyncio.to_thread(self.backup._record_sync, kind, form, result, owner)
+                    await asyncio.to_thread(self.backup._record_sync, kind, form, result, owner, True)
                 return
             await asyncio.to_thread(self._record_sync, kind, form, result, owner)     # 쓰기 메서드가 백업에 미러링한다
         except Exception as e:
             log.warning("저장 실패 (%s): %s", kind, str(e)[:200])
+
+    # ── 삭제 (테스트 초안만) ──
+    def delete_drafts(self, draft_ids: list[str] | None = None) -> list[str]:
+        """is_test=1 인 초안(과 그 generations·research)만 지운다. draft_ids 를 주면 그중 테스트 표시가 있는 것만,
+        안 주면 테스트 표시가 있는 전부. **실사용 행(is_test=0)은 어떤 인자로도 지우지 않는다.** 돌려주는 값: 지운 draft_id."""
+        if self.engine is None:
+            return []
+        from sqlalchemy import delete
+        cond = drafts.c.is_test.is_(True)
+        if draft_ids is not None:
+            if not draft_ids:
+                return []
+            cond = cond & drafts.c.draft_id.in_(list(draft_ids))
+        with self.engine.begin() as conn:
+            ids = [r[0] for r in conn.execute(select(drafts.c.draft_id).where(cond)).all()]
+            if not ids:
+                return []
+            conn.execute(delete(generations).where(generations.c.draft_id.in_(ids)))
+            conn.execute(delete(research).where(research.c.draft_id.in_(ids)))
+            conn.execute(delete(drafts).where(drafts.c.draft_id.in_(ids) & drafts.c.is_test.is_(True)))
+        return ids
 
     # ── 읽기 ──
     def get_draft(self, draft_id: str) -> dict | None:
@@ -397,6 +426,7 @@ class Storage:
                 n = conn.execute(select(generations.c.id).where(generations.c.draft_id == r["draft_id"])).all()
                 out.append({"draft_id": r["draft_id"], "idea": (r["idea"] or "")[:80], "track": r["track"],
                             "owner": r["owner"], "requests": r["request_count"], "generations": len(n),
+                            "is_test": bool(r["is_test"]),          # 테스트 표시 (2026-09-03) — 삭제 도구가 이것만 지운다
                             "created_at": r["created_at"].isoformat(timespec="seconds"),
                             "updated_at": r["updated_at"].isoformat(timespec="seconds")})
             return out

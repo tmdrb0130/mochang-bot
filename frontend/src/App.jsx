@@ -361,10 +361,15 @@ export default function ModooWriter() {
   const setLang = (id) => { setLangState(id); saveLang(id); };
   const foreign = lang !== "ko";
   useEffect(() => { document.documentElement.lang = lang; document.title = t("app.title"); }, [lang, t]);
-  // 카드 문구 번역: { lang, map: { 한국어 원문: 번역 }, error } — 원문을 키로 두어 카드가 재생성돼도 새 문구만 번역한다.
-  const [cardI18n, setCardI18n] = useState(saved?.cardI18n ?? null);
+  // 카드 문구 번역: { maps: { en: { 한국어 원문: 번역 }, zh: {...}, ja: {...} }, error } — 언어마다 따로 보관해 언어를 오가도 다시 받지 않는다.
+  // (13:20 배포본은 언어 하나만 보관해 영어→중국어로 바꾸면 영어 지도를 버렸고, 번역 도중 바꾸면 멈췄다.) 원문이 키라 카드가 재생성돼도 새 문구만 번역.
+  const [cardI18n, setCardI18n] = useState(() => {
+    const c = saved?.cardI18n;
+    if (c?.maps) return c;
+    return c?.lang && c?.map ? { maps: { [c.lang]: Object.fromEntries(Object.entries(c.map).filter(([, v]) => v)) }, error: "" } : null;   // 옛 저장본
+  });
   const [cardBusy, setCardBusy] = useState(false);
-  const tr = (text) => (foreign && cardI18n?.lang === lang && cardI18n.map?.[text]) || text;
+  const tr = (text) => (foreign && cardI18n?.maps?.[lang]?.[text]) || text;
   // 초안 번역: trans[qid][lang] = { text, source(번역 당시 한국어 원문), error } — 원문이 바뀌면 stale 로 보여주고 버튼으로 다시 번역한다.
   const [trans, setTrans] = useState(saved?.trans ?? {});
   const [transBusy, setTransBusy] = useState({});                 // transBusy["qid|lang"] = true
@@ -841,10 +846,10 @@ export default function ModooWriter() {
   const cardReqRef = useRef(null);
   const cardFailedRef = useRef({});                 // cardFailedRef[lang] = Set(한국어 원문)
   const [cardTick, setCardTick] = useState(0);       // 요청이 끝나거나 "다시 시도" 를 누르면 effect 를 한 번 더 돌린다
-  const cardUntranslated = foreign ? cardStrings().filter((sKo) => !(cardI18n?.lang === lang && cardI18n.map?.[sKo])).length : 0;
+  const cardUntranslated = foreign ? cardStrings().filter((sKo) => !cardI18n?.maps?.[lang]?.[sKo]).length : 0;
   useEffect(() => {
     if (!foreign || !intake || cardReqRef.current) return;
-    const have = cardI18n?.lang === lang ? cardI18n.map || {} : {};
+    const have = cardI18n?.maps?.[lang] || {};
     const failed = cardFailedRef.current[lang] || new Set();
     const todo = cardStrings().filter((sKo) => !have[sKo] && !failed.has(sKo));
     if (!todo.length) return;
@@ -856,12 +861,13 @@ export default function ModooWriter() {
         const got = {}; const bad = new Set(failed);
         todo.forEach((sKo, i) => { const v = (r.translations?.[i] || "").trim(); if (v) got[sKo] = v; else bad.add(sKo); });
         cardFailedRef.current[reqLang] = bad;
-        setCardI18n((prev) => ({ lang: reqLang, map: { ...(prev?.lang === reqLang ? prev.map : {}), ...got }, error: "" }));
+        // 요청 당시 언어(reqLang)의 지도에만 합친다 — 그새 언어를 바꿨어도 결과는 남고, 바꾼 언어는 다음 effect 가 받는다
+        setCardI18n((prev) => ({ maps: { ...(prev?.maps || {}), [reqLang]: { ...(prev?.maps?.[reqLang] || {}), ...got } }, error: "" }));
       })
       .catch((e) => {
         todo.forEach((sKo) => failed.add(sKo));
         cardFailedRef.current[reqLang] = failed;
-        setCardI18n((prev) => ({ lang: reqLang, map: prev?.lang === reqLang ? prev.map || {} : {}, error: String(e.message || e) }));
+        setCardI18n((prev) => ({ maps: prev?.maps || {}, error: String(e.message || e) }));
       })
       .finally(() => { cardReqRef.current = null; setCardBusy(false); setCardTick((n) => n + 1); });
   }, [foreign, lang, intake, cardI18n, cardTick]);
@@ -955,6 +961,8 @@ export default function ModooWriter() {
       <header className="border-b border-slate-200">
         <div className="max-w-5xl mx-auto px-5 pt-3 flex justify-end">
           {/* 언어 선택 (2026-09-03). 화면 문구만 바뀐다 — 초안은 한국어로 만들어지고 외국어 화면에선 번역을 병기한다. */}
+          {/* ?test=1 로 연 탭: 요청이 서비스 DB 에 안 남는다 (api.js testMode). 운영자가 알아보게 배지로. */}
+          {api.testMode() && <span className="mr-auto text-xs px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300" title="?test=0 으로 끄기">{t("hdr.testmode")}</span>}
           <div className="flex items-center gap-1 text-xs" role="group" aria-label={t("lang.label")}>
             <span className="text-slate-400 mr-1" aria-hidden="true">🌐</span>
             {LANGS.map((l) => (
