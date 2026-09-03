@@ -1,6 +1,58 @@
-# PROGRESS — 2026-09-03 오전 (GPU1 라마 내리고 Qwen 복제본 2개 — 처리량 2배)
+# PROGRESS — 2026-09-03 낮 (마무리 작업자 + research 테이블 + 재접속 복원·개인 링크) — **코드만 준비, 아직 미배포**
 
 > 이 절이 최신. 아래 절들은 그대로 둠.
+>
+> ⚠ **적용하려면** 학생이 없는 시간대에 ① 관리자 창 `nssm restart mochang-api` (백엔드 3덩어리) ② `cd frontend; npx vite build` (프론트 복원·링크).
+> 둘 다 사용자가 직접. 서비스는 `--reload` 없이 돌아 파일을 고쳐도 재시작 전엔 아무 영향이 없다 (`C:\Users\bon505\svc\mochang-api.bat` 확인).
+
+## 왜
+
+오전 실사용 관찰: 학생이 생성 도중 탭을 닫으면 **큐에 못 들어간 문항이 영영 비었다**(주차장 3/8, 빵집 7/8). 프론트가 3개씩 넣는 파이프라인이라
+닫는 순간 서버에 걸린 건 3개 이하. 재접속하면 같은 브라우저에선 완성분은 보이지만 빈 문항은 버튼을 눌러야 했고, 다른 기기에선 빈 화면.
+사용자 결정: 나간 학생 것도 서버가 끝까지 만들되 **실시간 학생보다 우선권은 뒤로**, 조사 결과도 DB 에 남겨 캐시가 날아가도 같은 근거로 만들기.
+
+## 한 것 (3덩어리)
+
+1. **`research` 테이블** (`backend/storage.py`, SCHEMA_VERSION 2) — 문항 조사(`/jobs/research`)와 인테이크의 아이디어 공통 조사(question_id `idea`)가
+   끝날 때 검색어·페이지·사실 목록(JSON)을 저장. `storage.record("research"|"idea_research")`. 실패(error)는 안 남기고 빈 목록은 남긴다.
+   `get_research(draft_id, qid)` = 최신 사실 목록, `list_unfinished(idle_seconds, lookback_days)` = 마무리 대상.
+   운영 DB 에는 테이블을 미리 만들어 뒀다(create_all, 무해). DB Browser 뷰 `v_research` 추가 (`scripts/db_views.sql`).
+2. **마무리 작업자** (`backend/finisher.py`, config.yaml `finisher:`) — 1분마다 DB 를 훑어 "generate 1건 이상 · 마지막 요청 뒤 180초 조용 · 빈 문항 있음" 초안의
+   남은 (문항, 스타일)을 만들어 `generations` 에 `meta.auto=true` 로 저장. 카드 단계에서 나간 초안은 대상 아님.
+   - 우선권 뒤로: 자체 `LLMClient`(같은 모델, `extra.priority=200` > 본문 100 > 조사 0) + 자체 큐 워커 3개 (본문 워커 80 과 별개, IP 제한 무관).
+   - 참고자료: research 테이블 → 없으면 조사 파이프라인(디스크 캐시 7일 → 새 조사, 결과는 research 에 저장).
+   - 안전장치: (초안, 문항, 스타일) 당 2회, 주기당 초안 5개, 3일 이전 초안 제외, `updated_at` 은 안 건드림(record 대신 add_generation).
+   - 관측: `/health.finisher` {ticks, done, failed, skipped, in_progress}, `timing.jsonl` event `auto_finish`, `timing_report` "[마무리 작업자]" 절.
+   - `GET /drafts/{id}` 응답에 `finisher: {enabled, in_progress}` 추가 (기존 필드 그대로).
+3. **프론트 복원 + 개인 링크** (`frontend/src/App.jsx`, `api.js getDraft`)
+   - 초안 화면(step 2)에서 빈 문항이 있고 이 탭이 만드는 중이 아니면 `/drafts/{id}` 를 받아 **빈 문항만** 채운다(학생이 고친 글은 안 덮음).
+     마무리 작업자가 켜져 있으면 15초마다 다시 본다(최대 20분) + 안내 문구 "서버가 남은 N개 문항을 뒤에서 만들고 있어요".
+   - `?draft=<id>` 로 열면 서버 저장본으로 화면을 세운다(입력·카드 답·문항). 결과 화면에 "이 초안 링크" + 복사 버튼.
+     카드(intake)가 없는 복원 상태에서 "새로 생성" 을 눌러도 서버 답변(`restoredAnswersRef`)이 그대로 실려 간다.
+   - 비공개 Q10 은 서버 본문으로 덮지 않는다.
+
+테스트: `tests/test_finisher.py` 8건 신규 (가짜 생성 함수) — **400 passed**. `npx vite build --outDir dist-check` 통과.
+
+## 실호출 여부
+
+없음. 재시작 후 확인할 것: (1) `/health` 에 `finisher.enabled: true`, (2) 생성 도중 탭을 닫고 3~4분 뒤 `v_progress` 에서 문항이 차는지 + `timing_report --last 10` 의 [마무리 작업자],
+(3) 같은 브라우저 재접속 시 채워지는지, (4) `?draft=` 링크를 다른 브라우저에서.
+
+## 결정·주의
+
+- 마무리 작업자는 **재시작 직후 1분은 쉰다**(학생들이 새로고침·이어받기로 바쁜 시간). 재시작 자체는 진행 중 작업을 끊으므로 큐가 빌 때.
+- 우선순위 200 은 vLLM 이 "대기 중인 요청" 사이의 순서만 정한다. 이미 실행 중인 마무리 요청은 계속 돈다(KV 는 넉넉).
+- 조사 결과는 디스크 캐시와 이중 저장(약 학생당 9건, 오늘 캐시 전체 27 MB 규모) — 크기 부담 없음.
+
+## 다음 순서
+
+1. 사용자: 한가할 때 `nssm restart mochang-api` → `npx vite build` → 위 확인 4가지.
+2. 40명 부하 재측정(복제본 2개, 워커 80/80) → LOAD_TEST 5차.
+3. (후보) 아이디어 최소 길이/의미 검사 — "test용으로 입력하는 거임" 같은 입력에 모델이 지어낸 사례.
+
+---
+
+# PROGRESS — 2026-09-03 오전 (GPU1 라마 내리고 Qwen 복제본 2개 — 처리량 2배)
 
 ## 한 것
 

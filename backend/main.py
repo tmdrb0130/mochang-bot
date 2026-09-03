@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from .llm.client import (RESEARCH_USAGE_PATH, LLMClient, LLMError, RateLimited,
                          load_config, research_client_config)
 from .llm.jobs import TooManyJobs
+from . import finisher as finisher_mod
 from . import storage as storage_mod
 from . import timing
 from .pipeline import assemble, generate, intake, verify
@@ -40,6 +41,22 @@ research_cfg = research_pipeline.ResearchConfig.from_config(config)
 # 아이디어 입력·생성 초안 저장소 (backend/storage.py). 기본 SQLite, config.yaml storage / MOCHANG_DATABASE_URL 로 전환.
 storage = storage_mod.Storage.from_config(config)
 
+# 마무리 작업자 (backend/finisher.py): 생성 도중 나간 학생의 빈 문항을 낮은 우선순위로 채운다. config.yaml finisher.
+_finisher_settings = finisher_mod.load_settings(config)
+finisher_client = LLMClient(finisher_mod.finisher_client_config(config, _finisher_settings))
+finisher_client.queue.on_done = timing.job_done
+
+
+async def _finisher_research(form: dict, question_id: str) -> list[dict]:
+    """research 테이블에 없을 때만: 디스크 캐시(7일) → 새 조사. 결과는 다음을 위해 저장해 둔다."""
+    found = await research_pipeline.run_research(research_client, researcher, form, question_id, research_cfg)
+    await storage.record("research", {**form, "question_id": question_id}, found, None)
+    return found.get("facts") or []
+
+
+finisher = finisher_mod.Finisher(storage, finisher_client, _finisher_settings,
+                                 generate_fn=lambda c, f: generate.generate_one(c, f), research_fn=_finisher_research)
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await client.queue.start()      # 워커 N개 기동 (config.yaml max_workers)
@@ -50,7 +67,11 @@ async def lifespan(_: FastAPI):
     except Exception as e:          # DB 를 못 열어도 서비스는 뜬다 — 저장만 꺼진다
         logging.getLogger("mochang.storage").warning("저장소를 열 수 없어 저장을 끕니다 (%s): %s", storage.url, e)
         storage.enabled = False
+    if storage.enabled:
+        finisher.start()            # config.yaml finisher.enabled 가 아니면 아무것도 안 한다
     yield
+    await finisher.stop()
+    await finisher_client.queue.stop()
     await client.queue.stop()
     if research_client is not client:
         await research_client.queue.stop()
@@ -136,6 +157,9 @@ async def health():
         "fallback": client.fallback,
         "usage": client.usage.snapshot(),   # 오늘 요청 수 / 한도 (OpenRouter 가 아니면 limit=None)
         "queue": client.queue.stats(),      # 동시성 층 상태 (워커 수, 대기, 실행 중)
+        # 마무리 작업자 (2026-09-03): 나간 학생의 빈 문항을 채운 수. enabled=false 면 ticks 가 0 에 머문다.
+        "finisher": {"enabled": bool(_finisher_settings.get("enabled")), **finisher.stats,
+                     "in_progress": len(finisher.in_progress)},
     }
 
 
@@ -179,6 +203,7 @@ async def _intake_full(form: dict, owner: str | None) -> dict:
     카드 생성은 research_client(조사 클라이언트)로 돌린다 — 본문 생성이 채운 본문 큐 뒤에서 기다리지 않게(40명 실측: 최대 3분 47초),
     그리고 vLLM 우선순위(extra.priority)가 조사와 같은 '높음'이 되게. 지금은 조사·본문 모델이 같은 Qwen 이라 품질 차이는 없다."""
     found = await _with_idea_research(form)
+    await storage.record("idea_research", form, found, owner)     # research 테이블 (question_id = "idea")
     out = await _persisted("intake", form, intake.run_intake(research_client, form), owner)
     out["research"] = {"facts": found.get("facts") or [], "queries": found.get("queries") or [],
                        "backend": found.get("backend"), "cached": found.get("cached"),
@@ -376,6 +401,8 @@ async def get_draft(draft_id: str):
     row = await asyncio.to_thread(storage.get_draft, draft_id) if storage.enabled else None
     if row is None:
         raise HTTPException(status_code=404, detail="저장된 초안이 없습니다.")
+    # 프론트 복원용 (2026-09-03): 마무리 작업자가 켜져 있으면 빈 문항이 곧 채워질 수 있으니 폴링하라는 신호.
+    row["finisher"] = {"enabled": bool(_finisher_settings.get("enabled")), "in_progress": finisher.in_progress_for(draft_id)}
     return row
 
 

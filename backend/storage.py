@@ -1,7 +1,8 @@
 """사용자가 입력한 아이디어와 생성된 신청서 초안을 DB 에 남긴다.
 
 지금까지 초안은 브라우저 localStorage 에만 있었고 서버는 아무것도 남기지 않았다.
-이 모듈은 요청이 끝날 때마다 (1) 아이디어·인테이크 답 = drafts, (2) 문항별 생성문 = generations 로 쌓는다.
+이 모듈은 요청이 끝날 때마다 (1) 아이디어·인테이크 답 = drafts, (2) 문항별 생성문 = generations,
+(3) 조사 결과(검색어·페이지·사실 목록) = research 로 쌓는다 (2026-09-03: 디스크 캐시 7일이 지나도 같은 근거로 다시 만들 수 있게).
 
   기본:  backend/.data/mochang.sqlite  (WAL 모드, gitignore)
   전환:  환경변수 MOCHANG_DATABASE_URL 또는 config.yaml storage.url 에 SQLAlchemy URL —
@@ -36,7 +37,7 @@ log = logging.getLogger("mochang.storage")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_URL = "sqlite:///backend/.data/mochang.sqlite"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2      # 2: research 테이블 (2026-09-03). 테이블 추가는 create_all 이 하므로 이행 코드는 없다.
 
 # 프론트가 보내는 draft_id 형식 (UUID 등). 이 밖의 값은 무시하고 해시로 대체한다 — DB 키에 임의 문자열이 들어오지 않게.
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
@@ -45,6 +46,9 @@ _ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 _DRAFT_FIELDS = ("idea", "track", "is_business", "current_item", "team", "capability")
 # generations 를 남기는 작업 종류 — 결과에 text 가 있는 것만
 _TEXT_KINDS = ("generate", "extend")
+# research 를 남기는 작업 종류. idea_research 는 인테이크 안의 아이디어 공통 조사(question_id 는 IDEA_QUESTION 으로 저장).
+_RESEARCH_KINDS = ("research", "idea_research")
+IDEA_QUESTION = "idea"
 
 metadata = MetaData()
 
@@ -76,6 +80,21 @@ generations = Table(
     Column("chars", Integer),
     Column("model", String(160)),
     Column("meta", Text),                           # 결과의 나머지(폴리시·refine 신호 등) JSON — 품질 분석용
+    Column("created_at", DateTime, nullable=False, index=True),
+)
+
+research = Table(
+    "research", metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("draft_id", String(64), nullable=False, index=True),
+    Column("question_id", String(16), nullable=False),   # q1… 또는 IDEA_QUESTION("idea": 인테이크의 아이디어 공통 조사)
+    Column("cache_key", String(80)),                      # rag/pipeline._cache_key — 디스크 캐시와 대조용
+    Column("queries", Text),                              # 검색어 목록 JSON
+    Column("pages", Text),                                # 본 페이지 [{url,title}] JSON
+    Column("facts", Text, nullable=False),                # 사실 목록 JSON — 생성 때 [웹 참고자료] 로 주입된 그것
+    Column("facts_count", Integer),
+    Column("backend", String(32)),                        # 검색 백엔드(ddgs·vane·vectorstore 등)
+    Column("cached", Boolean),                            # 디스크 캐시 적중이었는지
     Column("created_at", DateTime, nullable=False, index=True),
 )
 
@@ -157,6 +176,8 @@ class Storage:
             row = conn.execute(select(schema_meta.c.value).where(schema_meta.c.key == "version")).first()
             if row is None:
                 conn.execute(schema_meta.insert().values(key="version", value=str(SCHEMA_VERSION)))
+            elif str(row[0]) != str(SCHEMA_VERSION):
+                conn.execute(schema_meta.update().where(schema_meta.c.key == "version").values(value=str(SCHEMA_VERSION)))
         self.engine = engine
 
     def close(self) -> None:
@@ -215,12 +236,39 @@ class Storage:
             ))
             return res.inserted_primary_key[0] if res.inserted_primary_key else None
 
+    def add_research(self, draft_id: str, question_id: str, result: dict) -> int | None:
+        """조사 결과 한 건 (문항 조사 또는 아이디어 공통 조사). facts 목록이 없으면(조사 실패) 남기지 않는다.
+        빈 목록은 남긴다 — "조사했지만 인용할 사실이 없었다" 도 정보다."""
+        assert self.engine is not None
+        if not isinstance(result, dict) or not isinstance(result.get("facts"), list) or result.get("error"):
+            return None
+        facts = result["facts"]
+        pages = [{"url": p.get("url", ""), "title": p.get("title", "")} for p in (result.get("pages") or []) if isinstance(p, dict)]
+        with self.engine.begin() as conn:
+            res = conn.execute(research.insert().values(
+                draft_id=draft_id,
+                question_id=str(question_id or "")[:16],
+                cache_key=str(result.get("cache_key") or "")[:80] or None,
+                queries=_dumps(result.get("queries") or []),
+                pages=_dumps(pages),
+                facts=_dumps(facts),
+                facts_count=len(facts),
+                backend=str(result.get("backend") or "")[:32] or None,
+                cached=bool(result.get("cached")),
+                created_at=datetime.now(),
+            ))
+            return res.inserted_primary_key[0] if res.inserted_primary_key else None
+
     def _record_sync(self, kind: str, form: dict, result: Any, owner: str | None) -> None:
         if not form.get("idea"):
             return
         did = self.upsert_draft(form, owner)
         if kind in _TEXT_KINDS and isinstance(result, dict):
             self.add_generation(did, kind, form, result)
+        elif kind in _RESEARCH_KINDS and isinstance(result, dict):
+            qid = IDEA_QUESTION if kind == "idea_research" else str(form.get("question_id") or "")
+            if qid:
+                self.add_research(did, qid, result)
 
     async def record(self, kind: str, form: dict, result: Any, owner: str | None = None) -> None:
         """요청 하나가 끝났을 때 부른다. 어떤 경우에도 예외를 올리지 않는다 — 저장 때문에 생성이 실패하면 안 된다."""
@@ -249,6 +297,39 @@ class Storage:
             for k in ("created_at", "updated_at"):
                 if isinstance(row.get(k), datetime):
                     row[k] = row[k].isoformat(timespec="seconds")
+        return out
+
+    def get_research(self, draft_id: str, question_id: str) -> list[dict] | None:
+        """이 초안·문항의 가장 최근 조사 사실 목록. 없으면 None (빈 목록과 구분)."""
+        if self.engine is None:
+            return None
+        with self.engine.connect() as conn:
+            row = conn.execute(select(research.c.facts).where(research.c.draft_id == draft_id, research.c.question_id == question_id)
+                               .order_by(research.c.id.desc()).limit(1)).first()
+        return _loads(row[0], []) if row else None
+
+    def list_unfinished(self, idle_seconds: int, lookback_days: int = 3, now: datetime | None = None) -> list[dict]:
+        """마무리 작업자(backend/finisher.py)용: 생성을 시작했지만(generate 1건 이상) 마지막 요청 뒤 idle_seconds 넘게 조용한 초안.
+        너무 오래된 초안(lookback_days 이전)은 보지 않는다. 각 항목: 초안 입력 + done = {(question_id, style)} + styles."""
+        if self.engine is None:
+            return []
+        now = now or datetime.now()
+        cutoff = now.timestamp() - idle_seconds
+        since = datetime.fromtimestamp(now.timestamp() - lookback_days * 86400)
+        out = []
+        with self.engine.connect() as conn:
+            rows = conn.execute(select(drafts).where(drafts.c.updated_at >= since).order_by(drafts.c.updated_at.desc())).mappings().all()
+            for d in rows:
+                if d["updated_at"].timestamp() > cutoff:
+                    continue                                   # 아직 활동 중
+                gens = conn.execute(select(generations.c.question_id, generations.c.style)
+                                    .where(generations.c.draft_id == d["draft_id"], generations.c.kind == "generate")).all()
+                if not gens:
+                    continue                                   # 생성을 시작한 적이 없다 (카드 단계에서 나감) — 대상 아님
+                done = {(q, s or "") for q, s in gens}
+                styles = sorted({s for _, s in done if s}) or ["logic"]
+                out.append({**{k: d[k] for k in _DRAFT_FIELDS}, "draft_id": d["draft_id"], "model": d["model"],
+                            "answers": _loads(d["answers"], []), "updated_at": d["updated_at"], "done": done, "styles": styles})
         return out
 
     def list_drafts(self, limit: int = 50) -> list[dict]:

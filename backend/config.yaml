@@ -114,6 +114,21 @@ storage:
   enabled: true
   url: "sqlite:///backend/.data/mochang.sqlite"
 
+# ── 마무리 작업자 (2026-09-03, backend/finisher.py) ──
+# 학생이 생성 도중 탭을 닫으면 큐에 못 들어간 문항이 영영 비었다(실측 3/8, 7/8 에서 멈춤). 이 작업자가 1분마다 DB 를 훑어
+# "생성을 시작했고 · 마지막 요청 뒤 idle_seconds 넘게 조용하고 · 빈 문항이 있는" 초안의 남은 문항을 만든다(generations.meta.auto).
+# 실시간 학생보다 뒤: vLLM priority 200(본문 100·조사 0 보다 뒤) + 자체 큐 워커 concurrency 개(본문 워커 80 과 별개).
+# 참고자료는 research 테이블(학생이 실제로 받았던 것) → 디스크 캐시 → 새 조사 순. 학생은 재접속 때 /drafts/{id} 로 받아 본다.
+finisher:
+  enabled: true
+  interval_seconds: 60
+  idle_seconds: 180
+  concurrency: 3
+  priority: 200
+  max_attempts: 2
+  max_per_tick: 5
+  lookback_days: 3
+
 # 한 클라이언트(IP)가 동시에 진행할 수 있는 작업 수 (POST /jobs/{kind}). 초과하면 429.
 # 인증이 없어 IP 로 구분한다 — 한 명이 문항 9개를 연달아 눌러 큐를 독점하는 것을 막는다.
 # 0 이면 무제한. 프론트가 문항 여러 개를 동시에 돌릴 수 있으므로 너무 낮추지 말 것.

@@ -133,6 +133,18 @@ def main() -> None:
         for k, v in sorted(totals.items(), key=lambda kv: -kv[1]):
             print("  %-16s %6d" % (k, v))
 
+    # 마무리 작업자(backend/finisher.py, 2026-09-03): 생성 도중 나간 학생의 빈 문항을 서버가 채운 기록
+    auto = [r for r in rows if r.get("event") == "auto_finish"]
+    if auto:
+        ok = [r for r in auto if r.get("status") == "done"]
+        print("\n[마무리 작업자] 나간 학생의 빈 문항 %d건 시도 — 성공 %d, 실패 %d, 초안 %d개"
+              % (len(auto), len(ok), len(auto) - len(ok), len({r.get("draft") for r in auto})))
+        line = summarize("실행", [r["run_s"] for r in ok if r.get("run_s") is not None])
+        if line:
+            print(line)
+        for r in [r for r in auto if r.get("status") != "done"][-3:]:
+            print("  실패  %s  %s/%s  시도 %s" % (r["ts"], r.get("draft"), r.get("question"), r.get("attempt")))
+
     print()
 
 

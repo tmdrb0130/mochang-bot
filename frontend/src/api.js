@@ -148,6 +148,12 @@ export function extend(form, questionId, styleId, current, references = null, op
   return runJob("extend", { ...toPayload(form), question_id: questionId, style: styleId, current, ...(references?.length ? { references } : {}) }, opts);
 }
 
+/** 저장된 초안 한 벌 → { draft_id, idea, track, is_business, current_item, team, capability, answers, generations: [...], finisher: { enabled, in_progress } }
+ *  재접속 복원·개인 링크(?draft=id)·마무리 작업자 결과 받기(2026-09-03)에 쓴다. 없으면 404. */
+export function getDraft(draftId) {
+  return request(`/drafts/${encodeURIComponent(draftId)}`);
+}
+
 /** 서버 상태 → { ok, model, base_url, fallback, usage: { used, limit, remaining, reset } } */
 export function health() {
   return request("/health");

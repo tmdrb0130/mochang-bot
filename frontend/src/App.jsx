@@ -290,6 +290,34 @@ function withDraft(next) {
   return { ...next, draftId: api.newDraftId(), draftIdea: next.idea || "" };
 }
 
+// ── 서버 저장본 복원 (2026-09-03) ──
+// 학생이 탭을 닫으면 (1) 서버에서 돌던 문항의 결과와 (2) 마무리 작업자(backend/finisher.py)가 뒤에서 채운 문항이 DB 에만 남는다.
+// 재접속·개인 링크(?draft=id)로 돌아오면 /drafts/{id} 를 받아 비어 있는 문항만 채운다 (학생이 고친 글은 덮지 않는다).
+const DRAFT_ID_RE = /^[A-Za-z0-9_-]{8,64}$/;
+function latestTexts(row) {
+  const out = {};                          // out[qid][styleId] = { text, model, auto } — generations 는 오래된 순이라 마지막이 최신
+  for (const g of row?.generations || []) {
+    if (g.kind !== "generate" && g.kind !== "extend") continue;
+    if (!g.style || !STYLES.some((s) => s.id === g.style)) continue;
+    out[g.question_id] = { ...(out[g.question_id] || {}), [g.style]: { text: g.text || "", model: g.model || "", auto: !!g.meta?.auto } };
+  }
+  return out;
+}
+function answersFromServer(list) {
+  const out = {};
+  for (const a of list || []) if (a?.slot) out[a.slot] = { answer: a.answer ?? null, unknown: !!a.unknown };
+  return out;
+}
+function draftLinkFor(draftId) {
+  return `${location.origin}${location.pathname}?draft=${draftId}`;
+}
+function draftIdFromUrl() {
+  try {
+    const id = new URLSearchParams(location.search).get("draft") || "";
+    return DRAFT_ID_RE.test(id) ? id : "";
+  } catch { return ""; }
+}
+
 function loadJobs() {
   try {
     return JSON.parse(sessionStorage.getItem(JOBS_KEY) || "{}");
@@ -325,6 +353,10 @@ export default function ModooWriter() {
   const [picked, setPicked] = useState(saved?.picked ?? {}); // picked[qid] = styleId
   const [running, setRunning] = useState(false);
   const [copied, setCopied] = useState("");
+  // 서버가 뒤에서 채우는 중인지 (마무리 작업자). { remaining, inProgress } | null — step 2 에서 안내 문구와 폴링에 쓴다.
+  const [autoFill, setAutoFill] = useState(null);
+  // 개인 링크로 복원했을 때 카드(intake) 없이 서버 답변만 있는 경우 — buildAnswers 가 이걸로 대신한다.
+  const restoredAnswersRef = useRef(null);
   // ── 인테이크(정보 보충) ──
   const [intake, setIntake] = useState(saved?.intake ?? null);      // /intake 결과 { summary, slots, cards, ready }
   const [intakeBusy, setIntakeBusy] = useState(false);
@@ -411,10 +443,13 @@ export default function ModooWriter() {
     setModelUsed((p) => ({ ...p, [qid]: { ...(p[qid] || {}), [sid]: value } }));
 
   // 카드 답변 → 백엔드 형식 [{slot,label,answer,unknown}]. 카드가 있는 슬롯만.
-  const buildAnswers = () =>
-    (intake?.cards || [])
+  const buildAnswers = () => {
+    const cards = intake?.cards || [];
+    if (!cards.length && restoredAnswersRef.current?.length) return restoredAnswersRef.current;   // 서버 저장본에서 복원한 경우
+    return cards
       .filter((c) => answers[c.slot] && (answers[c.slot].unknown || answers[c.slot].answer))
       .map((c) => ({ slot: c.slot, label: c.label, answer: answers[c.slot].answer, unknown: !!answers[c.slot].unknown }));
+  };
   // 값이 바뀔 때마다 저장. loading 상태는 저장하지 않는다 — 새로고침 후 영원히 도는 것처럼 보이면 안 되므로.
   useEffect(() => {
     const cleanStatus = {};
@@ -671,6 +706,85 @@ export default function ModooWriter() {
     for (const q of activeQuestions) for (const s of selectedStyles) if (!(src[q.id]?.[s.id] || "").trim()) out.push([q, s]);
     return out;
   };
+
+  // 서버 저장본으로 빈 문항을 채운다. 돌려주는 값: 아직 빈 (문항, 스타일) 수. 학생이 이미 쓴 글은 덮지 않는다.
+  function applyServerTexts(row) {
+    const latest = latestTexts(row);
+    const merged = { ...textsRef.current };
+    for (const [qid, byStyle] of Object.entries(latest)) {
+      if (qid === "q10" && !form.q10Public) continue;                       // 비공개 Q10 은 고정 문장 유지
+      for (const [sid, g] of Object.entries(byStyle)) {
+        if ((merged[qid]?.[sid] || "").trim() || !g.text) continue;
+        const q = QUESTIONS.find((x) => x.id === qid);
+        const text = q ? g.text.slice(0, q.limit) : g.text;
+        merged[qid] = { ...(merged[qid] || {}), [sid]: text };
+        setText(qid, sid, text);
+        setUsed(qid, sid, g.model);
+        setStat(qid, sid, "done");
+        setPicked((p) => (p[qid] ? p : { ...p, [qid]: sid }));
+      }
+    }
+    textsRef.current = merged;
+    return missingPairs(merged).length;
+  }
+
+  // /drafts/{id} 를 한 번 받아 반영하고, 서버가 아직 채우는 중이면 true (→ 호출자가 다시 폴링).
+  async function syncFromServer() {
+    if (!form.draftId) return false;
+    try {
+      const row = await api.getDraft(form.draftId);
+      const left = applyServerTexts(row);
+      const active = !!row.finisher?.enabled && left > 0;
+      setAutoFill(active ? { remaining: left, inProgress: row.finisher?.in_progress || [] } : null);
+      return active;
+    } catch {
+      setAutoFill(null);                                                     // 404(아직 저장 전)·네트워크 — 조용히
+      return false;
+    }
+  }
+
+  // 초안 화면에서 빈 문항이 있고 이 탭이 만드는 중이 아니면: 서버에 결과가 있는지 보고, 마무리 작업자가 켜져 있으면 15초마다 다시 본다 (최대 20분).
+  useEffect(() => {
+    if (step !== 2 || running || Object.keys(jobsRef.current).length) return undefined;
+    if (!missingPairs(textsRef.current).length) { setAutoFill(null); return undefined; }
+    let stopped = false;
+    const started = Date.now();
+    const loop = async () => {
+      const active = await syncFromServer();
+      if (stopped) return;
+      if (!active || Date.now() - started > 20 * 60_000) { setAutoFill(null); return; }
+      setTimeout(loop, 15_000);
+    };
+    loop();
+    return () => { stopped = true; };
+  }, [step, running]);
+
+  // 개인 링크(?draft=id): 이 브라우저의 저장본과 다른 초안이면 서버 저장본으로 화면을 세운다 (다른 PC·폰에서 이어 보기).
+  useEffect(() => {
+    const id = draftIdFromUrl();
+    if (!id || id === saved?.form?.draftId) return;
+    (async () => {
+      try {
+        const row = await api.getDraft(id);
+        const styles = [...new Set((row.generations || []).map((g) => g.style).filter((sid) => STYLES.some((x) => x.id === sid)))];
+        setForm((f) => ({
+          ...f, track: TRACKS[row.track] ? row.track : "tech", idea: row.idea || "", isBusiness: !!row.is_business,
+          currentItem: row.current_item || "", team: row.team || "팀원 없음", capability: row.capability || "",
+          styles: styles.length ? styles : [STYLES[0].id], draftId: id, draftIdea: row.idea || "",
+        }));
+        restoredAnswersRef.current = row.answers || [];
+        setAnswers(answersFromServer(row.answers));
+        setIntake(null); setTexts({}); setStatus({}); setPicked({}); setModelUsed({});
+        textsRef.current = {};
+        jobsRef.current = {}; saveJobs({});
+        const left = applyServerTexts(row);
+        setAutoFill(row.finisher?.enabled && left > 0 ? { remaining: left, inProgress: row.finisher?.in_progress || [] } : null);
+        setStep(2);
+      } catch (e) {
+        alert(`저장된 초안을 찾지 못했어요. ${e.message || e}`);
+      }
+    })();
+  }, []);
 
   // 남은 문항만 이어서 만든다. 이어받기 직후 자동으로, 그리고 "남은 N개 계속 만들기" 버튼에서 부른다.
   async function generateMissing() {
@@ -942,6 +1056,17 @@ export default function ModooWriter() {
           <div className="space-y-8">
             {intake?.summary && (
               <p className="text-xs text-slate-500">AI가 이해한 아이디어: {intake.summary}{answeredCount > 0 && ` · 보충 답변 ${answeredCount}개 반영`}</p>
+            )}
+            {autoFill && (
+              <p className="text-xs text-indigo-700 bg-indigo-50 rounded-lg px-3 py-2">
+                서버가 남은 {autoFill.remaining}개 문항을 뒤에서 만들고 있어요. 이 화면을 닫아도 계속 만들어지고, 다시 열면 채워져 있습니다.
+              </p>
+            )}
+            {form.draftId && (
+              <p className="text-xs text-slate-500 break-all">
+                이 초안 링크 (다른 PC·폰에서 이어 보기): <span className="font-mono">{draftLinkFor(form.draftId)}</span>{" "}
+                <button onClick={() => copy("link", draftLinkFor(form.draftId))} className="underline">{copied === "link" ? "복사됨" : copied === "link!" ? "복사 실패" : "복사"}</button>
+              </p>
             )}
             <div className="flex items-center justify-between flex-wrap gap-3">
               <p className="text-sm text-slate-600">

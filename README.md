@@ -221,7 +221,7 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 
 | 엔드포인트 | 역할 |
 |---|---|
-| `GET /health` | 연결 상태 · 기본 모델 · 오늘 요청 수/한도 |
+| `GET /health` | 연결 상태 · 기본 모델 · 오늘 요청 수/한도 · 큐 · `finisher`(마무리 작업자 통계, 2026-09-03) |
 | `GET /models` | 선택 가능한 모델 목록 |
 | `POST /intake` | 아이디어 읽기: 슬롯 9개 확인/부족 판정 + 부족한 슬롯의 보기 카드 생성. `mentoring`(Q4-2) 카드는 항상 포함. `ready`는 핵심 정보 충분 여부(카드는 그래도 보여줌, 건너뛰기 가능) |
 | `POST /intake/regenerate` | 보기가 안 맞는 슬롯의 카드만 재생성 (`slots`, `seen`[이미 보여준 보기 → 금지], `keep`[이미 고른 보기 → 유지], `note`[지원자 메모], `answers`[다른 카드 답]) → `{cards, error?}` |
@@ -232,7 +232,7 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 | `POST /jobs/{kind}` | 위 작업들을 비동기로 제출 → `{job_id, position}` (kind: generate·extend·intake·intake_regenerate·research·verify) |
 | `GET /jobs/{id}` | `{status, position, result, error}` 폴링 |
 | `GET /jobs` | 큐 상태 (워커 수, 대기, 실행 중) |
-| `GET /drafts/{draft_id}` | 저장된 초안 한 벌 — 입력(아이디어·인테이크 답) + 문항별 생성 이력. 모든 요청은 끝날 때 `backend/storage.py` 가 DB 에 남긴다 (기본 SQLite `backend/.data/mochang.sqlite`, `config.yaml storage.url`/`MOCHANG_DATABASE_URL` 로 PostgreSQL 전환). 목록 조회는 없음 — 운영자는 `scripts/drafts_report.py` |
+| `GET /drafts/{draft_id}` | 저장된 초안 한 벌 — 입력(아이디어·인테이크 답) + 문항별 생성 이력. 모든 요청은 끝날 때 `backend/storage.py` 가 DB 에 남긴다 (기본 SQLite `backend/.data/mochang.sqlite`, `config.yaml storage.url`/`MOCHANG_DATABASE_URL` 로 PostgreSQL 전환). 목록 조회는 없음 — 운영자는 `scripts/drafts_report.py`. 응답의 `finisher: {enabled, in_progress}` 는 마무리 작업자(`backend/finisher.py`: 생성 도중 나간 학생의 빈 문항을 낮은 우선순위로 채움)가 이 초안을 채우는 중인지. 프론트는 재접속·`?draft=<id>` 링크로 이걸 받아 빈 문항을 채운다 |
 | `POST /generate/dry-run` | 조립된 프롬프트만 반환 (프롬프트 튜닝용) |
 
 ---
