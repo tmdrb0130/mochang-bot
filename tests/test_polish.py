@@ -204,3 +204,14 @@ def test_short_questions_lose_a_leading_self_reference():
     assert P.strip_leading_self("저는 그렇게 생각합니다.", "q2") == ("저는 그렇게 생각합니다.", 0)   # 긴 문항은 손대지 않음
     assert P.strip_leading_self("딸기를 모아 보냅니다.", "q10") == ("딸기를 모아 보냅니다.", 0)
 
+
+
+def test_unify_person_does_not_touch_word_internal_jega():
+    """2026-09-03 실측: 팀이 있을 때 '문제가' 의 '제가' 가 '저희가' 로 바뀌어 '문저희가' 가 됐다. 앞이 한글이면 낱말 중간."""
+    from backend.pipeline import postprocess as PP
+    team = {"team": "1명"}
+    text = "이는 단순한 언어 부족 문제가 아닙니다. 제가 직접 겪었고, 경제가 어렵습니다."
+    out, n = PP.unify_person(text, team)
+    assert out == "이는 단순한 언어 부족 문제가 아닙니다. 저희가 직접 겪었고, 경제가 어렵습니다." and n == 1
+    solo = {"team": "팀원 없음"}
+    assert PP.unify_person("저희가 만든 문제입니다. 저희를 믿어 주세요.", solo)[0] == "제가 만든 문제입니다. 저를 믿어 주세요."

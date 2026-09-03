@@ -836,30 +836,48 @@ export default function ModooWriter() {
     }
     return [...out];
   };
+  // 진행 중 요청은 ref 로 하나만. 결과는 요청 당시 언어(reqLang)의 지도에 합친다 — 상태가 바뀌어도 버리지 않는다.
+  // 빈 결과·실패 문구는 저장본에 남기지 않고(다음 방문 때 다시 시도) 이번 세션 안에서만 cardFailedRef 로 재시도를 막는다.
+  const cardReqRef = useRef(null);
+  const cardFailedRef = useRef({});                 // cardFailedRef[lang] = Set(한국어 원문)
+  const [cardTick, setCardTick] = useState(0);       // 요청이 끝나거나 "다시 시도" 를 누르면 effect 를 한 번 더 돌린다
+  const cardUntranslated = foreign ? cardStrings().filter((sKo) => !(cardI18n?.lang === lang && cardI18n.map?.[sKo])).length : 0;
   useEffect(() => {
-    if (!foreign || !intake || cardBusy) return;
+    if (!foreign || !intake || cardReqRef.current) return;
     const have = cardI18n?.lang === lang ? cardI18n.map || {} : {};
-    const todo = cardStrings().filter((sKo) => !(sKo in have));
+    const failed = cardFailedRef.current[lang] || new Set();
+    const todo = cardStrings().filter((sKo) => !have[sKo] && !failed.has(sKo));
     if (!todo.length) return;
-    let cancelled = false;
+    const reqLang = lang;
+    cardReqRef.current = { lang: reqLang };
     setCardBusy(true);
-    api.translate(todo, lang)
+    api.translate(todo, reqLang)
       .then((r) => {
-        if (cancelled) return;
-        const map = { ...have };
-        // 실패한 항목("")도 키를 만들어 둔다 — 매번 다시 시도하지 않는다. 화면엔 원문이 보인다.
-        todo.forEach((sKo, i) => { map[sKo] = r.translations?.[i] || ""; });
-        setCardI18n({ lang, map, error: "" });
+        const got = {}; const bad = new Set(failed);
+        todo.forEach((sKo, i) => { const v = (r.translations?.[i] || "").trim(); if (v) got[sKo] = v; else bad.add(sKo); });
+        cardFailedRef.current[reqLang] = bad;
+        setCardI18n((prev) => ({ lang: reqLang, map: { ...(prev?.lang === reqLang ? prev.map : {}), ...got }, error: "" }));
       })
       .catch((e) => {
-        if (cancelled) return;
-        const map = { ...have };
-        todo.forEach((sKo) => { map[sKo] = ""; });          // 실패해도 키를 남겨 무한 재시도를 막는다 (원문 표시)
-        setCardI18n({ lang, map, error: String(e.message || e) });
+        todo.forEach((sKo) => failed.add(sKo));
+        cardFailedRef.current[reqLang] = failed;
+        setCardI18n((prev) => ({ lang: reqLang, map: prev?.lang === reqLang ? prev.map || {} : {}, error: String(e.message || e) }));
       })
-      .finally(() => { if (!cancelled) setCardBusy(false); });
-    return () => { cancelled = true; };
-  }, [foreign, lang, intake, cardI18n]);
+      .finally(() => { cardReqRef.current = null; setCardBusy(false); setCardTick((n) => n + 1); });
+  }, [foreign, lang, intake, cardI18n, cardTick]);
+  const retryCardTranslation = () => { cardFailedRef.current[lang] = new Set(); setCardTick((n) => n + 1); };
+  // 번역 진행·미번역 안내 한 줄 (카드 화면 머리와 초안 화면의 "정보 보태기" 패널에 같이 쓴다)
+  const cardI18nNote = () => {
+    if (!foreign) return null;
+    if (cardBusy) return <p className="text-xs text-indigo-700 mt-2">{t("card.translating", { lang: LANG_NAMES[lang] })}</p>;
+    if (cardUntranslated > 0) return (
+      <p className="text-xs text-amber-700 mt-2">
+        {cardI18n?.error ? t("card.translate.fail") : t("card.untranslated", { n: cardUntranslated })}{" "}
+        <button onClick={retryCardTranslation} className="underline">{t("card.retry")}</button>
+      </p>
+    );
+    return null;
+  };
 
   // 문항 본문: 평문 모드 1회. 원문(source)을 같이 저장해 학생이 글을 고치면 "이전 원문 기준" 으로 표시한다.
   const TRANSLATE_PARALLEL = 3;
@@ -1122,8 +1140,7 @@ export default function ModooWriter() {
                   {intake.ready ? t("card.skip.hint") : ""}
                   {t("card.help1")}<b>{t("card.help.btn")}</b>{t("card.help2")}
                 </p>
-                {foreign && cardBusy && <p className="text-xs text-indigo-700 mt-2">{t("card.translating", { lang: LANG_NAMES[lang] })}</p>}
-                {foreign && !cardBusy && cardI18n?.error && <p className="text-xs text-amber-700 mt-2">{t("card.translate.fail")}</p>}
+                {cardI18nNote()}
               </div>
 
               {(intake.summary || known.length > 0) && (
@@ -1282,6 +1299,7 @@ export default function ModooWriter() {
                         {assistOpen[q.id] && (
                           <div className="mt-3 p-4 rounded-lg bg-indigo-50/50 border border-indigo-100 space-y-4">
                             <p className="text-xs text-slate-600">{t("dr.assist.help1")}<b>{t("dr.new")}</b>{t("dr.assist.help2")}<b>{t("dr.extend")}</b>{t("dr.assist.help3")}</p>
+                            {cardI18nNote()}
                             {cardsForQuestion(q.id).map((c) => (
                               <div key={c.slot} className="space-y-1.5">
                                 <div className="text-xs font-medium text-slate-700">{tr(c.question)} <span className="text-slate-400 font-normal">· {tr(c.label)}</span></div>

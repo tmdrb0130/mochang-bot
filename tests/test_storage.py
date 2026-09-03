@@ -127,3 +127,85 @@ async def test_job_generate_is_saved_and_readable(monkeypatch):
             r2 = await c.post("/generate", json=body)
             assert r2.status_code == 200
             assert len((await c.get(f"/drafts/{did}")).json()["generations"]) == 2
+
+
+# ── 서비스용 / 백업용 두 DB (2026-09-03) ──
+
+def _pair(tmp_path):
+    bak = S.Storage("sqlite:///" + (tmp_path / "bak.sqlite").as_posix())
+    st = S.Storage("sqlite:///" + (tmp_path / "svc.sqlite").as_posix(), backup=bak)
+    st.init()
+    assert bak.engine is not None                       # init 이 백업도 연다
+    return st, bak
+
+
+def test_backup_gets_everything_and_service_skips_test_requests(tmp_path):
+    st, bak = _pair(tmp_path)
+    real = {"draft_id": "real-0000000001", "idea": "실사용 아이디어", "track": "tech", "team": "팀원 없음"}
+    test = {"draft_id": "test-0000000001", "idea": "부하 테스트용 아이디어", "track": "tech", "team": "팀원 없음"}
+    gen = {"question_id": "q1", "style": "logic", "text": "한 줄", "model": "m"}
+    asyncio.run(st.record("generate", {**real, "question_id": "q1", "style": "logic"}, gen, "1.1.1.1"))
+    asyncio.run(st.record("generate", {**test, "question_id": "q1", "style": "logic"}, gen, "10.0.0.1", test=True))
+    asyncio.run(st.record("research", {**test, "question_id": "q2"}, {"facts": [{"fact": "x"}], "queries": ["q"]}, None, test=True))
+    assert st.get_draft("real-0000000001") and st.get_draft("test-0000000001") is None      # 서비스 DB: 실사용만
+    assert bak.get_draft("real-0000000001") and bak.get_draft("test-0000000001")             # 백업 DB: 전부
+    assert len(bak.get_draft("real-0000000001")["generations"]) == 1
+    assert bak.get_research("test-0000000001", "q2") == [{"fact": "x"}]
+    # record 를 안 거치는 직접 쓰기(마무리 작업자 경로)도 백업에 미러링
+    st.add_generation("real-0000000001", "generate", {**real, "question_id": "q2", "style": "logic"}, {**gen, "question_id": "q2"})
+    assert len(bak.get_draft("real-0000000001")["generations"]) == 2
+    st.close()
+    assert bak.engine is None                            # close 가 백업도 닫는다
+
+
+def test_backup_failure_does_not_break_service_writes(tmp_path):
+    st, bak = _pair(tmp_path)
+    bak.close(); bak.engine = None
+    bak.init = lambda: (_ for _ in ()).throw(RuntimeError("disk"))      # 다시 못 열게
+    real = {"draft_id": "real-0000000002", "idea": "실사용", "track": "tech", "team": "팀원 없음"}
+    asyncio.run(st.record("generate", {**real, "question_id": "q1", "style": "logic"}, {"question_id": "q1", "style": "logic", "text": "t"}, None))
+    assert st.get_draft("real-0000000002") is not None
+
+
+def test_from_config_reads_backup_url_and_ignores_same_file(monkeypatch):
+    monkeypatch.delenv("MOCHANG_DATABASE_URL", raising=False)
+    monkeypatch.delenv("MOCHANG_BACKUP_DATABASE_URL", raising=False)
+    st = S.Storage.from_config({"storage": {"url": "sqlite:///a.sqlite", "backup_url": "sqlite:///b.sqlite"}})
+    assert st.backup is not None and st.backup.url == "sqlite:///b.sqlite" and st.backup.backup is None
+    assert S.Storage.from_config({"storage": {"url": "sqlite:///a.sqlite", "backup_url": "sqlite:///a.sqlite"}}).backup is None
+    monkeypatch.setenv("MOCHANG_BACKUP_DATABASE_URL", "")
+    assert S.Storage.from_config({"storage": {"url": "sqlite:///a.sqlite", "backup_url": "sqlite:///b.sqlite"}}).backup is None
+
+
+@pytest.mark.asyncio
+async def test_jobs_with_test_header_skip_service_db(tmp_path):
+    """/jobs/generate 에 X-Mochang-Test 가 붙으면 GET /drafts 로는 안 보이고(서비스 DB 없음) 백업에는 있다."""
+    import httpx
+    from backend import main as M
+    from backend.llm.client import LLMResult
+
+    async def fake_complete(system, user, model):
+        return LLMResult(text="가짜 본문입니다. " * 5, model=model)
+
+    saved = M.client._complete
+    M.client._complete = fake_complete
+    try:
+        async with M.lifespan(M.app):
+            bak = M.storage.backup
+            assert bak is not None and bak.engine is not None
+            transport = httpx.ASGITransport(app=M.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=30) as c:
+                body = {"question_id": "q1", "style": "logic", "track": "tech", "idea": "테스트 헤더 확인용 아이디어", "draft_id": "hdr-test-000001"}
+                r = await c.post("/jobs/generate", json=body, headers={"X-Forwarded-For": "10.9.9.9", "X-Mochang-Test": "1"})
+                jid = r.json()["job_id"]
+                for _ in range(200):
+                    await asyncio.sleep(0.02)
+                    snap = (await c.get(f"/jobs/{jid}")).json()
+                    if snap["status"] in ("done", "error"):
+                        break
+                assert snap["status"] == "done"
+                await asyncio.sleep(0.1)
+                assert (await c.get("/drafts/hdr-test-000001")).status_code == 404
+                assert bak.get_draft("hdr-test-000001") is not None
+    finally:
+        M.client._complete = saved

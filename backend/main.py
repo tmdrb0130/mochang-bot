@@ -79,11 +79,18 @@ async def lifespan(_: FastAPI):
     research_pipeline.extract_proc.shutdown()   # 본문 추출 프로세스 풀 정리
 
 
-async def _persisted(kind: str, form: dict, coro, owner: str | None):
-    """작업 결과를 돌려주기 전에 DB 에 남긴다. 저장 실패는 storage.record 가 삼킨다 — 결과는 항상 그대로 나간다."""
+async def _persisted(kind: str, form: dict, coro, owner: str | None, test: bool = False):
+    """작업 결과를 돌려주기 전에 DB 에 남긴다. 저장 실패는 storage.record 가 삼킨다 — 결과는 항상 그대로 나간다.
+    test=True(헤더 X-Mochang-Test) 면 서비스 DB 대신 백업 DB 에만 남긴다 (2026-09-03)."""
     result = await coro
-    await storage.record(kind, form, result, owner)
+    await storage.record(kind, form, result, owner, test=test)
     return result
+
+
+def _is_test(request: Request) -> bool:
+    """부하 테스트·E2E 스크립트가 붙이는 헤더. 실제 사용자(브라우저)는 안 붙이므로 서비스 DB 에 남는다."""
+    v = str(request.headers.get("x-mochang-test") or "").strip().lower()
+    return v not in ("", "0", "false", "no")
 
 
 app = FastAPI(title="modoo-writer backend", lifespan=lifespan)
@@ -196,15 +203,15 @@ async def _with_idea_research(form: dict) -> dict:
     return found
 
 
-async def _intake_full(form: dict, owner: str | None) -> dict:
+async def _intake_full(form: dict, owner: str | None, test: bool = False) -> dict:
     """인테이크 전체: 아이디어 공통 웹 조사 → 카드 생성 → research 요약 첨부. 동기 /intake 와 /jobs/intake 가 같이 쓴다.
     (2026-09-03 이전엔 /jobs/intake 가 조사 없이 카드만 만들어 근거 없는 보기가 나왔다.)
 
     카드 생성은 research_client(조사 클라이언트)로 돌린다 — 본문 생성이 채운 본문 큐 뒤에서 기다리지 않게(40명 실측: 최대 3분 47초),
     그리고 vLLM 우선순위(extra.priority)가 조사와 같은 '높음'이 되게. 지금은 조사·본문 모델이 같은 Qwen 이라 품질 차이는 없다."""
     found = await _with_idea_research(form)
-    await storage.record("idea_research", form, found, owner)     # research 테이블 (question_id = "idea")
-    out = await _persisted("intake", form, intake.run_intake(research_client, form), owner)
+    await storage.record("idea_research", form, found, owner, test=test)     # research 테이블 (question_id = "idea")
+    out = await _persisted("intake", form, intake.run_intake(research_client, form), owner, test)
     out["research"] = {"facts": found.get("facts") or [], "queries": found.get("queries") or [],
                        "backend": found.get("backend"), "cached": found.get("cached"),
                        **({"error": found["error"]} if found.get("error") else {})}
@@ -216,7 +223,7 @@ async def intake_endpoint(req: IntakeRequest, request: Request):
     """웹 조사(라마) → 슬롯별 확인/부족 판정 + 부족한 슬롯의 '보기 고르기' 카드 생성.
     보기는 조사로 확인된 사실에 근거해 만들어지고, 근거가 있으면 보기마다 source 가 붙는다.
     ready=True 면 프론트는 카드 단계를 건너뛰고 바로 생성."""
-    return await _intake_full(req.model_dump(), _client_key(request))
+    return await _intake_full(req.model_dump(), _client_key(request), _is_test(request))
 
 
 class IntakeRegenerateRequest(IntakeRequest):
@@ -273,7 +280,7 @@ async def research_endpoint(req: ResearchRequest):
 async def generate_endpoint(req: GenerateRequest, request: Request):
     form = req.model_dump()
     try:
-        return await _persisted("generate", form, generate.generate_one(client, form), _client_key(request))
+        return await _persisted("generate", form, generate.generate_one(client, form), _client_key(request), _is_test(request))
     except assemble.PromptNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -288,7 +295,7 @@ async def extend_endpoint(req: ExtendRequest, request: Request):
     form = req.model_dump()
     current = form.pop("current")
     try:
-        return await _persisted("extend", form, generate.extend_one(client, form, current), _client_key(request))
+        return await _persisted("extend", form, generate.extend_one(client, form, current), _client_key(request), _is_test(request))
     except assemble.PromptNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -380,11 +387,12 @@ async def submit_job(kind: str, body: dict, request: Request):
     model_cls, runner = _JOB_KINDS[kind]
     form = model_cls(**body).model_dump()
     owner = _client_key(request)
+    test = _is_test(request)
     q = _queue_for(kind)
     try:
         # 결과가 나오면 DB 에 남기고(아이디어·초안, storage.py) 그대로 job.result 가 된다.
         # intake 는 _intake_full 안에서 이미 저장하므로 여기서 다시 저장하지 않는다(kind 가 저장 대상이 아니어서 무해).
-        job = q.submit(lambda: _persisted(kind, form, runner(form), owner) if kind != "intake" else _intake_full(form, owner),
+        job = q.submit(lambda: _persisted(kind, form, runner(form), owner, test) if kind != "intake" else _intake_full(form, owner, test),
                        kind=kind, owner=None if kind in _UNLIMITED_KINDS else owner)
     except TooManyJobs as e:
         raise HTTPException(status_code=429, detail=str(e),

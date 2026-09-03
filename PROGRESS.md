@@ -1,3 +1,45 @@
+# PROGRESS — 2026-09-03 오후 2차 (다국어 **배포·실측** + 카드 번역 멈춤 버그 + 서비스/백업 DB 분리) — **코드 커밋됨, 재시작·재빌드 대기**
+
+> 이 절이 최신. 아래 절들은 그대로 둠.
+>
+> 13:1x 사용자가 `nssm restart mochang-api` + `npx vite build` 로 앞 절(다국어)을 배포. 번들 `index-B84m7f5W.js`, `/api/translate` 확인.
+> 그 뒤 이 절의 수정은 **아직 서버에 안 올라갔다** — 재시작(백엔드: 번역 재시도·1인칭·이어쓰기·백업 DB) + 재빌드(프론트: 카드 번역 멈춤) 필요.
+
+## 실측 (13:20~13:25, `scripts/foreign_e2e.py` — 영어 아이디어 "베트남 유학생 알바 앱", 실제 모델 호출 ≈ 45회)
+
+- 인테이크 74초: 요약·카드 4장(수익·대안·멘토링·첫 행동)·보기 **전부 한국어**. 조사 8문항 각 3초(공통 조사 캐시), 생성 8문항 3~41초, 본문 전부 한국어(한자·가나 0).
+- 카드 문구 56개 영어 번역 26초(2회 호출) 빈 항목 0, 품질 좋음. 문항 본문 영·중·일 24건 3~23초 전부 성공. 영어·중국어 품질 좋음.
+- **결함 3개 발견 → 이번에 고침**
+  1. 일본어 번역에 한국어 낱말 잔류("遵守 여부를検証" ×4) → `translate.py`: 결과가 비었거나 한글이 남으면 1회 더(평문·목록 둘 다), 프롬프트에 "한글 한 글자도 남기지 않는다". 목록 청크는 `asyncio.gather` 로 병렬(150개 = 4청크 60초 → 15~20초).
+  2. Q2 "언어 부족 **문저희가** 아니라" — `postprocess.unify_person` 의 팀 방향 치환 `제가→저희가` 가 '문제가' 안까지 바꿈 → 앞 글자가 한글이면 안 바꾸는 정규식으로. 테스트 추가.
+  3. Q8 이어쓰기에 모델의 설명 문단("기존 글은 역량… 문단을 덧붙입니다")이 본문으로 들어감 → `generate.drop_meta_paragraphs`(문단 단위 제거). 테스트 추가.
+  - 그대로 둔 것: Q2 가 "충남 아산캠퍼스" 를 지어냄(입력은 Cheonan) — 기존 환각 문제, 이번 범위 아님. Q4-1/Q8 의 라틴 문자는 D-2·TOPIK·Flutter·MVP·API 뿐이라 정상.
+
+## 사용자 관찰 "카드·정보 보태기에 번역 안 된 한국어가 남는다" → 원인·수정
+
+서버 로그로는 사용자 브라우저의 번역 작업 전부 성공(13:20 카드 35초, 13:25 초안들). 코드에서 찾은 원인: 카드 번역 effect 가 **취소 방식**이라 번역 도중 인테이크 상태가
+바뀌면(다른 보기 보기·언어 전환·조사 선반영) cleanup 이 결과를 버리고 `cardBusy` 를 못 내려 **그 뒤로 번역이 영영 안 돌았다**. 게다가 빈 결과("")를 저장본에 남겨 다음 방문에도 한국어.
+→ `App.jsx`: 진행 중 요청을 ref 로 하나만 두고 결과는 요청 당시 언어 지도에 합친다(버리지 않음). 빈 결과는 저장 안 하고 세션 안에서만 재시도 금지. 카드 화면 머리와 초안 화면 "정보 보태기" 패널에
+"문구 N개가 아직 한국어" + **번역 다시 시도** 버튼(`card.untranslated`·`card.retry`, 4개 언어). `dist-check` 빌드 통과.
+
+## 서비스용 / 백업용 DB (사용자 요청)
+
+- `backend/storage.py`: `Storage(backup=Storage(backup_url))`. 쓰기 메서드(upsert_draft·add_generation·add_research)가 백업에 미러링(마무리 작업자 경로 포함), `record(..., test=True)` 면 서비스 DB 건너뜀.
+  백업 실패는 경고만. `config.yaml storage.backup_url: sqlite:///backend/.data/mochang-backup.sqlite`, 환경변수 `MOCHANG_BACKUP_DATABASE_URL`(빈 값이면 끔). conftest 는 임시 백업 DB.
+- `backend/main.py`: 헤더 `X-Mochang-Test` → `_is_test(request)` → `_persisted`/`_intake_full`/`submit_job` 에 test 전달. `scripts/load_test.py`·`scripts/foreign_e2e.py` 가 헤더를 붙인다.
+- 스크립트: `scripts/db_copy_to_backup.py --yes`(실행함: 서비스 15건/생성 104건 → 백업), `scripts/drafts_delete.py <id앞부분> --yes`(실행함: 내 E2E 초안 `f3a165a2` 삭제 → 서비스 14건).
+- **결정 필요(사용자)**: 같은 PC IP(61.34.63.189) 의 13:22 "AI diet management app"(`72d5e24c`) 과 13:20 "AI 영화제 플랫폼"(`7fc3b43d`, 211.253.154.213) 이 사용자 본인 테스트면 `drafts_delete.py 72d5e24c 7fc3b43d --yes`.
+
+테스트 **428 passed** (translate 20, storage 백업 4, polish·auto_extend 각 1 추가).
+
+## 다음 순서
+
+1. `nssm restart mochang-api` + `cd frontend; npx vite build` (큐 빌 때). 그 뒤 English 로 카드 화면에서 "다른 보기 보기" 눌러도 번역이 이어지는지 확인.
+2. 위 결정 필요 항목(테스트 초안 2건) 처리.
+3. 40명 부하 재측정 → LOAD_TEST 5차.
+
+---
+
 # PROGRESS — 2026-09-03 오후 (외국인 지원자: 화면 언어 선택 + 초안 읽기 번역 병기 + 한국어 제출 안내) — **코드만, 재시작·재빌드 대기**
 
 > 이 절이 최신. 아래 절들은 그대로 둠.

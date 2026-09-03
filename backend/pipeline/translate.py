@@ -6,10 +6,11 @@
 신청서 본문은 **한국어로만** 만들고 제출도 한국어로 한다 — 번역은 외국인이 자기 초안을 이해하기 위한 읽기용이다.
 - 항목이 하나(문항 본문 2,000자)면 번역문만 내는 평문 모드(translate.md). JSON 으로 받으면 줄바꿈·따옴표가 깨지기 쉽다.
 - 여럿(인테이크 카드의 질문·보기·힌트)이면 번호 붙인 목록 → JSON 객체(translate_batch.md). 한 번에 BATCH 개씩 나눠 부른다.
-모델 호출: 평문 1회, 목록은 ceil(n / BATCH) 회.
+모델 호출: 평문 1회, 목록은 ceil(n / BATCH) 회(청크 병렬). 결과가 비었거나 한글이 남은 항목은 1회 더 부른다.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import re
@@ -69,8 +70,40 @@ def _numbered(items: list[str]) -> str:
     return "\n".join(f"{i}. {t.replace(chr(10), ' ')}" for i, t in enumerate(items, start=1))
 
 
+_HANGUL = re.compile(r"[가-힣]")
+
+
+def _bad(text: str) -> bool:
+    """다시 번역해야 하는 결과: 비었거나 한글이 남아 있음 (실측 2026-09-03: 일본어 번역에 '여부를' 이 그대로 남았다)."""
+    return not text.strip() or bool(_HANGUL.search(text))
+
+
+async def _plain(client: LLMClient, system: str, header: str, text: str, model: str | None) -> tuple[str, str]:
+    res = await client.complete(system, f"{header}\n{text}", model=model)
+    out = _clean_plain(res.text)
+    if _bad(out):                                     # 1회만 다시 — temperature 가 있어 두 번째는 대개 온전히 온다
+        res2 = await client.complete(system, f"{header}\n{text}", model=model)
+        out2 = _clean_plain(res2.text)
+        if not _bad(out2) or (out2.strip() and not out.strip()):
+            out = out2
+    return out, res.model
+
+
+async def _batch(client: LLMClient, system: str, header: str, items: list[str], model: str | None) -> tuple[list[str], str]:
+    res = await client.complete(system, f"{header}\n{_numbered(items)}", model=model)
+    out = _parse_batch(res.text, len(items))
+    redo = [i for i, t in enumerate(out) if _bad(t)]
+    if redo:                                          # 빈 항목·한글 잔류만 모아 1회 더
+        res2 = await client.complete(system, f"{header}\n{_numbered([items[i] for i in redo])}", model=model)
+        for i, t in zip(redo, _parse_batch(res2.text, len(redo))):
+            if not _bad(t) or (t.strip() and not out[i].strip()):
+                out[i] = t
+    return out, res.model
+
+
 async def translate_texts(client: LLMClient, texts: list[str], lang: str, model: str | None = None) -> dict:
-    """texts 를 lang 으로. → {lang, translations: [str]*len(texts), model}. 빈 항목은 호출 없이 ""."""
+    """texts 를 lang 으로. → {lang, translations: [str]*len(texts), model}. 빈 항목은 호출 없이 "".
+    목록 모드는 BATCH 개 청크를 **동시에** 부른다 (카드 150개 = 4청크 → 순차 60초가 15~20초로)."""
     code = normalize_lang(lang)
     if not isinstance(texts, list):
         raise ValueError("texts 는 문자열 목록이어야 합니다.")
@@ -79,25 +112,24 @@ async def translate_texts(client: LLMClient, texts: list[str], lang: str, model:
     items = [str(t or "")[:MAX_CHARS] for t in texts]
     todo = [i for i, t in enumerate(items) if t.strip()]
     result = [""] * len(items)
-    used_model = ""
     if not todo:
-        return {"lang": code, "translations": result, "model": used_model}
+        return {"lang": code, "translations": result, "model": ""}
 
     headers = assemble.section_headers()
     if len(todo) == 1:
         idx = todo[0]
         system = assemble.render("translate.md", lang_name=LANG_NAMES[code])
-        user = f"{headers.get('translate_source', '[원문]')}\n{items[idx]}"
-        res = await client.complete(system, user, model=model)
-        result[idx] = _clean_plain(res.text)
-        return {"lang": code, "translations": result, "model": res.model}
+        out, used = await _plain(client, system, headers.get("translate_source", "[원문]"), items[idx], model)
+        result[idx] = out
+        return {"lang": code, "translations": result, "model": used}
 
     system = assemble.render("translate_batch.md", lang_name=LANG_NAMES[code])
-    for chunk_no in range(math.ceil(len(todo) / BATCH)):
-        chunk = todo[chunk_no * BATCH:(chunk_no + 1) * BATCH]
-        user = f"{headers.get('translate_list', '[원문 목록]')}\n{_numbered([items[i] for i in chunk])}"
-        res = await client.complete(system, user, model=model)
-        used_model = res.model
-        for i, t in zip(chunk, _parse_batch(res.text, len(chunk))):
+    header = headers.get("translate_list", "[원문 목록]")
+    chunks = [todo[i * BATCH:(i + 1) * BATCH] for i in range(math.ceil(len(todo) / BATCH))]
+    outs = await asyncio.gather(*(_batch(client, system, header, [items[i] for i in ch], model) for ch in chunks))
+    used = ""
+    for ch, (out, m) in zip(chunks, outs):
+        used = m
+        for i, t in zip(ch, out):
             result[i] = t
-    return {"lang": code, "translations": result, "model": used_model}
+    return {"lang": code, "translations": result, "model": used}

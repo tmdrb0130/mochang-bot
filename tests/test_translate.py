@@ -131,3 +131,46 @@ async def test_jobs_translate_bypasses_per_ip_limit_and_returns_translations():
                 assert stats["research"]["done"] >= 6                      # 조사 큐에서 돌았다
     finally:
         M.research_client._complete = saved
+
+
+# ── 2026-09-03 실측 보정: 일본어 번역에 '여부를' 이 남았다 → 비었거나 한글이 남은 결과는 1회 더 부른다. 청크는 병렬 ──
+
+@pytest.mark.asyncio
+async def test_plain_mode_retries_once_when_hangul_remains():
+    c = FakeClient(["ビザ規定の遵守 여부를 検証", "ビザ規定の遵守の有無を検証"])
+    out = await T.translate_texts(c, ["비자 규정 준수 여부를 검증"], "ja")
+    assert out["translations"] == ["ビザ規定の遵守の有無を検証"] and len(c.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_plain_mode_keeps_first_if_retry_is_no_better():
+    c = FakeClient(["遵守 여부", ""])
+    out = await T.translate_texts(c, ["준수 여부"], "ja")
+    assert out["translations"] == ["遵守 여부"] and len(c.calls) == 2      # 빈 것보다는 한글 섞인 것이 낫다
+
+
+@pytest.mark.asyncio
+async def test_list_mode_retries_only_blank_or_hangul_items():
+    c = FakeClient([json.dumps({"1": "Who?", "2": "", "3": "Office 직장인"}), json.dumps({"1": "Students", "2": "Office workers"})])
+    out = await T.translate_texts(c, ["누구?", "학생", "직장인"], "en")
+    assert out["translations"] == ["Who?", "Students", "Office workers"]
+    assert "1. 학생" in c.calls[1]["user"] and "2. 직장인" in c.calls[1]["user"] and "누구" not in c.calls[1]["user"]
+
+
+@pytest.mark.asyncio
+async def test_list_mode_runs_chunks_concurrently(monkeypatch):
+    import asyncio
+    monkeypatch.setattr(T, "BATCH", 2)
+    state = {"running": 0, "peak": 0}
+
+    class SlowClient(FakeClient):
+        async def complete(self, system, user, model=None):
+            state["running"] += 1
+            state["peak"] = max(state["peak"], state["running"])
+            await asyncio.sleep(0.02)
+            state["running"] -= 1
+            return await super().complete(system, user, model)
+
+    c = SlowClient([json.dumps({"1": "a", "2": "b"}), json.dumps({"1": "c", "2": "d"}), json.dumps({"1": "e"})])
+    out = await T.translate_texts(c, ["ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ"], "en")
+    assert sorted(out["translations"]) == ["a", "b", "c", "d", "e"] and state["peak"] == 3

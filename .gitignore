@@ -38,3 +38,4 @@ frontend/dist-check/
 
 # switch_model.py 가 남기는 직전 설정
 backend/config.yaml.prev
+scripts/.foreign_e2e_result.json

@@ -15,6 +15,11 @@
 안 실려 오면(구 브라우저 캐시) track|idea 해시로 대신 묶는다 → 같은 아이디어 문항 9개가 한 초안이 된다.
 
 읽는 법:  .venv/Scripts/python scripts/drafts_report.py
+
+서비스용 / 백업용 두 DB (2026-09-03 사용자 결정): 백업(storage.backup_url)에는 테스트를 포함해 **전부** 남기고,
+서비스 DB(url)에는 실제 사용자가 브라우저에서 입력한 것만 남긴다. 구분은 요청 헤더 `X-Mochang-Test`(부하 테스트·E2E 스크립트가 붙임) —
+record(..., test=True) 면 서비스 DB 를 건너뛴다. 쓰기 메서드(upsert_draft·add_generation·add_research)가 백업에 미러링하므로
+마무리 작업자처럼 record 를 안 거치는 쓰기도 백업에 남는다. 백업 쓰기 실패는 서비스 쓰기에 영향을 주지 않는다.
 """
 from __future__ import annotations
 
@@ -128,16 +133,33 @@ def _loads(s: str | None, default):
 
 
 class Storage:
-    def __init__(self, url: str = DEFAULT_URL, enabled: bool = True):
+    def __init__(self, url: str = DEFAULT_URL, enabled: bool = True, backup: "Storage | None" = None):
         self.url = url
         self.enabled = enabled
         self.engine: Engine | None = None
+        self.backup = backup            # 전부 남기는 백업 저장소 (없으면 None). 백업 자신은 backup 이 None 이다.
 
     @classmethod
     def from_config(cls, config: dict) -> "Storage":
         cfg = config.get("storage") or {}
         url = os.environ.get("MOCHANG_DATABASE_URL") or cfg.get("url") or DEFAULT_URL
-        return cls(url=url, enabled=bool(cfg.get("enabled", True)))
+        enabled = bool(cfg.get("enabled", True))
+        # 백업 DB: 환경변수가 우선(빈 문자열이면 끔), 없으면 config. 같은 파일을 가리키면 이중 저장이라 백업을 끈다.
+        backup_url = os.environ.get("MOCHANG_BACKUP_DATABASE_URL")
+        if backup_url is None:
+            backup_url = str(cfg.get("backup_url") or "")
+        backup = cls(url=backup_url, enabled=enabled) if backup_url and backup_url != url else None
+        return cls(url=url, enabled=enabled, backup=backup)
+
+    def _mirror(self, what: str, fn, *args) -> None:
+        """백업 저장소에 같은 쓰기를 한 번 더. 실패해도 서비스 쓰기는 이미 끝났으므로 경고만 남긴다."""
+        b = self.backup
+        if b is None or not b.enabled or b.engine is None:
+            return
+        try:
+            fn(*args)
+        except Exception as e:
+            log.warning("백업 저장 실패 (%s): %s", what, str(e)[:200])
 
     # ── 수명 ──
     @property
@@ -179,15 +201,29 @@ class Storage:
             elif str(row[0]) != str(SCHEMA_VERSION):
                 conn.execute(schema_meta.update().where(schema_meta.c.key == "version").values(value=str(SCHEMA_VERSION)))
         self.engine = engine
+        if self.backup is not None:
+            try:
+                self.backup.init()
+            except Exception as e:          # 백업을 못 열어도 서비스 저장은 계속한다
+                log.warning("백업 저장소를 열 수 없어 백업을 끕니다 (%s): %s", self.backup.url, e)
+                self.backup = None
 
     def close(self) -> None:
         if self.engine is not None:
             self.engine.dispose()
             self.engine = None
+        if self.backup is not None:
+            self.backup.close()
 
     # ── 쓰기 (동기; 스레드에서 부른다) ──
     def upsert_draft(self, form: dict, owner: str | None = None) -> str:
-        """아이디어·입력·인테이크 답을 저장하고 draft_id 를 돌려준다. 있으면 최신 입력으로 갱신."""
+        """아이디어·입력·인테이크 답을 저장하고 draft_id 를 돌려준다. 있으면 최신 입력으로 갱신. 백업에도 같은 행."""
+        did = self._upsert_draft(form, owner)
+        if self.backup:
+            self._mirror("upsert_draft", self.backup._upsert_draft, form, owner)
+        return did
+
+    def _upsert_draft(self, form: dict, owner: str | None = None) -> str:
         assert self.engine is not None
         did = draft_id_for(form)
         now = datetime.now()
@@ -216,6 +252,13 @@ class Storage:
         return did
 
     def add_generation(self, draft_id: str, kind: str, form: dict, result: dict) -> int | None:
+        """문항 생성문 한 건. 백업에도 같은 행 (마무리 작업자가 record 없이 직접 부르는 경로 포함)."""
+        rid = self._add_generation(draft_id, kind, form, result)
+        if self.backup:
+            self._mirror("add_generation", self.backup._add_generation, draft_id, kind, form, result)
+        return rid
+
+    def _add_generation(self, draft_id: str, kind: str, form: dict, result: dict) -> int | None:
         """문항 생성/이어쓰기 결과 한 건. text 가 없으면 남기지 않는다."""
         assert self.engine is not None
         text = result.get("text") if isinstance(result, dict) else None
@@ -237,6 +280,12 @@ class Storage:
             return res.inserted_primary_key[0] if res.inserted_primary_key else None
 
     def add_research(self, draft_id: str, question_id: str, result: dict) -> int | None:
+        rid = self._add_research(draft_id, question_id, result)
+        if self.backup:
+            self._mirror("add_research", self.backup._add_research, draft_id, question_id, result)
+        return rid
+
+    def _add_research(self, draft_id: str, question_id: str, result: dict) -> int | None:
         """조사 결과 한 건 (문항 조사 또는 아이디어 공통 조사). facts 목록이 없으면(조사 실패) 남기지 않는다.
         빈 목록은 남긴다 — "조사했지만 인용할 사실이 없었다" 도 정보다."""
         assert self.engine is not None
@@ -270,12 +319,17 @@ class Storage:
             if qid:
                 self.add_research(did, qid, result)
 
-    async def record(self, kind: str, form: dict, result: Any, owner: str | None = None) -> None:
-        """요청 하나가 끝났을 때 부른다. 어떤 경우에도 예외를 올리지 않는다 — 저장 때문에 생성이 실패하면 안 된다."""
+    async def record(self, kind: str, form: dict, result: Any, owner: str | None = None, test: bool = False) -> None:
+        """요청 하나가 끝났을 때 부른다. 어떤 경우에도 예외를 올리지 않는다 — 저장 때문에 생성이 실패하면 안 된다.
+        test=True(요청 헤더 X-Mochang-Test) 면 서비스 DB 는 건너뛰고 백업에만 남긴다."""
         if not self.enabled or self.engine is None:
             return
         try:
-            await asyncio.to_thread(self._record_sync, kind, form, result, owner)
+            if test:
+                if self.backup is not None and self.backup.engine is not None:
+                    await asyncio.to_thread(self.backup._record_sync, kind, form, result, owner)
+                return
+            await asyncio.to_thread(self._record_sync, kind, form, result, owner)     # 쓰기 메서드가 백업에 미러링한다
         except Exception as e:
             log.warning("저장 실패 (%s): %s", kind, str(e)[:200])
 

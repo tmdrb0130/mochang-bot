@@ -98,3 +98,15 @@ async def test_short_question_never_triggers_extend():
     client = Client("장 본 것을 잊고 버리던 식재료를 사진 한 장으로 등록하고, 유통기한이 임박한 순서로 알려 주며 남은 재료로 만들 수 있는 요리를 추천하는 살림 도우미")
     out = await generate.generate_one(client, {**FORM, "question_id": "q1", "structure_offset": 0})
     assert out["auto_extended"] is False and len(client.systems) == 1
+
+
+def test_extend_drops_meta_paragraphs_about_the_text():
+    """2026-09-03 실측 q8: 이어쓰기 응답 첫 문단이 '기존 글은 … 문단을 덧붙입니다' 같은 설명이었다. 본문만 남긴다."""
+    from backend.pipeline.generate import drop_meta_paragraphs
+    raw = ("기존 글은 역량, 네트워크, 기술을 충분히 다루고 있어 추가할 핵심 요소가 부족합니다. 따라서 문항의 분량에 맞게 문단을 덧붙입니다.\n\n"
+           "페이스북 그룹 운영 경험은 잠재 고객의 실제 니즈를 파악하는 시장 조사 도구로 기능합니다.\n\n"
+           "또한 Flutter 개발 능력은 시제품 제작 속도를 높이는 데 기여합니다.")
+    out = drop_meta_paragraphs(raw)
+    assert out.startswith("페이스북 그룹") and "Flutter" in out and "덧붙입니다" not in out
+    assert drop_meta_paragraphs("기존 글에 이어서 작성하겠습니다.") == ""
+    assert drop_meta_paragraphs("첫 문단입니다.\n\n둘째 문단입니다.") == "첫 문단입니다.\n\n둘째 문단입니다."

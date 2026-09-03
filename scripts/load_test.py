@@ -36,7 +36,8 @@ async def run(n: int = 50, delay: float = 0.2, use_jobs: bool = False, verbose: 
     body = {"question_id": "q1", "style": "plain", "track": "tech", "idea": "부하 테스트용 아이디어 한 줄입니다"}
 
     def head(i: int) -> dict:
-        return {"X-Forwarded-For": "10.0.0.1" if same_ip else f"10.{i // 65536 % 256}.{i // 256 % 256}.{i % 256}"}
+        # X-Mochang-Test: 서비스 DB 에는 안 남기고 백업 DB 에만 (2026-09-03)
+        return {"X-Forwarded-For": "10.0.0.1" if same_ip else f"10.{i // 65536 % 256}.{i // 256 % 256}.{i % 256}", "X-Mochang-Test": "1"}
 
     async with M.lifespan(M.app):                           # 워커 기동
         transport = httpx.ASGITransport(app=M.app)

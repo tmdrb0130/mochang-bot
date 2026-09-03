@@ -240,9 +240,10 @@ def unify_person(text: str, ctx: dict) -> tuple[str, int]:
     rules = _TO_SOLO if solo_applicant(ctx) else _TO_TEAM
     changed = 0
     for old, new in rules:
-        if old in text:
-            changed += text.count(old)
-            text = text.replace(old, new)
+        # 앞 글자가 한글이면 낱말 중간이다 — '문제가'·'주제가'·'경제가' 의 '제가' 를 '저희가' 로 바꾸지 않는다 (2026-09-03 실측 "문저희가")
+        pattern = re.compile(r"(?<![가-힣])" + re.escape(old))
+        text, n = pattern.subn(new, text)
+        changed += n
     return text, changed
 
 

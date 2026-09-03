@@ -113,6 +113,10 @@ auto_extend:
 storage:
   enabled: true
   url: "sqlite:///backend/.data/mochang.sqlite"
+  # 백업 DB (2026-09-03): 테스트를 포함해 **모든** 쓰기를 한 번 더 남긴다. 위 url(서비스 DB)에는 실제 사용자 입력만 —
+  # 요청 헤더 X-Mochang-Test 가 붙은 요청(scripts/load_test.py, scripts/foreign_e2e.py)은 서비스 DB 를 건너뛴다.
+  # 환경변수 MOCHANG_BACKUP_DATABASE_URL 이 우선 (빈 문자열이면 백업 끔). 테스트 초안 삭제: scripts/drafts_delete.py
+  backup_url: "sqlite:///backend/.data/mochang-backup.sqlite"
 
 # ── 마무리 작업자 (2026-09-03, backend/finisher.py) ──
 # 학생이 생성 도중 탭을 닫으면 큐에 못 들어간 문항이 영영 비었다(실측 3/8, 7/8 에서 멈춤). 이 작업자가 1분마다 DB 를 훑어

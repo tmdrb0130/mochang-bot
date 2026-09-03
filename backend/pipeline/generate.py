@@ -380,6 +380,18 @@ def _cut_at_sentence_end(text: str, limit: int) -> str:
     return cut[:end].strip() if end > 0 else text
 
 
+# 이어쓰기 응답에 섞이는 "글에 대한 설명" 문단 (2026-09-03 실측 q8: "기존 글은 역량… 추가할 핵심 요소가 부족합니다. 따라서 … 문단을 덧붙입니다.").
+# 프롬프트가 "이어질 내용만" 이라고 해도 Qwen 이 가끔 붙인다. 본문 문장은 이런 말을 쓰지 않으므로 문단 단위로 버린다.
+_META_PARA = re.compile(r"(기존 글|기존 본문|앞의 글|이미 언급된 내용|추가할 핵심 요소|문항의 분량|문단을 덧붙|이어 쓰겠습니다|이어서 작성)")
+
+
+def drop_meta_paragraphs(text: str) -> str:
+    """이어쓰기 결과에서 메타 문단을 뺀다. 전부 메타면 빈 문자열."""
+    paras = [p for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+    kept = [p for p in paras if not _META_PARA.search(p)]
+    return "\n\n".join(kept).strip()
+
+
 async def extend_one(client: LLMClient, form: dict, current: str) -> dict:
     """기존 글 뒤에 이어질 내용만 생성해 붙여서 반환.
 
@@ -390,7 +402,7 @@ async def extend_one(client: LLMClient, form: dict, current: str) -> dict:
         return {"question_id": meta["id"], "style": form["style"], "text": current,
                 "added": "", "length": len(current), "limit": meta["limit"]}
     res = await client.complete(system, user, model=form.get("model"))
-    added = postprocess(res.text, meta["room"])
+    added = postprocess(drop_meta_paragraphs(res.text), meta["room"])
     refined: dict = {}
     if refine_settings(form).get("enabled") and added:
         added, refined = refine_mod.refine(added, refine_ctx(form, meta, current=current))
