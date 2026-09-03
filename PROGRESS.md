@@ -11,7 +11,7 @@
   머리말에 무중단 적용 순서·되돌리기·selector 패치 함정.
 - `k8s/vllm-qwen-deployment.yaml` — 기존 GPU2 배포 템플릿에도 `serving=qwen`, Service selector 를 `{serving: qwen}` 으로.
 - `k8s/backup/vllm-llama-2026-09-03.yaml` — 지운 라마 배포·서비스 원본(image 가 `latest` 라 재생성 때는 digest 로 바꿔야 한다).
-- `backend/config.yaml` — 본문·조사 워커 **40 → 80** (포화점 40 은 GPU 1장 기준). **아직 미적용: `nssm restart mochang-api` 필요.**
+- `backend/config.yaml` — 본문·조사 워커 **40 → 80** (포화점 40 은 GPU 1장 기준). 11:1x 사용자가 `nssm restart mochang-api` → `/health` max_workers 80 확인, 적용됨.
 - `tests/test_load.py` — "동시 50 = 워커 수" 가정을 `max_workers + 20` 요청으로. 392 passed.
 
 ## 서버 적용 (2026-09-03 10:44~10:57, 사용자 영향 0 — API 큐 비어 있을 때, 4xx/5xx 0건)
@@ -37,7 +37,7 @@ vLLM 직접 호출로 두 파드 응답 확인만 했다(짧은 프롬프트 7�
 
 ## 다음 순서
 
-1. 사용자: 큐가 빈 때(`/health` running 0·queued 0) 관리자 창에서 `nssm restart mochang-api` → 워커 80/80 적용 (5초 끊김, 진행 중 작업 소실).
+1. ~~재시작~~ 완료(11:1x). 커밋 push 는 이 세션에서 credential 창이 안 떠 사용자가 직접.
 2. `scripts/live_load_test.py` 40명 재측정 → LOAD_TEST 문서에 5차로 추가. 워커 80 이 맞는지(포화 무릎) 확인, 필요하면 60~100 조정.
 3. 그다음 손잡이: 문항당 여러 번 나가는 4천 토큰 프롬프트(본문·폴리시·이어쓰기) 합치기 → 같은 GPU 로 1.3~1.5배.
 
