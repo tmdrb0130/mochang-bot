@@ -23,6 +23,9 @@
 4. 10:52 기존 배포 apply(Recreate) → GPU2 파드 4분 재시작, 그동안 GPU1 파드가 혼자 받음 → 10:56 둘 다 ready=true.
 5. 터널 30801 로 생성 6건 → GPU2 4건 · GPU1 2건 으로 분배 확인. GPU1·GPU2 각 88 GB 점유.
 
+- 11:3x `scripts/db_views.sql` — 초안 DB 에 조인 뷰 `v_progress`(초안별 현황·카드 답·문항별 글자수) / `v_outputs`(생성문 목록) 생성.
+  DB Browser 읽기 전용에서 Browse Data 로 본다. 스키마 테이블은 안 건드림.
+
 ## 실호출 여부
 
 vLLM 직접 호출로 두 파드 응답 확인만 했다(짧은 프롬프트 7건). 앱을 통한 40명 재측정은 아직 안 함.
