@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.stdout.reconfigure(encoding="utf-8")     # cp949 콘솔에서 "—" 출력 오류 방지 (drafts_report 와 같게)
 
 from backend import storage as S  # noqa: E402
 from backend.llm.client import load_config  # noqa: E402
