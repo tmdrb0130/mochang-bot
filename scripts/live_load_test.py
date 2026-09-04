@@ -25,6 +25,7 @@ import re
 import statistics
 import sys
 import time
+import uuid
 
 import httpx
 
@@ -67,8 +68,11 @@ SALT = ""   # --salt: 아이디어 끝에 붙여 조사 캐시(7일)를 피한�
 def make_user(i: int) -> dict:
     name, idea = BASE_IDEAS[i % len(BASE_IDEAS)]
     extra, team, cap, biz, cur = VARIANTS[(i // len(BASE_IDEAS)) % len(VARIANTS)]
+    # draft_id: 프론트가 crypto.randomUUID() 로 만드는 것과 같은 자리 (2026-09-04).
+    # 이게 없으면 서버가 동시 작업 제한을 IP 단위로 건다(_job_owner 의 ip: 폴백) — nginx 뒤에서는 40명이 같은 IP 로
+    # 보이므로 전원이 동시 3건에 갇혀 측정이 무의미해진다. 실사용은 항상 draft_id 를 보내므로 이쪽이 맞다.
     return {"name": f"{name}#{i}", "track": "tech", "idea": idea + extra + SALT, "team": team, "capability": cap,
-            "is_business": biz, "current_item": cur}
+            "is_business": biz, "current_item": cur, "draft_id": f"load{i:04d}-{uuid.uuid4().hex[:16]}"}
 
 
 def pick_answers(cards: list[dict], mode: int) -> list[dict]:
@@ -101,6 +105,14 @@ def payload(u: dict) -> dict:
     return {k: v for k, v in u.items() if k != "name"}
 
 
+def adopt_key(form: dict, snap: dict) -> None:
+    """응답에 실려 온 초안 접근 열쇠(draft_key)를 폼에 보관한다 — 프론트 App.jsx 의 adoptDraftKey 와 같은 역할 (2026-09-04).
+    이걸 안 하면 두 번째 요청부터 서버가 저장을 거부해 실사용과 다른 조건이 된다."""
+    key = ((snap or {}).get("result") or {}).get("draft_key")
+    if key:
+        form["draft_key"] = key
+
+
 async def job(c: httpx.AsyncClient, kind: str, body: dict, hdr: dict) -> dict:
     """/jobs/{kind} 제출(429 면 프론트처럼 잠시 뒤 재시도) → 2.5초 폴링 → 최종 snapshot (+ _position: 제출 때 순번)."""
     for _ in range(120):
@@ -120,12 +132,20 @@ async def job(c: httpx.AsyncClient, kind: str, body: dict, hdr: dict) -> dict:
 
 async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> dict:
     u = make_user(i)
-    hdr = {"X-Forwarded-For": f"10.99.{i // 250}.{i % 250 + 1}"}
+    # X-Mochang-Test: 서비스 DB 를 건너뛰고 백업 DB 에만 is_test=1 로 남긴다 (2026-09-04 추가).
+    #   이게 없으면 부하 테스트 40명이 실사용 초안 사이에 섞이고, 삭제 도구(drafts_delete.py)로도 지울 수 없다.
+    # X-Forwarded-For: 예전에는 사용자마다 다른 IP 를 흉내 냈지만, nginx 가 실제 IP 를 XFF 맨 뒤에 덧붙이고
+    #   서버가 마지막 항목을 쓰므로(2026-09-04) 공개 주소로 쏘면 40명이 전부 같은 IP 로 보인다.
+    #   즉 이 테스트는 이제 "같은 공인 IP 40명"(강의실) 시나리오다 — 초안 단위 제한과 IP 천장을 함께 검증한다.
+    hdr = {"X-Forwarded-For": f"10.99.{i // 250}.{i % 250 + 1}", "X-Mochang-Test": "1"}
+    # 폼 하나를 끝까지 이어 쓴다 (열쇠가 여기에 쌓인다)
+    form = payload(u)
     rec = {"user": i, "name": u["name"], "t0": round(time.time() - t_start, 1)}
     # ① 인테이크 (/jobs/intake + 폴링 — 2026-09-03 프론트와 같음)
     t = time.time()
     try:
-        s = await job(c, "intake", payload(u), hdr)
+        s = await job(c, "intake", form, hdr)
+        adopt_key(form, s)
         it = s.get("result") or {}
         if s["status"] != "done":
             raise RuntimeError(s.get("error") or "job error")
@@ -137,7 +157,7 @@ async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> d
         rec["intake"] = {"ok": False, "sec": round(time.time() - t, 1), "error": f"{type(e).__name__}: {str(e)[:80]}"}
     # ② 카드 답
     answers = pick_answers(cards, i % 4)
-    form = {**payload(u), "answers": answers}
+    form["answers"] = answers
     # ③+④ 문항별 파이프라인 (2026-09-03 프론트 runPipeline 과 같음): 조사 3개 동시, 끝난 문항부터 생성 3개 동시.
     refs: dict[str, list] = {}
     rec["research"], rec["generate"] = {}, {}
@@ -165,6 +185,7 @@ async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> d
         body = {**form, "question_id": q, "style": "logic", "references": refs.get(q) or []}
         try:
             s = await job(c, "generate", body, hdr)
+            adopt_key(form, s)                   # 인테이크가 실패했더라도 첫 생성에서 열쇠를 받아 이어 쓴다
             text = ((s.get("result") or {}).get("text") or "")
             rec["generate"][q] = {"ok": s["status"] == "done", "sec": round(time.time() - t, 1), "position": s.get("_position"),
                                   "queued": s.get("queued_seconds"), "run": s.get("elapsed_seconds"), "chars": len(text),

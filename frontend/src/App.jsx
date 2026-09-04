@@ -561,6 +561,9 @@ export default function ModooWriter() {
       setResearchState((p) => ({ ...p, [qid]: { ...(p[qid] || {}), busy: true, error: "" } }));
       try {
         const r = await api.research(formForApi(), qid);
+        // 인테이크가 실패해 바로 생성으로 넘어온 경우 이 조사 요청이 이 초안의 첫 쓰기가 된다 —
+        // 그때 서버가 발급한 열쇠를 여기서 받아 두지 않으면 뒤따르는 생성이 저장되지 않는다 (2026-09-04).
+        adoptDraftKey(r, form.draftId);
         researchRef.current[qid] = r.facts || [];
         setResearchState((p) => ({ ...p, [qid]: { busy: false, error: "", facts: r.facts || [], queries: r.queries || [], pages: r.pages || [], backend: r.backend, cached: r.cached } }));
         setResearchWarm(true);

@@ -261,8 +261,15 @@ async def _intake_full(form: dict, owner: str | None, test: bool = False) -> dic
     카드 생성은 research_client(조사 클라이언트)로 돌린다 — 본문 생성이 채운 본문 큐 뒤에서 기다리지 않게(40명 실측: 최대 3분 47초),
     그리고 vLLM 우선순위(extra.priority)가 조사와 같은 '높음'이 되게. 지금은 조사·본문 모델이 같은 Qwen 이라 품질 차이는 없다."""
     found = await _with_idea_research(form)
-    await storage.record("idea_research", form, found, owner, test=test)     # research 테이블 (question_id = "idea")
+    # 쓰기 순서 주의 (2026-09-04 스모크 테스트에서 잡은 버그): **클라이언트가 받는 쓰기(intake)를 먼저** 한다.
+    # 예전 순서(idea_research 먼저)에서는 그 INSERT 가 열쇠(owner_token)를 발급하는데 응답으로 나가지 않아,
+    # 바로 뒤 intake 쓰기가 "열쇠 없음"으로 거부되고 브라우저는 열쇠를 영영 못 받았다 → 그 초안의 이후 저장이 전부 막혔다.
+    # 지금 순서면 (1) 첫 응답에 draft_key 가 실리고 (2) run_intake 가 실패하면 초안 행 자체가 안 생겨,
+    # 프론트가 생성으로 넘어갈 때 그 요청이 INSERT 하며 열쇠를 받는다.
     out = await _persisted("intake", form, intake.run_intake(research_client, form), owner, test)
+    if isinstance(out, dict) and out.get("draft_key"):
+        form["draft_key"] = out["draft_key"]        # 방금 발급된 열쇠로 아래 조사 저장이 통과하게
+    await storage.record("idea_research", form, found, owner, test=test)     # research 테이블 (question_id = "idea")
     out["research"] = {"facts": found.get("facts") or [], "queries": found.get("queries") or [],
                        "backend": found.get("backend"), "cached": found.get("cached"),
                        **({"error": found["error"]} if found.get("error") else {})}

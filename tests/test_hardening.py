@@ -336,6 +336,61 @@ def test_generate_request_defaults_to_logic_style():
     assert M.GenerateRequest(question_id="q1", idea="x", draft_key="k").draft_key == "k"
 
 
+@pytest.mark.asyncio
+async def test_intake_returns_key_and_following_requests_are_saved(monkeypatch):
+    """2026-09-04 스모크 테스트에서 잡은 회귀: 새 초안의 **첫 응답에 draft_key 가 실려야** 한다.
+
+    예전 순서(_intake_full 이 idea_research 를 먼저 저장)에서는 그 INSERT 가 열쇠를 발급하는데 응답에는 안 실려,
+    바로 뒤 intake 저장이 거부되고 브라우저가 열쇠를 못 받아 **그 초안의 이후 저장이 전부 막혔다**."""
+    import httpx
+    from backend import main as M
+
+    async def fake_complete(system, user, model, extra=None):
+        if "인터뷰어" in system or "슬롯" in system:
+            return LLMResult(text='{"summary":"요약","slots":[],"cards":[]}', model=model)
+        return LLMResult(text="가짜 본문입니다. 두 번째 문장입니다.", model=model)
+
+    monkeypatch.setattr(M.client, "_complete", fake_complete)
+    monkeypatch.setattr(M.research_client, "_complete", fake_complete)
+
+    async def no_research(client, researcher, form, cfg=None, cache=None, fetch=None):
+        return {"facts": [], "queries": [], "backend": "none", "cached": False}
+    monkeypatch.setattr(M.research_pipeline, "run_idea_research", no_research)
+
+    did = "draft-firstkey-01"
+    body = {"track": "tech", "idea": "첫 응답 열쇠 확인용 아이디어", "team": "팀원 없음", "draft_id": did}
+    async with M.lifespan(M.app):
+        transport = httpx.ASGITransport(app=M.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=30) as c:
+            async def run(kind, payload):
+                r = await c.post(f"/jobs/{kind}", json=payload, headers={"X-Forwarded-For": "203.0.113.77"})
+                assert r.status_code == 200, r.text
+                jid = r.json()["job_id"]
+                for _ in range(300):
+                    snap = (await c.get(f"/jobs/{jid}")).json()
+                    if snap["status"] in ("done", "error"):
+                        return snap
+                    await asyncio.sleep(0.02)
+                raise AssertionError("작업이 끝나지 않음")
+
+            snap = await run("intake", body)
+            assert snap["status"] == "done", snap.get("error")
+            key = snap["result"].get("draft_key")
+            assert key, "인테이크 첫 응답에 draft_key 가 없다 (이 회귀가 실사용 저장을 막았다)"
+
+            # 받은 열쇠를 실어 보내면 생성문이 저장된다
+            snap2 = await run("generate", {**body, "draft_key": key, "question_id": "q1", "style": "logic"})
+            assert snap2["status"] == "done" and snap2["result"]["draft_key"] == key
+            row = (await c.get(f"/drafts/{did}?key={key}")).json()
+            assert len(row["generations"]) == 1 and row["generations"][0]["question_id"] == "q1"
+
+            # 열쇠 없이 보내면 결과는 나가지만 저장되지 않는다
+            snap3 = await run("generate", {**body, "question_id": "q2", "style": "logic"})
+            assert snap3["status"] == "done" and "draft_key" not in snap3["result"]
+            row2 = (await c.get(f"/drafts/{did}?key={key}")).json()
+            assert len(row2["generations"]) == 1, "열쇠 없는 요청이 저장돼 버렸다"
+
+
 # ────────────────────────── ④ vectorstore ──────────────────────────
 
 def test_is_sufficient_requires_a_fresh_hit_when_freshness_days_set(tmp_path):
