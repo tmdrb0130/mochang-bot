@@ -1,3 +1,27 @@
+# PROGRESS — 2026-09-04 오전 (공유 링크 별도 토큰 + 번역 상자 스크롤) — **코드만, 재시작·재빌드 대기**
+
+> 이 절이 최신. 아래 절들은 그대로 둠. 실호출 없음(모델 호출 0). 배포하려면 `nssm restart mochang-api`(스키마 4 이행: drafts.share_token 열 ALTER) + `cd frontend; npx vite build`.
+
+## 사용자 요청 2건
+
+1. **공유 링크에 DB 키(draft_id) 대신 새 키** — "링크 복사는 좋은데 디비 키값 그대로가 아니라 공유용 키를 새로 만들어 그걸로 다른 기기에서 보게".
+   - `backend/storage.py`: `drafts.share_token`(SCHEMA_VERSION 4, 기존 DB 는 init 이 `ALTER TABLE` + 인덱스). `Storage.share_token(draft_id)` — 없으면 `secrets.token_urlsafe(18)`(24자) 만들어 저장(동시 요청은 `IS NULL` 조건으로 먼저 것 유지), 백업 DB 에도 같은 값 미러. `draft_id_for_share(token)`. `get_draft` 응답에서는 토큰을 뺀다.
+   - `backend/main.py`: `POST /drafts/{id}/share` → `{draft_id, share}`, `GET /shared/{token}` → `/drafts/{id}` 와 같은 모양 + `share`. 모르는 토큰·형식 불량은 404. `GET /drafts/{id}` 는 재접속 복원용으로 그대로.
+   - 프론트: 초안 화면의 링크 문단이 **"다른 PC·폰에서 이어 볼 공유 링크 만들기"** 버튼으로 바뀜(생성이 시작된 뒤에만 보임). 누르면 토큰을 받아 `form.shareToken` 에 보관(localStorage 저장본에 같이) + 바로 복사 시도, 그 뒤엔 `?share=<token>` 링크와 복사 버튼. 아이디어가 바뀌어 새 draftId 를 매기면(`withDraft`) 토큰도 비운다.
+     `?share=` 로 열면 `api.getShared` 로 복원하고 응답의 `draft_id` 를 폼에 넣어 그 기기에서도 같은 초안으로 이어 만든다. **예전 `?draft=<id>` 링크도 그대로 열린다**(이미 복사해 간 학생 대비). 문구 4개 언어(`dr.share`·`dr.share.busy`·`dr.share.fail`, `dr.link` 문구 "공유 링크").
+   - 알아 둘 것: 공유 응답에 `draft_id` 가 실린다(받는 기기가 같은 초안으로 이어 쓰려면 필요). 링크 자체에는 안 드러난다. 토큰 재발급(무효화) UI 는 안 만듦 — 필요하면 DB 에서 `share_token` 을 NULL 로 지우고 다시 누르게 하면 된다.
+2. **외국어 화면의 초안 번역 상자가 너무 길다** → `renderTranslation` 의 번역 본문을 `max-h-56 overflow-y-auto`(약 14rem) 안에서 스크롤. 원문(한국어 textarea)은 그대로.
+
+테스트 **433 passed**(storage 3 추가: 토큰 난수·고정·백업 미러, v3 DB 이행, 엔드포인트 한 바퀴). `dist-check` 빌드 통과(번들 `index-D7BfTpwy.js`). 커밋 `fd52a20`(코드) + 문서 커밋.
+
+## 다음 순서
+
+1. 배포: `nssm restart mochang-api` + `cd frontend; npx vite build` (큐 빌 때). 재시작 때 서비스·백업 DB 에 share_token 열이 붙는다(무해, 기존 행 NULL).
+2. 배포 뒤 초안 화면에서 "공유 링크 만들기" → 폰에서 열어 같은 초안이 뜨는지, English 화면에서 번역 상자가 스크롤되는지 확인.
+3. 40명 부하 재측정 → LOAD_TEST 5차.
+
+---
+
 # PROGRESS — 2026-09-03 오후 3차 (언어 전환 시 카드 번역 유실 + 테스트 데이터 격리 완성) — **13:5x 배포 완료 (1·2·3차 모두)**
 
 > 이 절이 최신. 13:49 사용 중인 사람 없음 확인 → 사용자가 `nssm restart mochang-api` + `npx vite build`. 번들 `index-B700RxG9.js`.

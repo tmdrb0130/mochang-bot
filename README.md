@@ -130,7 +130,7 @@ http://localhost:5173 을 열면 화면 상단에 `모델: minimax/minimax-m3:fr
 ```
 mochang-bot/
 ├── backend/                    # Python · FastAPI
-│   ├── main.py                 #   API: /health /models /intake /intake/regenerate /generate /extend /research /verify /translate /jobs /drafts
+│   ├── main.py                 #   API: /health /models /intake /intake/regenerate /generate /extend /research /verify /translate /jobs /drafts /shared
 │   ├── storage.py              #   아이디어·초안 DB (SQLAlchemy, 기본 SQLite WAL) — 요청이 끝날 때 입력·생성문을 남김
 │   ├── config.yaml             #   LLM 연결 설정 (base_url / api_key / model) — 여기만 바꾸면 모델 교체
 │   ├── llm/client.py           #   OpenAI 호환 클라이언트 (OpenRouter · Ollama · vLLM · LiteLLM 공용)
@@ -233,7 +233,9 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 | `POST /jobs/{kind}` | 위 작업들을 비동기로 제출 → `{job_id, position}` (kind: generate·extend·intake·intake_regenerate·research·verify·translate) |
 | `GET /jobs/{id}` | `{status, position, result, error}` 폴링 |
 | `GET /jobs` | 큐 상태 (워커 수, 대기, 실행 중) |
-| `GET /drafts/{draft_id}` | 저장된 초안 한 벌 — 입력(아이디어·인테이크 답) + 문항별 생성 이력. 모든 요청은 끝날 때 `backend/storage.py` 가 DB 에 남긴다 (기본 SQLite `backend/.data/mochang.sqlite`, `config.yaml storage.url`/`MOCHANG_DATABASE_URL` 로 PostgreSQL 전환). **서비스 DB 에는 실제 사용자 입력만, 백업 DB(`storage.backup_url`, 기본 `mochang-backup.sqlite`)에는 전부** — 요청 헤더 `X-Mochang-Test: 1` 이 붙은 요청(사이트 주소 `?test=1` 로 연 탭, `scripts/load_test.py`, `scripts/foreign_e2e.py`)은 서비스 DB 를 건너뛰고 백업에 `is_test=1` 로 남는다. 삭제 도구 `scripts/drafts_delete.py` 는 **`is_test` 표시가 있는 행만** 지운다(실사용 행은 어떤 인자로도 안 지워짐). 최초 백업 복사 `scripts/db_copy_to_backup.py`. 목록 조회는 없음 — 운영자는 `scripts/drafts_report.py`. 응답의 `finisher: {enabled, in_progress}` 는 마무리 작업자(`backend/finisher.py`: 생성 도중 나간 학생의 빈 문항을 낮은 우선순위로 채움)가 이 초안을 채우는 중인지. 프론트는 재접속·`?draft=<id>` 링크로 이걸 받아 빈 문항을 채운다 |
+| `GET /drafts/{draft_id}` | 저장된 초안 한 벌 — 입력(아이디어·인테이크 답) + 문항별 생성 이력. 모든 요청은 끝날 때 `backend/storage.py` 가 DB 에 남긴다 (기본 SQLite `backend/.data/mochang.sqlite`, `config.yaml storage.url`/`MOCHANG_DATABASE_URL` 로 PostgreSQL 전환). **서비스 DB 에는 실제 사용자 입력만, 백업 DB(`storage.backup_url`, 기본 `mochang-backup.sqlite`)에는 전부** — 요청 헤더 `X-Mochang-Test: 1` 이 붙은 요청(사이트 주소 `?test=1` 로 연 탭, `scripts/load_test.py`, `scripts/foreign_e2e.py`)은 서비스 DB 를 건너뛰고 백업에 `is_test=1` 로 남는다. 삭제 도구 `scripts/drafts_delete.py` 는 **`is_test` 표시가 있는 행만** 지운다(실사용 행은 어떤 인자로도 안 지워짐). 최초 백업 복사 `scripts/db_copy_to_backup.py`. 목록 조회는 없음 — 운영자는 `scripts/drafts_report.py`. 응답의 `finisher: {enabled, in_progress}` 는 마무리 작업자(`backend/finisher.py`: 생성 도중 나간 학생의 빈 문항을 낮은 우선순위로 채움)가 이 초안을 채우는 중인지. 프론트는 재접속 때 이걸 받아 빈 문항을 채운다 (예전 `?draft=<id>` 링크도 아직 열린다) |
+| `POST /drafts/{draft_id}/share` | 공유 링크 토큰 `{ draft_id, share }` (2026-09-04). 처음 부르면 난수 토큰(`secrets.token_urlsafe`, DB `drafts.share_token`)을 만들어 저장하고 그 뒤로는 같은 값 — 다른 PC·폰에 주는 링크 `?share=<token>` 에 DB 키가 드러나지 않게. 백업 DB 에도 같은 토큰. 테스트 모드(`?test=1`) 초안은 서비스 DB 에 없어 404 |
+| `GET /shared/{token}` | 공유 토큰으로 초안 한 벌 (`GET /drafts/{id}` 와 같은 모양 + `share`). 프론트가 `?share=<token>` 으로 열릴 때 부른다 |
 | `POST /generate/dry-run` | 조립된 프롬프트만 반환 (프롬프트 튜닝용) |
 
 ---
