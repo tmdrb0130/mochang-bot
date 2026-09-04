@@ -1,3 +1,57 @@
+# PROGRESS — 2026-09-04 오후 (보강 묶음: 접근 열쇠·상한 개편·조사 세마포어·벡터DB 헬스체크·오프사이트 백업 + 시스템 구조도) — **코드만, 재시작·재빌드 대기**
+
+> 이 절이 최신. 아래 절들은 그대로 둠. 실호출 없음(모델 호출 0). 배포하려면 `nssm restart mochang-api`(스키마 5 이행: drafts.owner_token 열 ALTER)
+> **와** `cd frontend; npx vite build` **둘 다** (프론트가 draft_key 를 보관·전송하고 카드 재생성을 큐로 보낸다).
+> 테스트 **456 passed** (신규 `tests/test_hardening.py` 23건). `dist-check` 빌드 통과.
+
+## 배경
+
+사용자가 구조 문서(`docs/SYSTEM_ARCHITECTURE.md`, 이날 오전 작성 — 저장소 전체를 코드 단위로 해설한 23개 절)를 바탕으로 짚은 10개 문제 중 4번을 뺀 9개를
+"기존 구조(설정 config.yaml, 프롬프트 md, 코드는 조립만)를 건드리지 않는 방향" 으로 고쳤다. **분석에서 바뀐 것 하나**: nginx 50001 블록을 읽어 보니
+`X-Forwarded-For $proxy_add_x_forwarded_for` 로 이미 **실제 접속 IP 를 XFF 맨 뒤에 덧붙이고** 있어, nginx 수정 없이 백엔드가 "신뢰 프록시(127.0.0.1)에서 온
+요청이면 XFF **마지막** 항목" 을 쓰면 위조가 막힌다 → nginx 는 건드리지 않았다.
+
+## 한 것 (번호는 사용자 목록)
+
+1. **`/drafts/{id}` 접근 통제** — (a) `storage.draft_id_for` 의 sha1(track|idea) 폴백 제거 → 형식 밖 draft_id 는 **저장하지 않음**(None).
+   (b) `drafts.owner_token` (SCHEMA_VERSION 5, 기존 DB 는 init 이 ALTER). 첫 저장(INSERT) 때 `secrets.token_urlsafe(18)` 발급 → `_persisted` 가 응답에 `draft_key` 로 붙임.
+   갱신(upsert)은 `form.draft_key == owner_token` 일 때만; 열쇠 없는 옛 행은 **요청 IP == owner** 일 때만 갱신하며 그때 열쇠를 채움(과도기). 거부되면 생성문·조사도 안 남김.
+   `GET /drafts/{id}?key=`·`POST /drafts/{id}/share?key=` 는 `check_access` 실패 시 404(존재 여부도 숨김). `GET /shared/{token}` 은 `draft_key` 도 준다(받는 기기가 이어 쓸 수 있게).
+   내부 호출(`owner=None`, 마무리 작업자의 조사 저장)은 통과. 프론트: `form.draftKey` 보관(`adoptDraftKey` — 인테이크·생성·복원·공유 응답), `toPayload` 에 `draft_key`, `getDraft/shareDraft(id, key)`.
+   **알아 둘 것**: 배포 순간에 생성을 돌리던 옛 번들 탭은 열쇠를 저장하지 않아 그 뒤 요청이 서버에 저장되지 않는다(글은 브라우저에 남음). 큐가 빌 때 재시작하고 프론트 자동 새로고침(1분)이 있어 창은 작다.
+2. **translate 상한** — `_UNLIMITED_KINDS` 제거. `config.yaml translate: {max_jobs_per_client: 10, global_limit: 30, priority: 50}`. `JobQueue.submit(..., max_per_owner, max_per_ip, max_per_kind)` +
+   `active_ip/active_kind`. `LLMClient.complete(extra=)` 로 번역만 vLLM priority 50 (조사 0 < 번역 50 < 본문 100 < 마무리 200). 프론트 수정 0(429 → 5초 재시도 기존 로직).
+3. **IP 식별** — `_client_key`: 피어가 `trusted_proxies` 일 때만 XFF 의 **마지막** 항목. 동시 제한 단위를 IP → **초안(`_job_owner` = `d:<draft_id>` | `ip:<ip>`)** 으로 바꿔 강의실 NAT 통과.
+   우회 방지: `max_jobs_per_ip: 300` (IP 천장, 40명 × 6), `max_intakes_per_ip_hour: 80` (`_check_intake_rate`, 메모리 deque). `GET /jobs.your_active` 는 IP 기준(`active_ip`).
+   ⚠ `scripts/live_load_test.py` 가 XFF 로 40명을 흉내내던 방식은 nginx 뒤에서 **한 IP 로 보인다** — 이제 그 테스트가 곧 "같은 IP 40명" 테스트다. IP 천장 300 안이면 통과해야 한다.
+5. **오프사이트 백업** — `scripts/db_snapshot.py`: sqlite backup API 스냅샷 → `backend/.data/snapshots/mochang-YYYY-MM-DD.sqlite.gz` → `--remote gpu:/opt/mochang-backup` 이면 scp → 7일 보관 정리 →
+   `timing.log("db_snapshot")`. 작업 스케줄러 등록 명령은 스크립트 머리말(관리자 창, 사용자가 등록). `--dry-run` 으로 실 DB 경로·26건 확인함.
+6+7. **조사 폭주·추출 병목** — `rag/pipeline._sem(name, n)` (이벤트 루프별 세마포어): 조사 모델 호출 전역 `research.llm_concurrency: 60`, trafilatura 추출 전역 `extract_concurrency_global: 8`,
+   `extract_proc.configure(extract_pool_size: 8)` (3 → 8). 대기·실행 계측 `llm_wait_ms/llm_run_ms/llm_n/fetch_ms/extract_wait_ms/extract_run_ms/extract_n` 을 `sources` 이벤트에 → `timing_report.py` "[조사 경로 평균]".
+   **값은 5차 부하 테스트에서 측정 뒤 조정** (지금 값은 사용자 제안값).
+8. **벡터DB 오염** — `VectorStore(health_url=Ollama)`: 60초마다 `GET /api/tags`(2초), 죽어 있으면 `degraded` → `upsert_pages`·`query` 건너뜀 + `timing.log("vectorstore_degraded")`. 오프라인 임베딩은
+   `MOCHANG_ALLOW_OFFLINE_EMBEDDING=1` (conftest) 일 때만 — 운영에서 embed_model 이 비면 벡터DB 를 끈다. 문서 메타 `embed_model` 추가. `upsert_pages` 를 `threading.Lock` 으로 직렬화.
+   **결정 필요(사용자)**: 기존 `backend/.vectorstore/` 에 오프라인 임베딩 문서가 섞였을 수 있음(메타에 embed_model 없음). 비우고 재축적 권장 — 조사 캐시 7일이라 비용 낮음. 지우지는 않았다.
+9. **신선도** — `is_sufficient`: 점수 ≥0.6 이 5건 **그리고 그중 최근 `freshness_days: 90` 안 1건 이상**일 때만 웹 검색 생략. 날짜 모르는 문서는 신선하지 않다고 본다. 0 이면 예전 동작.
+10. **저장 실패 가시화** — `storage.record` 예외 → `error_count`·`last_error` + `timing.log("storage_error")`. `/health.storage {enabled, backup, error_count, last_error}`. `timing_report.py` "[저장 실패]" 절.
+사소: q7_1 을 `allocate.QUESTION_ANGLES` 에서 빼고 "의도적 미배분" 주석(RECEIVERS 와 모순 해소) · 동기 엔드포인트 7개 `sync_endpoints: false` → 404 (`Depends(_require_sync)`, 테스트는
+   `MOCHANG_SYNC_ENDPOINTS=1`), 프론트 `intakeRegenerate` 를 `/jobs/intake_regenerate` 로 · `GenerateRequest.style` 기본 `logic` · `/health.llm_reachable` (모델 서버 `/models` 2초, 30초 캐시) ·
+   `tests/test_hardening.py::test_full_stack_*` (polish+outline+refine+auto_extend 전부 ON, 가짜 모델로 8문항 한 바퀴, 마커 `full_stack`) · SSH 터널 NSSM 서비스화는 **명령만 문서화**(관리자 필요, 미적용).
+
+## 실호출 여부
+
+**없음.** 배포 뒤 확인할 것: ① 새 초안 → 초안 화면 → 새로고침 복원(열쇠로 `GET /drafts?key=`) → 공유 링크 → 폰에서 열어 이어 만들기. ② 배포 전 만든 초안(열쇠 NULL)이 같은 브라우저에서
+복원되고 이후 응답에 draft_key 가 실리는지. ③ `?test=1` 로 English 카드 번역이 여전히 도는지(초안당 10 제한). ④ `/health` 에 `llm_reachable: true`, `storage.error_count: 0`.
+⑤ 5차 부하 테스트: `live_load_test.py --users 40` 은 이제 같은 IP 40명 시나리오 — `max_jobs_per_ip` 300 안에서 429 가 없어야 하고, `timing_report` 의 "[조사 경로 평균]" 으로 세마포어 값을 정한다.
+
+## 다음 순서
+
+1. 배포: `nssm restart mochang-api` + `cd frontend; npx vite build` (큐 빌 때). 재시작 때 서비스·백업 DB 에 owner_token 열이 붙는다(무해, 기존 행 NULL).
+2. 위 ①~④ 확인 → `schtasks` 로 `db_snapshot.py --remote gpu:/opt/mochang-backup` 매일 등록(먼저 `ssh gpu "mkdir -p /opt/mochang-backup"`) → (선택) 터널 NSSM 서비스화.
+3. 벡터DB 재축적 여부 결정 → 5차 부하 테스트(같은 IP 40명) → 세마포어·천장 값 조정 → LOAD_TEST 문서 5차 기록.
+
+---
+
 # PROGRESS — 2026-09-04 오전 (공유 링크 별도 토큰 + 번역 상자 스크롤) — **코드만, 재시작·재빌드 대기**
 
 > 이 절이 최신. 아래 절들은 그대로 둠. 실호출 없음(모델 호출 0). 배포하려면 `nssm restart mochang-api`(스키마 4 이행: drafts.share_token 열 ALTER) + `cd frontend; npx vite build`.

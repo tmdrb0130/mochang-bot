@@ -14,6 +14,9 @@ export function toPayload(form) {
     ...(form.answers?.length ? { answers: form.answers } : {}),
     // 신청서 한 벌을 묶는 키 — 서버가 아이디어·인테이크 답·문항별 초안을 이 id 로 저장한다 (backend/storage.py).
     ...(form.draftId ? { draft_id: form.draftId } : {}),
+    // 초안 접근 열쇠 (2026-09-04). 첫 저장 응답(draft_key)으로 받아 저장본에 두고 이후 모든 요청에 실어 보낸다 —
+    // 없거나 틀리면 서버가 그 초안을 갱신하지 않는다 (남의 초안 덮어쓰기 방지).
+    ...(form.draftKey ? { draft_key: form.draftKey } : {}),
   };
 }
 
@@ -67,9 +70,10 @@ export function intake(form, opts) {
 }
 
 /** 카드 재생성: 보기가 안 맞는 슬롯만 다시 → { cards[슬롯별 새 카드], slots, model, error? }
- *  seen: { slot: [이미 보여준 보기 label] } — 같은 보기는 백엔드가 걸러냄. keep: { slot: [{label,hint}] } 이미 고른 보기(유지). note: 메모(선택). */
-export function intakeRegenerate(form, slots, seen, note = "", keep = {}) {
-  return post("/intake/regenerate", { ...toPayload(form), slots, seen, note, keep });
+ *  seen: { slot: [이미 보여준 보기 label] } — 같은 보기는 백엔드가 걸러냄. keep: { slot: [{label,hint}] } 이미 고른 보기(유지). note: 메모(선택).
+ *  2026-09-04: 동기 /intake/regenerate 는 운영에서 닫혔다(sync_endpoints: false) → 작업 큐 /jobs/intake_regenerate 로. 응답 형태는 같다. */
+export function intakeRegenerate(form, slots, seen, note = "", keep = {}, opts) {
+  return runJob("intake_regenerate", { ...toPayload(form), slots, seen, note, keep }, opts);
 }
 
 /** 웹 조사: 검색어 생성 → 검색 → 본문 추출 → 출처 검증된 사실 목록.
@@ -162,19 +166,22 @@ export function extend(form, questionId, styleId, current, references = null, op
   return runJob("extend", { ...toPayload(form), question_id: questionId, style: styleId, current, ...(references?.length ? { references } : {}) }, opts);
 }
 
-/** 저장된 초안 한 벌 → { draft_id, idea, track, is_business, current_item, team, capability, answers, generations: [...], finisher: { enabled, in_progress } }
- *  재접속 복원·개인 링크(?draft=id)·마무리 작업자 결과 받기(2026-09-03)에 쓴다. 없으면 404. */
-export function getDraft(draftId) {
-  return request(`/drafts/${encodeURIComponent(draftId)}`);
+const keyQuery = (key) => (key ? `?key=${encodeURIComponent(key)}` : "");
+
+/** 저장된 초안 한 벌 → { draft_id, idea, track, is_business, current_item, team, capability, answers, generations: [...], finisher: { enabled, in_progress }, draft_key }
+ *  재접속 복원·개인 링크(?draft=id)·마무리 작업자 결과 받기(2026-09-03)에 쓴다. 없으면 404.
+ *  2026-09-04: 접근 열쇠(key = form.draftKey)가 맞아야 한다. 열쇠 없는 옛 초안은 같은 IP 에서만 열리고 응답의 draft_key 로 열쇠를 받는다. */
+export function getDraft(draftId, key) {
+  return request(`/drafts/${encodeURIComponent(draftId)}${keyQuery(key)}`);
 }
 
 /** 공유 링크 토큰 (2026-09-04) → { draft_id, share }. 처음 부르면 만들고 그 뒤로는 같은 값.
- *  다른 PC·폰에 주는 링크(?share=<token>)에 DB 키(draft_id)가 드러나지 않게 따로 둔다. 테스트 모드 초안은 404. */
-export function shareDraft(draftId) {
-  return request(`/drafts/${encodeURIComponent(draftId)}/share`, { method: "POST" });
+ *  다른 PC·폰에 주는 링크(?share=<token>)에 DB 키(draft_id)가 드러나지 않게 따로 둔다. 주인(열쇠)만 만들 수 있다. 테스트 모드 초안은 404. */
+export function shareDraft(draftId, key) {
+  return request(`/drafts/${encodeURIComponent(draftId)}/share${keyQuery(key)}`, { method: "POST" });
 }
 
-/** 공유 토큰으로 초안 한 벌 → getDraft 와 같은 모양 + share. 없으면 404. */
+/** 공유 토큰으로 초안 한 벌 → getDraft 와 같은 모양 + share + draft_key(이어 쓸 열쇠). 없으면 404. */
 export function getShared(token) {
   return request(`/shared/${encodeURIComponent(token)}`);
 }

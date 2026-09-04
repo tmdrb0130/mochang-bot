@@ -22,7 +22,10 @@ ANGLE_LABEL = {
     "pricing": "유사 서비스의 과금·가격대·지불 행태·시장 규모",
     "trend": "산업·시장의 변화",
 }
-QUESTION_ANGLES = {"q2": ("problem",), "q3_1": ("competitor",), "q3_2": ("pricing",), "q7_1": ("problem",)}
+# q7_1(사업자 전용 "기존 사업과의 차이")은 **의도적으로 근거를 배분하지 않는다** — 기존 사업과 새 아이디어의 관계는
+# 지원자 입력으로만 쓸 수 있는 내용이고, 지금은 UI 에서 사업자 선택을 빼 두어 만들어지지도 않는다.
+# 사업자 기능을 되살릴 때 근거가 필요하면 여기와 RECEIVERS 에 같이 넣는다 (한쪽만 넣으면 for_question 이 [] 를 준다).
+QUESTION_ANGLES = {"q2": ("problem",), "q3_1": ("competitor",), "q3_2": ("pricing",)}
 RECEIVERS = ("q2", "q3_1", "q3_2")            # 근거를 받는 긴 문항 (순서 = trend·미분류 사실을 돌려 주는 순서)
 MAX_PER_QUESTION = 3
 

@@ -73,37 +73,46 @@ def _numbered(items: list[str]) -> str:
 _HANGUL = re.compile(r"[가-힣]")
 
 
+def _kw(extra: dict | None) -> dict:
+    """extra 가 있을 때만 complete(extra=...) 를 넘긴다 — 테스트의 가짜 클라이언트는 그 인자를 모른다."""
+    return {"extra": extra} if extra else {}
+
+
 def _bad(text: str) -> bool:
     """다시 번역해야 하는 결과: 비었거나 한글이 남아 있음 (실측 2026-09-03: 일본어 번역에 '여부를' 이 그대로 남았다)."""
     return not text.strip() or bool(_HANGUL.search(text))
 
 
-async def _plain(client: LLMClient, system: str, header: str, text: str, model: str | None) -> tuple[str, str]:
-    res = await client.complete(system, f"{header}\n{text}", model=model)
+async def _plain(client: LLMClient, system: str, header: str, text: str, model: str | None,
+                 extra: dict | None = None) -> tuple[str, str]:
+    res = await client.complete(system, f"{header}\n{text}", model=model, **_kw(extra))
     out = _clean_plain(res.text)
     if _bad(out):                                     # 1회만 다시 — temperature 가 있어 두 번째는 대개 온전히 온다
-        res2 = await client.complete(system, f"{header}\n{text}", model=model)
+        res2 = await client.complete(system, f"{header}\n{text}", model=model, **_kw(extra))
         out2 = _clean_plain(res2.text)
         if not _bad(out2) or (out2.strip() and not out.strip()):
             out = out2
     return out, res.model
 
 
-async def _batch(client: LLMClient, system: str, header: str, items: list[str], model: str | None) -> tuple[list[str], str]:
-    res = await client.complete(system, f"{header}\n{_numbered(items)}", model=model)
+async def _batch(client: LLMClient, system: str, header: str, items: list[str], model: str | None,
+                 extra: dict | None = None) -> tuple[list[str], str]:
+    res = await client.complete(system, f"{header}\n{_numbered(items)}", model=model, **_kw(extra))
     out = _parse_batch(res.text, len(items))
     redo = [i for i, t in enumerate(out) if _bad(t)]
     if redo:                                          # 빈 항목·한글 잔류만 모아 1회 더
-        res2 = await client.complete(system, f"{header}\n{_numbered([items[i] for i in redo])}", model=model)
+        res2 = await client.complete(system, f"{header}\n{_numbered([items[i] for i in redo])}", model=model, **_kw(extra))
         for i, t in zip(redo, _parse_batch(res2.text, len(redo))):
             if not _bad(t) or (t.strip() and not out[i].strip()):
                 out[i] = t
     return out, res.model
 
 
-async def translate_texts(client: LLMClient, texts: list[str], lang: str, model: str | None = None) -> dict:
+async def translate_texts(client: LLMClient, texts: list[str], lang: str, model: str | None = None,
+                          extra: dict | None = None) -> dict:
     """texts 를 lang 으로. → {lang, translations: [str]*len(texts), model}. 빈 항목은 호출 없이 "".
-    목록 모드는 BATCH 개 청크를 **동시에** 부른다 (카드 150개 = 4청크 → 순차 60초가 15~20초로)."""
+    목록 모드는 BATCH 개 청크를 **동시에** 부른다 (카드 150개 = 4청크 → 순차 60초가 15~20초로).
+    extra: 모델 호출에 덧붙일 extra_body — main 이 config.yaml translate.priority 를 넣어 조사(0)보다 뒤, 생성(100)보다 앞에 세운다."""
     code = normalize_lang(lang)
     if not isinstance(texts, list):
         raise ValueError("texts 는 문자열 목록이어야 합니다.")
@@ -119,14 +128,14 @@ async def translate_texts(client: LLMClient, texts: list[str], lang: str, model:
     if len(todo) == 1:
         idx = todo[0]
         system = assemble.render("translate.md", lang_name=LANG_NAMES[code])
-        out, used = await _plain(client, system, headers.get("translate_source", "[원문]"), items[idx], model)
+        out, used = await _plain(client, system, headers.get("translate_source", "[원문]"), items[idx], model, extra)
         result[idx] = out
         return {"lang": code, "translations": result, "model": used}
 
     system = assemble.render("translate_batch.md", lang_name=LANG_NAMES[code])
     header = headers.get("translate_list", "[원문 목록]")
     chunks = [todo[i * BATCH:(i + 1) * BATCH] for i in range(math.ceil(len(todo) / BATCH))]
-    outs = await asyncio.gather(*(_batch(client, system, header, [items[i] for i in ch], model) for ch in chunks))
+    outs = await asyncio.gather(*(_batch(client, system, header, [items[i] for i in ch], model, extra) for ch in chunks))
     used = ""
     for ch, (out, m) in zip(chunks, outs):
         used = m

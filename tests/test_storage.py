@@ -15,13 +15,11 @@ def _mk(tmp_path, **kw) -> S.Storage:
     return st
 
 
-def test_draft_id_uses_frontend_uuid_or_falls_back_to_hash():
+def test_draft_id_uses_frontend_uuid_or_none():
     assert S.draft_id_for({"draft_id": "0b1c9f2e-9d1a-4f42-8c1e-1234567890ab", "idea": "x"}) == "0b1c9f2e-9d1a-4f42-8c1e-1234567890ab"
-    # 형식 밖 값(짧음·공백·따옴표)은 무시하고 해시로
-    a = S.draft_id_for({"draft_id": "bad id!", "track": "tech", "idea": "  캠핑장 빈자리 알림  "})
-    b = S.draft_id_for({"track": "tech", "idea": "캠핑장 빈자리 알림"})
-    assert a == b and a.startswith("h") and len(a) == 24
-    assert S.draft_id_for({"track": "local", "idea": "캠핑장 빈자리 알림"}) != b       # 트랙이 다르면 다른 초안
+    # 형식 밖 값(짧음·공백·따옴표)·없음 → None. 2026-09-04 이전의 sha1(track|idea) 대체는 아이디어로 키가 계산되는 구멍이라 없앴다.
+    assert S.draft_id_for({"draft_id": "bad id!", "track": "tech", "idea": "  캠핑장 빈자리 알림  "}) is None
+    assert S.draft_id_for({"track": "tech", "idea": "캠핑장 빈자리 알림"}) is None
 
 
 def test_upsert_draft_then_generations_roundtrip(tmp_path):
@@ -67,8 +65,11 @@ def test_concurrent_first_requests_do_not_error(tmp_path):
 @pytest.mark.asyncio
 async def test_record_swallows_failures_and_respects_enabled(tmp_path):
     st = _mk(tmp_path)
-    await st.record("generate", {"idea": "x", "track": "tech"}, {"question_id": "q1", "text": "t"})
-    assert len(st.get_draft(S.draft_id_for({"idea": "x", "track": "tech"}))["generations"]) == 1
+    info = await st.record("generate", {"idea": "x", "track": "tech", "draft_id": "draft-rec-000001"}, {"question_id": "q1", "text": "t"})
+    assert info["draft_id"] == "draft-rec-000001" and len(info["draft_key"]) >= 16
+    assert len(st.get_draft("draft-rec-000001")["generations"]) == 1
+    assert await st.record("generate", {"idea": "x", "track": "tech"}, {"text": "t"}) is None   # draft_id 없음 → 저장 안 함(해시 대체 없음)
+    assert st.list_drafts() and len(st.list_drafts()) == 1
     await st.record("generate", {"track": "tech"}, {"text": "t"})                    # idea 없음 → 조용히 무시
     st.close()
     await st.record("generate", {"idea": "x", "track": "tech"}, {"text": "t"})       # 엔진 닫힘 → 예외 없음
@@ -117,16 +118,25 @@ async def test_job_generate_is_saved_and_readable(monkeypatch):
                 await asyncio.sleep(0.02)
             assert snap["status"] == "done" and snap["result"]["text"]
 
-            row = (await c.get(f"/drafts/{did}")).json()
+            # 접근 열쇠 (2026-09-04): 응답의 draft_key 가 맞아야 읽힌다. 열쇠 없이는 같은 IP 라도 404(존재 여부도 숨김),
+            # 열쇠가 맞으면 다른 IP 에서도 열린다(다른 기기 이어 보기). 열쇠 없는 옛 초안의 IP 규칙은 test_owner_token_* 에서 본다.
+            key = snap["result"]["draft_key"]
+            assert len(key) >= 16
+            assert (await c.get(f"/drafts/{did}", headers={"X-Forwarded-For": "203.0.113.9"})).status_code == 404
+            assert (await c.get(f"/drafts/{did}?key=wrong-key-000000000", headers={"X-Forwarded-For": "203.0.113.9"})).status_code == 404
+            row = (await c.get(f"/drafts/{did}?key={key}", headers={"X-Forwarded-For": "198.51.100.3"})).json()
+            assert row["draft_key"] == key
             assert row["idea"] == "저장 테스트 아이디어" and row["capability"] == "웹 개발 3년"
             assert row["owner"] == "203.0.113.9"
             assert len(row["generations"]) == 1
             assert row["generations"][0]["question_id"] == "q1" and row["generations"][0]["text"] == snap["result"]["text"]
 
-            # 동기 /generate 도 같은 초안에 쌓인다 (draft_id 없이 보내면 해시로 묶이므로 다른 초안)
-            r2 = await c.post("/generate", json=body)
-            assert r2.status_code == 200
-            assert len((await c.get(f"/drafts/{did}")).json()["generations"]) == 2
+            # 동기 /generate(테스트에서만 열림) 도 같은 초안에 쌓인다 — 열쇠를 실어 보낼 때만. 열쇠 없는 요청은 갱신도 저장도 안 된다.
+            r2 = await c.post("/generate", json={**body, "draft_key": key}, headers={"X-Forwarded-For": "203.0.113.9"})
+            assert r2.status_code == 200 and r2.json()["draft_key"] == key
+            r3 = await c.post("/generate", json=body, headers={"X-Forwarded-For": "203.0.113.9"})     # 열쇠 없음 → 결과는 나가지만 저장 안 됨
+            assert r3.status_code == 200 and "draft_key" not in r3.json()
+            assert len((await c.get(f"/drafts/{did}?key={key}")).json()["generations"]) == 2
 
 
 # ── 서비스용 / 백업용 두 DB (2026-09-03) ──
@@ -290,18 +300,20 @@ async def test_share_endpoints_roundtrip(tmp_path):
     from backend import main as M
 
     async with M.lifespan(M.app):
-        M.storage.upsert_draft({"draft_id": "share-api-000001", "idea": "공유 API 아이디어", "track": "tech"})
+        key = M.storage.upsert({"draft_id": "share-api-000001", "idea": "공유 API 아이디어", "track": "tech"})["draft_key"]
         transport = httpx.ASGITransport(app=M.app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=30) as c:
             assert (await c.post("/drafts/no-such-draft-0001/share")).status_code == 404
-            r = await c.post("/drafts/share-api-000001/share")
+            assert (await c.post("/drafts/share-api-000001/share")).status_code == 404          # 열쇠 없이는 주인이 아니다 (2026-09-04)
+            r = await c.post(f"/drafts/share-api-000001/share?key={key}")
             assert r.status_code == 200
             tok = r.json()["share"]
-            assert tok != "share-api-000001" and (await c.post("/drafts/share-api-000001/share")).json()["share"] == tok
+            assert tok != "share-api-000001" and (await c.post(f"/drafts/share-api-000001/share?key={key}")).json()["share"] == tok
             r2 = await c.get(f"/shared/{tok}")
             assert r2.status_code == 200
             body = r2.json()
             assert body["draft_id"] == "share-api-000001" and body["idea"] == "공유 API 아이디어" and body["share"] == tok
-            assert "finisher" in body and "share_token" not in body
+            assert body["draft_key"] == key                        # 받는 기기가 같은 초안을 이어 쓸 수 있게 열쇠도 준다
+            assert "finisher" in body and "share_token" not in body and "owner_token" not in body
             assert (await c.get("/shared/" + "z" * 24)).status_code == 404
             assert (await c.get("/shared/bad")).status_code == 404

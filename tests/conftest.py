@@ -12,6 +12,10 @@ os.environ["MOCHANG_TIMING_LOG"] = str(_TEST_TIMING)
 # ② 저장소 격리 — 테스트가 backend/.data/mochang.sqlite 에 가짜 초안을 쌓지 않게 임시 DB 를 쓴다 (backend.main 이 읽는다).
 # ③ 본문 추출 프로세스 격리(backend/rag/extract_proc.py)는 끈다 — 테스트마다 프로세스를 띄우면 느리다. tests/test_extract_proc.py 만 켜서 본다.
 os.environ.setdefault("MOCHANG_EXTRACT_ISOLATION", "0")
+# ④ 동기 엔드포인트(/generate /translate …)는 운영에서 404 다(config sync_endpoints: false). 기존 테스트가 쓰므로 여기서만 연다.
+os.environ.setdefault("MOCHANG_SYNC_ENDPOINTS", "1")
+# ⑤ 오프라인 임베딩(품질 없음)은 테스트 전용 — 운영 코드 경로는 이 변수가 없으면 벡터DB 를 끈다.
+os.environ.setdefault("MOCHANG_ALLOW_OFFLINE_EMBEDDING", "1")
 os.environ["MOCHANG_DATABASE_URL"] = "sqlite:///" + Path(tempfile.mkdtemp(prefix="mochang-test-db-")).joinpath("t.sqlite").as_posix()
 # 백업 DB 도 임시로 — 안 그러면 config.yaml 의 backend/.data/mochang-backup.sqlite 에 가짜 초안이 쌓인다.
 os.environ["MOCHANG_BACKUP_DATABASE_URL"] = "sqlite:///" + Path(tempfile.mkdtemp(prefix="mochang-test-bak-")).joinpath("b.sqlite").as_posix()

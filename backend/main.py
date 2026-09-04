@@ -7,10 +7,13 @@ Q6(사업 분야)·Q10 공개 여부는 사람이 프론트에서 직접 고른�
 """
 import asyncio
 import logging
+import os
 import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+import httpx
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -27,6 +30,18 @@ from .rag.research import researcher_from_config
 
 config = load_config()
 client = LLMClient(config)
+
+# ── 접근·상한 설정 (2026-09-04, config.yaml 주석 참고) ──
+TRUSTED_PROXIES = set(str(x) for x in (config.get("trusted_proxies") or ["127.0.0.1", "::1"]))
+# 동기 엔드포인트(/intake /research /generate …)는 프론트가 쓰지 않는다 → 운영은 404. 환경변수로 개발·테스트에서만 연다.
+SYNC_ENDPOINTS = os.environ.get("MOCHANG_SYNC_ENDPOINTS", "").strip().lower() in ("1", "true", "yes") \
+    or bool(config.get("sync_endpoints", False))
+MAX_JOBS_PER_IP = int(config.get("max_jobs_per_ip") or 0)
+MAX_INTAKES_PER_IP_HOUR = int(config.get("max_intakes_per_ip_hour") or 0)
+_tr = config.get("translate") or {}
+TRANSLATE_MAX_PER_CLIENT = int(_tr.get("max_jobs_per_client") or 10)
+TRANSLATE_GLOBAL_LIMIT = int(_tr.get("global_limit") or 0)
+TRANSLATE_EXTRA = {"priority": int(_tr["priority"])} if _tr.get("priority") is not None else None
 
 # 조사(검색어 생성·사실 추출) 전용 클라이언트. config.yaml 의 research.llm 이 있으면 그 모델(로컬 70B)을 쓰고,
 # 없으면 주 클라이언트를 그대로 쓴다. 지원서 본문 작성은 항상 client(= llm:) 가 한다.
@@ -81,10 +96,19 @@ async def lifespan(_: FastAPI):
 
 async def _persisted(kind: str, form: dict, coro, owner: str | None, test: bool = False):
     """작업 결과를 돌려주기 전에 DB 에 남긴다. 저장 실패는 storage.record 가 삼킨다 — 결과는 항상 그대로 나간다.
-    test=True(헤더 X-Mochang-Test) 면 서비스 DB 대신 백업 DB 에만 남긴다 (2026-09-03)."""
+    test=True(헤더 X-Mochang-Test) 면 서비스 DB 대신 백업 DB 에만 남긴다 (2026-09-03).
+    저장됐으면 응답에 draft_key(초안 접근 열쇠)를 붙인다 — 프론트가 저장본에 보관해 이후 요청·복원에 실어 보낸다 (2026-09-04)."""
     result = await coro
-    await storage.record(kind, form, result, owner, test=test)
+    info = await storage.record(kind, form, result, owner, test=test)
+    if isinstance(result, dict) and info and info.get("draft_key"):
+        result["draft_key"] = info["draft_key"]
     return result
+
+
+def _require_sync():
+    """동기 엔드포인트 게이트 — 운영(sync_endpoints: false)에서는 404. 큐(/jobs)만이 상한·저장 규칙을 다 거친다."""
+    if not SYNC_ENDPOINTS:
+        raise HTTPException(status_code=404, detail="Not Found")
 
 
 def _is_test(request: Request) -> bool:
@@ -139,7 +163,7 @@ async def _value_error(_: Request, e: ValueError):
 
 class GenerateRequest(BaseModel):
     question_id: str          # q1, q2, q3_1, q3_2, q4_1, q4_2, q7_1, q8, q10
-    style: str = "story"      # story | logic | plain
+    style: str = "logic"      # logic | story | plain (운영 기본은 논리·근거형 — 프론트도 항상 logic 을 보낸다)
     track: str = "tech"       # tech | local
     idea: str
     is_business: bool = False
@@ -149,7 +173,27 @@ class GenerateRequest(BaseModel):
     model: str | None = None  # /models 목록 중 하나. 없으면 config.yaml 기본 모델
     answers: list[dict] | None = None  # 인테이크 카드 답변 [{slot,label,answer,unknown}] — 프롬프트에 사실/가정으로 주입
     references: list[dict] | None = None  # /research 가 돌려준 facts — [웹 참고자료] 섹션으로 주입
-    draft_id: str | None = None  # 신청서 한 벌을 묶는 키(프론트 생성 UUID). 없으면 track|idea 해시로 묶어 저장 (storage.py)
+    draft_id: str | None = None  # 신청서 한 벌을 묶는 키(프론트 생성 UUID). 형식 밖이면 저장하지 않는다 (storage.py)
+    draft_key: str | None = None  # 초안 접근 열쇠 — 첫 저장 응답의 draft_key. 없거나 틀리면 그 초안은 갱신되지 않는다 (2026-09-04)
+
+
+_llm_ping: dict = {"at": 0.0, "ok": None}
+
+
+async def _llm_reachable() -> bool | None:
+    """모델 서버(SSH 터널 → vLLM)가 응답하는지. 30초 캐시 — /health 는 프론트가 작업마다 부른다 (2026-09-04)."""
+    now = time.monotonic()
+    if now - _llm_ping["at"] < 30:
+        return _llm_ping["ok"]
+    ok: bool | None
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as c:
+            r = await c.get(client.base_url.rstrip("/") + "/models")
+        ok = r.status_code < 500
+    except Exception:
+        ok = False
+    _llm_ping.update(at=now, ok=ok)
+    return ok
 
 
 @app.get("/health")
@@ -158,6 +202,12 @@ async def health():
         "ok": True,
         "model": client.model,
         "base_url": client.base_url,
+        # 모델 서버 연결 (2026-09-04): False 면 SSH 터널(30801) 또는 vLLM 이 죽은 것 — 생성이 전부 실패한다
+        "llm_reachable": await _llm_reachable(),
+        # 저장소 (2026-09-04): 삼킨 저장 실패 수. 0 이 아니면 timing.jsonl 의 storage_error 줄과 scripts/timing_report.py 로 본다
+        "storage": {"enabled": bool(storage.enabled and storage.engine is not None),
+                    "backup": bool(storage.backup is not None and storage.backup.engine is not None),
+                    "error_count": storage.error_count, "last_error": storage.last_error},
         # 조사 단계가 쓰는 모델 (본문 작성 모델과 다를 수 있음)
         "research_model": research_client.model,
         "research_base_url": research_client.base_url,
@@ -185,6 +235,7 @@ class IntakeRequest(BaseModel):
     capability: str = ""
     model: str | None = None
     draft_id: str | None = None
+    draft_key: str | None = None
 
 
 async def _with_idea_research(form: dict) -> dict:
@@ -218,7 +269,7 @@ async def _intake_full(form: dict, owner: str | None, test: bool = False) -> dic
     return out
 
 
-@app.post("/intake")
+@app.post("/intake", dependencies=[Depends(_require_sync)])
 async def intake_endpoint(req: IntakeRequest, request: Request):
     """웹 조사(라마) → 슬롯별 확인/부족 판정 + 부족한 슬롯의 '보기 고르기' 카드 생성.
     보기는 조사로 확인된 사실에 근거해 만들어지고, 근거가 있으면 보기마다 source 가 붙는다.
@@ -238,7 +289,7 @@ def _regenerate_form(f: dict) -> dict:
     return {k: v for k, v in f.items() if k not in ("slots", "seen", "note", "keep")}
 
 
-@app.post("/intake/regenerate")
+@app.post("/intake/regenerate", dependencies=[Depends(_require_sync)])
 async def intake_regenerate_endpoint(req: IntakeRegenerateRequest):
     """지원자가 '보기가 안 맞아요'라고 한 슬롯의 카드만 다시 생성 (LLM 1회). → {cards, slots, model, error?}
     프론트는 돌아온 cards 를 슬롯 기준으로 기존 카드와 바꿔 끼운다."""
@@ -263,9 +314,10 @@ class ResearchRequest(BaseModel):
     model: str | None = None
     answers: list[dict] | None = None
     draft_id: str | None = None
+    draft_key: str | None = None
 
 
-@app.post("/research")
+@app.post("/research", dependencies=[Depends(_require_sync)])
 async def research_endpoint(req: ResearchRequest):
     """아이디어+문항 → 검색어 생성 → 웹 검색 → 본문 추출 → 출처 있는 사실 JSON (모델 호출 2회).
     응답의 facts 를 /generate 의 references 로 넘기면 [웹 참고자료] 섹션으로 주입된다."""
@@ -276,7 +328,7 @@ async def research_endpoint(req: ResearchRequest):
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@app.post("/generate")
+@app.post("/generate", dependencies=[Depends(_require_sync)])
 async def generate_endpoint(req: GenerateRequest, request: Request):
     form = req.model_dump()
     try:
@@ -289,7 +341,7 @@ class ExtendRequest(GenerateRequest):
     current: str              # 이미 작성된 글 (이 뒤에 이어 씀)
 
 
-@app.post("/extend")
+@app.post("/extend", dependencies=[Depends(_require_sync)])
 async def extend_endpoint(req: ExtendRequest, request: Request):
     """기존 글 뒤에 새 근거·사례·계획만 이어 쓰고, 합친 전체 글을 반환."""
     form = req.model_dump()
@@ -304,7 +356,7 @@ class VerifyRequest(GenerateRequest):
     text: str                 # 검증할 생성문 (사용자가 고친 글도 가능)
 
 
-@app.post("/verify")
+@app.post("/verify", dependencies=[Depends(_require_sync)])
 async def verify_endpoint(req: VerifyRequest):
     """문항 md 의 [필수 요소] 포함 여부를 모델이 판정 → {items, missing, unsupported_claims, format_issues, score}.
     evidence 가 글에 없으면 present 를 false 로 뒤집는다 (모델 판정 재검증). 모델 호출 1회."""
@@ -323,10 +375,10 @@ class TranslateRequest(BaseModel):
     model: str | None = None
 
 
-@app.post("/translate")
+@app.post("/translate", dependencies=[Depends(_require_sync)])
 async def translate_endpoint(req: TranslateRequest):
     """→ {lang, translations: [원문과 같은 길이], model}. 실패한 항목은 ""."""
-    return await translate.translate_texts(research_client, req.texts, req.lang, req.model)
+    return await translate.translate_texts(research_client, req.texts, req.lang, req.model, extra=TRANSLATE_EXTRA)
 
 
 # ── 비동기 작업: 제출 → 작업 ID → 폴링 ──
@@ -340,17 +392,19 @@ _JOB_KINDS = {
     "intake_regenerate": (IntakeRegenerateRequest, lambda f: _intake_regenerate_full(f)),
     "research": (ResearchRequest, lambda f: research_pipeline.run_research(research_client, researcher, f, f["question_id"], research_cfg)),
     "verify": (VerifyRequest, lambda f: verify.verify_text(client, {k: v for k, v in f.items() if k != "text"}, f["question_id"], f["text"])),
-    # 번역은 조사 클라이언트(우선순위 0, 워커 80)로 — 외국인이 화면을 읽으려고 기다리는 대화형 작업이라 본문 생성 뒤에 세우지 않는다.
-    "translate": (TranslateRequest, lambda f: translate.translate_texts(research_client, f["texts"], f["lang"], f.get("model"))),
+    # 번역은 조사 클라이언트(워커 80)로 — 외국인이 화면을 읽으려고 기다리는 대화형 작업이라 본문 생성 뒤에 세우지 않는다.
+    # vLLM 우선순위는 config.yaml translate.priority(50): 조사·인테이크(0)보다 뒤, 생성(100)보다 앞 (2026-09-04).
+    "translate": (TranslateRequest, lambda f: translate.translate_texts(research_client, f["texts"], f["lang"], f.get("model"),
+                                                                        extra=TRANSLATE_EXTRA)),
 }
 # 인테이크·조사 작업은 **조사 큐**(research_client.queue, 워커 수 = research.llm.max_workers)에서 돈다.
 # 본문 큐에 넣으면 웹 검색·페이지 수집으로 수십 초씩 네트워크를 기다리는 동안 본문 워커를 점유해 생성이 굶고,
 # 반대로 생성이 몰리면 인테이크가 그 뒤에 선다(40명 실측: 카드 생성 대기 최대 3분 47초). 큐를 나누면 서로 막지 않는다.
 # 조사 큐 워커 안에서 부르는 LLM 호출은 중첩 제출 없이 바로 나간다(jobs.py _in_worker) — 동시 호출 ≤ 워커 × 페이지 동시(3).
 _RESEARCH_KINDS = {"intake", "intake_regenerate", "research", "translate"}
-# IP 당 동시 작업 제한(max_jobs_per_client)을 안 받는 종류. 번역은 조사·생성이 슬롯 3개를 다 쓰는 동안에도 들어와야 한다
-# (카드가 뜨자마자 카드 번역, 문항이 끝나자마자 본문 번역). 호출당 몇 초짜리 짧은 작업이고 storage 에도 남기지 않는다.
-_UNLIMITED_KINDS = {"translate"}
+# 번역은 조사·생성이 초안당 슬롯 3개를 다 쓰는 동안에도 들어와야 한다(카드가 뜨자마자 카드 번역, 문항이 끝나자마자 본문 번역).
+# 예전엔 제한 예외(무제한)였다 → 2026-09-04: 초안당 translate.max_jobs_per_client(10) + 서버 전체 translate.global_limit(30).
+# 정상 사용은 카드+본문을 합쳐도 동시 10건을 넘지 않고, 프론트는 429 를 받으면 5초 뒤 재시도한다.
 
 
 def _queue_for(kind: str):
@@ -366,16 +420,42 @@ def _find_job(job_id: str):
 
 
 def _client_key(request: Request) -> str:
-    """동시 작업 제한용 클라이언트 식별자. 인증이 없으므로 IP 를 쓴다.
+    """클라이언트 IP. 인증이 없으므로 IP 를 남용 추적·IP 천장·옛 초안 접근(과도기)에 쓴다.
 
-    공개 배포는 nginx(50001) 뒤라 request.client.host 가 전부 127.0.0.1 이 된다 →
-    프록시가 붙여 주는 X-Forwarded-For 의 첫 항목(원 클라이언트)을 우선 본다."""
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
-    return request.client.host if request.client else "unknown"
+    공개 배포는 nginx(50001) 뒤라 request.client.host 가 전부 127.0.0.1 이다. nginx 는
+    `X-Forwarded-For $proxy_add_x_forwarded_for` 로 **실제 접속 IP 를 맨 뒤에 덧붙이므로** 신뢰 프록시(trusted_proxies)에서 온
+    요청은 XFF 의 **마지막** 항목을 쓴다 — 클라이언트가 앞에 붙인 가짜 XFF 는 무시된다 (2026-09-04, 예전엔 첫 항목을 믿었다).
+    프록시를 거치지 않은 요청(개발 서버·직접 접속)은 접속 IP 그대로."""
+    peer = request.client.host if request.client else "unknown"
+    if peer in TRUSTED_PROXIES:
+        xff = request.headers.get("x-forwarded-for") or ""
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
+    return peer
+
+
+def _job_owner(form: dict, ip: str) -> str:
+    """동시 작업 제한(max_jobs_per_client)의 단위 — **초안(draft_id)**. 강의실처럼 같은 공인 IP 40명이 서로를 막지 않게 (2026-09-04).
+    draft_id 가 없거나 형식 밖이면 IP. 접두어로 두 종류를 구분한다."""
+    did = storage_mod.draft_id_for(form)
+    return f"d:{did}" if did else f"ip:{ip}"
+
+
+# IP 당 시간당 인테이크(= 새 초안 시작) 수 — 초안 id 를 무한히 만들어 초안 단위 제한을 우회하는 봇을 막는다. 메모리에만 둔다.
+_intake_times: dict[str, deque] = defaultdict(deque)
+
+
+def _check_intake_rate(ip: str, now: float | None = None) -> None:
+    if not MAX_INTAKES_PER_IP_HOUR:
+        return
+    now = time.time() if now is None else now
+    dq = _intake_times[ip]
+    while dq and now - dq[0] > 3600:
+        dq.popleft()
+    if len(dq) >= MAX_INTAKES_PER_IP_HOUR:
+        raise TooManyJobs(len(dq), MAX_INTAKES_PER_IP_HOUR, "ip")
+    dq.append(now)
 
 
 @app.post("/jobs/{kind}")
@@ -386,14 +466,19 @@ async def submit_job(kind: str, body: dict, request: Request):
         raise HTTPException(status_code=404, detail=f"알 수 없는 작업 종류: {kind}")
     model_cls, runner = _JOB_KINDS[kind]
     form = model_cls(**body).model_dump()
-    owner = _client_key(request)
+    ip = _client_key(request)                 # 저장(owner)·IP 천장·옛 초안 접근용
+    owner = _job_owner(form, ip)              # 동시 작업 제한 단위 (초안 → 없으면 IP)
     test = _is_test(request)
     q = _queue_for(kind)
     try:
+        if kind == "intake":
+            _check_intake_rate(ip)
+        per_owner = TRANSLATE_MAX_PER_CLIENT if kind == "translate" else None      # None = 큐 기본값(max_jobs_per_client)
+        per_kind = TRANSLATE_GLOBAL_LIMIT if kind == "translate" else 0
         # 결과가 나오면 DB 에 남기고(아이디어·초안, storage.py) 그대로 job.result 가 된다.
         # intake 는 _intake_full 안에서 이미 저장하므로 여기서 다시 저장하지 않는다(kind 가 저장 대상이 아니어서 무해).
-        job = q.submit(lambda: _persisted(kind, form, runner(form), owner, test) if kind != "intake" else _intake_full(form, owner, test),
-                       kind=kind, owner=None if kind in _UNLIMITED_KINDS else owner)
+        job = q.submit(lambda: _persisted(kind, form, runner(form), ip, test) if kind != "intake" else _intake_full(form, ip, test),
+                       kind=kind, owner=owner, ip=ip, max_per_owner=per_owner, max_per_ip=MAX_JOBS_PER_IP, max_per_kind=per_kind)
     except TooManyJobs as e:
         raise HTTPException(status_code=429, detail=str(e),
                             headers={"Retry-After": "10"})
@@ -413,9 +498,10 @@ async def get_job(job_id: str):
 async def queue_stats(request: Request):
     """본문 큐 전체 상태 + 이 클라이언트(IP)가 지금 점유 중인 작업 수(your_active). 기존 필드는 그대로.
     research 에 조사 큐(인테이크·조사 작업) 상태를 같이 준다."""
-    out = {**client.queue.stats(), "your_active": client.queue.active_for(_client_key(request))}
+    ip = _client_key(request)
+    out = {**client.queue.stats(), "your_active": client.queue.active_ip(ip)}
     if research_client is not client:
-        out["research"] = {**research_client.queue.stats(), "your_active": research_client.queue.active_for(_client_key(request))}
+        out["research"] = {**research_client.queue.stats(), "your_active": research_client.queue.active_ip(ip)}
     return out
 
 
@@ -428,19 +514,33 @@ async def _draft_row(draft_id: str) -> dict:
     return row
 
 
+async def _authorize(draft_id: str, key: str | None, request: Request) -> str:
+    """초안 접근 확인 (2026-09-04). 열쇠(draft_key)가 맞거나, 열쇠 없는 옛 초안이면 요청 IP 가 저장된 owner 와 같아야 한다.
+    아니면 404 — 존재 여부도 드러내지 않는다. 통과하면 열쇠를 돌려준다(옛 초안은 이때 열쇠가 생긴다)."""
+    if not storage.enabled or not await asyncio.to_thread(storage.check_access, draft_id, key, _client_key(request)):
+        raise HTTPException(status_code=404, detail="저장된 초안이 없습니다.")
+    return await asyncio.to_thread(storage.owner_key, draft_id) or ""
+
+
 @app.get("/drafts/{draft_id}")
-async def get_draft(draft_id: str):
+async def get_draft(draft_id: str, request: Request, key: str | None = None):
     """저장된 초안 한 벌: 입력(아이디어·인테이크 답) + 문항별 생성 이력(오래된 것부터). 재접속 복원용(이 브라우저의 draft_id).
-    draft_id 는 프론트가 만든 UUID(추측 불가) 또는 서버가 매긴 해시. 목록 조회는 두지 않는다 — 인증이 없어 남의 아이디어가
-    보이면 안 되므로 운영자는 scripts/drafts_report.py 로 본다. 다른 기기 공유는 /drafts/{id}/share → /shared/{token}."""
-    return await _draft_row(draft_id)
+    `?key=<draft_key>`(첫 저장 응답의 열쇠)가 맞아야 한다. 열쇠 없는 옛 초안은 같은 IP 에서만 열리고, 응답의 draft_key 로 열쇠를 받는다.
+    목록 조회는 두지 않는다 — 인증이 없어 남의 아이디어가 보이면 안 되므로 운영자는 scripts/drafts_report.py 로 본다.
+    다른 기기 공유는 /drafts/{id}/share → /shared/{token}."""
+    draft_key = await _authorize(draft_id, key, request)
+    row = await _draft_row(draft_id)
+    row["draft_key"] = draft_key
+    return row
 
 
 @app.post("/drafts/{draft_id}/share")
-async def share_draft(draft_id: str):
+async def share_draft(draft_id: str, request: Request, key: str | None = None):
     """공유 링크 토큰 (2026-09-04): { draft_id, share }. 처음 부르면 난수 토큰을 만들어 저장하고, 그 뒤로는 같은 값.
-    링크(`?share=<token>`)에 DB 키가 드러나지 않게 하려고 draft_id 와 별개로 둔다. 테스트 모드 초안은 서비스 DB 에 없어 404."""
-    token = await asyncio.to_thread(storage.share_token, draft_id) if storage.enabled else None
+    링크(`?share=<token>`)에 DB 키가 드러나지 않게 하려고 draft_id 와 별개로 둔다. 주인(열쇠 또는 같은 IP)만 만들 수 있다.
+    테스트 모드 초안은 서비스 DB 에 없어 404."""
+    await _authorize(draft_id, key, request)
+    token = await asyncio.to_thread(storage.share_token, draft_id)
     if not token:
         raise HTTPException(status_code=404, detail="저장된 초안이 없습니다.")
     return {"draft_id": draft_id, "share": token}
@@ -448,12 +548,14 @@ async def share_draft(draft_id: str):
 
 @app.get("/shared/{token}")
 async def get_shared(token: str):
-    """공유 토큰으로 초안 한 벌 (GET /drafts/{id} 와 같은 모양 + share). 다른 PC·폰에서 이어 보기."""
+    """공유 토큰으로 초안 한 벌 (GET /drafts/{id} 와 같은 모양 + share + draft_key). 다른 PC·폰에서 이어 보기 —
+    공유 링크는 주인이 직접 만들어 건넨 것이므로 받는 기기가 같은 초안을 이어 쓸 수 있게 열쇠도 준다."""
     did = await asyncio.to_thread(storage.draft_id_for_share, token) if storage.enabled else None
     if not did:
         raise HTTPException(status_code=404, detail="공유 링크에 해당하는 초안이 없습니다.")
     row = await _draft_row(did)
     row["share"] = token
+    row["draft_key"] = await asyncio.to_thread(storage.owner_key, did) or ""
     return row
 
 

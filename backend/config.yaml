@@ -133,10 +133,29 @@ finisher:
   max_per_tick: 5
   lookback_days: 3
 
-# 한 클라이언트(IP)가 동시에 진행할 수 있는 작업 수 (POST /jobs/{kind}). 초과하면 429.
-# 인증이 없어 IP 로 구분한다 — 한 명이 문항 9개를 연달아 눌러 큐를 독점하는 것을 막는다.
-# 0 이면 무제한. 프론트가 문항 여러 개를 동시에 돌릴 수 있으므로 너무 낮추지 말 것.
+# ── 동시 작업 상한 (POST /jobs/{kind}, 2026-09-04 개편) — 초과하면 429, 프론트는 5초 뒤 재시도한다 ──
+# max_jobs_per_client: **초안(draft_id) 단위**. 한 명이 문항 9개를 연달아 눌러 큐를 독점하는 것을 막는다.
+#   예전엔 IP 단위였는데 강의실(같은 공인 IP 40명)에서 서로를 막아 초안 단위로 바꿨다. draft_id 가 없는 요청은 IP 단위.
+#   0 이면 무제한. 프론트가 문항 3개를 동시에 돌리므로 3 아래로 내리지 말 것.
 max_jobs_per_client: 3
+# max_jobs_per_ip: IP 단위의 느슨한 천장 — 초안 id 를 무한히 만들어 위 제한을 우회하는 것을 막는다.
+#   강의실 한 반(40명 × 조사 3 + 생성 3 = 240)이 동시에 눌러도 걸리지 않게 넉넉히. 0 이면 끔. 같은 IP 부하 테스트로 확인할 것.
+max_jobs_per_ip: 300
+# max_intakes_per_ip_hour: IP 당 한 시간에 시작할 수 있는 인테이크(= 새 초안) 수. 강의실 40명은 통과하고 봇만 걸리게.
+max_intakes_per_ip_hour: 80
+# trusted_proxies: 이 주소에서 온 요청만 X-Forwarded-For 를 믿는다. nginx(50001)는 `$proxy_add_x_forwarded_for` 로
+#   실제 접속 IP 를 XFF **맨 뒤**에 덧붙이므로 백엔드는 마지막 항목을 쓴다 — 클라이언트가 앞에 붙인 가짜 값은 무시된다.
+#   nginx 를 거치지 않은 요청(개발 서버·직접 접속)은 접속 IP 를 그대로 쓴다.
+trusted_proxies: ["127.0.0.1", "::1"]
+# sync_endpoints: 큐를 거치지 않는 동기 엔드포인트(/intake /research /generate /extend /verify /translate /intake/regenerate)를 열지.
+#   프론트는 전부 /jobs/{kind} 를 쓰므로 운영은 false(404). 개발·테스트는 환경변수 MOCHANG_SYNC_ENDPOINTS=1 로 연다. /generate/dry-run 은 항상 열림.
+sync_endpoints: false
+# translate: 번역 작업 전용 상한·우선순위. 예전엔 IP 제한 예외(무제한)였다 → 초안당 10(일반 3 보다 넉넉), 서버 전체 동시 30.
+#   priority: vLLM 우선순위 — 조사·인테이크(0)보다 뒤, 본문 생성(100)보다 앞.
+translate:
+  max_jobs_per_client: 10
+  global_limit: 30
+  priority: 50
 retry:
   attempts: 3
   base_delay_seconds: 2
@@ -168,6 +187,14 @@ research:
                                                             # 실제 동시 조사 호출은 최대 6×3=18 이다. 본문 24 + 조사 18 = 42 (GPU 포화점 60 아래).
                                                             # 페이지별로 나눈 뒤 프롬프트는 짧아졌다(2만 → 3천 토큰 안팎)
 
+  # ── 조사 경로 전역 상한 (2026-09-04, 5차 부하 테스트에서 값 조정) ──
+  # 조사 워커 80 × 페이지 동시 3 = 240 이 이론상 vLLM 로 갈 수 있어 본문 생성 몫이 없어진다 →
+  # 조사용 모델 호출은 전체에서 동시 llm_concurrency 까지만(본문에 20 이상 여유), 본문 추출(trafilatura)은 extract_concurrency_global 까지만.
+  # 대기 시간은 timing.jsonl 의 sources 이벤트(llm_wait_ms·extract_wait_ms·extract_run_ms)로 본다 — 측정 뒤 값을 정한다.
+  llm_concurrency: 60
+  extract_concurrency_global: 8
+  extract_pool_size: 8           # trafilatura 프로세스 풀 크기 (extract_concurrency_global 과 같게. 프로세스당 ~100MB)
+
   cache_ttl_seconds: 604800      # 같은 검색어 결과 디스크 캐시 7일 (backend/.cache/research/)
   max_queries: 4                 # 아이디어+문항당 생성할 검색어 수 (3~5)
   max_results_per_query: 6
@@ -194,6 +221,11 @@ research:
                                  # bge-m3 로 같은 주제 문장끼리 재어 보니 0.668 이었다 (세션1 결정: 0.6)
     min_hits: 5
     max_age_days: 730
+    # 웹 검색을 생략하려면 점수 좋은 적중 min_hits 건 **그리고 그중 최근 freshness_days 안의 문서 1건 이상** (2026-09-04).
+    # 지원사업·시장 동향은 해마다 바뀌어 낡은 적중만으로 웹을 건너뛰면 안 된다. 0 이면 신선도 조건 끔.
+    freshness_days: 90
+    # Ollama(bge-m3)가 응답하지 않으면 색인·조회를 건너뛰고 웹 검색만 한다 (예전엔 품질 없는 오프라인 임베딩으로 색인이 오염됐다).
+    # 오프라인 임베딩은 테스트에서만 (환경변수 MOCHANG_ALLOW_OFFLINE_EMBEDDING=1).
 
   # 소스 서킷브레이커 (RESEARCH_PLAN 5단계, 작업 19) — 연속 fails 회 실패한 소스는 cooldown 초 동안 건너뛴다.
   # ddgs 가 봇 판정으로 막히거나 네이버가 429 를 내기 시작하면 뒤따르는 검색어가 전부 같은 벽에 부딪히는 것을 막는다.

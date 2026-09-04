@@ -221,8 +221,9 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 
 | 엔드포인트 | 역할 |
 |---|---|
-| `GET /health` | 연결 상태 · 기본 모델 · 오늘 요청 수/한도 · 큐 · `finisher`(마무리 작업자 통계, 2026-09-03) |
+| `GET /health` | 연결 상태 · 기본 모델 · 오늘 요청 수/한도 · 큐 · `finisher`(마무리 작업자 통계, 2026-09-03) · `llm_reachable`(모델 서버 응답, 30초 캐시) · `storage{enabled, backup, error_count, last_error}`(삼킨 저장 실패 수, 2026-09-04) |
 | `GET /models` | 선택 가능한 모델 목록 |
+| (동기 엔드포인트) | `POST /intake` `/intake/regenerate` `/research` `/generate` `/extend` `/verify` `/translate` 는 **운영에서 404** (`config.yaml sync_endpoints: false`, 2026-09-04). 프론트는 전부 `/jobs/{kind}` 를 쓴다. 개발·테스트는 환경변수 `MOCHANG_SYNC_ENDPOINTS=1` 로 연다. 아래 설명은 `/jobs/{kind}` 의 결과 모양이다 |
 | `POST /intake` | 아이디어 읽기: 슬롯 9개 확인/부족 판정 + 부족한 슬롯의 보기 카드 생성. `mentoring`(Q4-2) 카드는 항상 포함. `ready`는 핵심 정보 충분 여부(카드는 그래도 보여줌, 건너뛰기 가능) |
 | `POST /intake/regenerate` | 보기가 안 맞는 슬롯의 카드만 재생성 (`slots`, `seen`[이미 보여준 보기 → 금지], `keep`[이미 고른 보기 → 유지], `note`[지원자 메모], `answers`[다른 카드 답]) → `{cards, error?}` |
 | `POST /generate` | 문항 하나 생성 (`model`, `answers`[카드 답변] 선택) |
@@ -230,12 +231,12 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 | `POST /research` | 아이디어+문항 → 검색어 → 웹 검색(Vane/ddgs) → 본문 추출 → 출처 있는 사실 JSON (모델 2회). `facts` 를 `/generate` 의 `references` 로 넘기면 [웹 참고자료] 주입 |
 | `POST /verify` | 생성문이 문항 md 의 [필수 요소]를 담았는지 모델 판정 → `missing`, `unsupported_claims`, `score` |
 | `POST /translate` | 외국인 지원자용 **읽기 번역** (2026-09-03): `{lang: en|zh|ja, texts: [한국어…]}` → `{lang, translations: [같은 길이]}`. 하나면 평문 모드(문항 본문), 여럿이면 목록 모드(카드 질문·보기·힌트, 40개씩 호출). 조사 클라이언트(우선순위 0)로 돌고 IP 동시 제한을 안 받는다. 신청서는 한국어로만 만들고 제출도 한국어 — 프론트가 초안 아래에 병기할 뿐이다 (`backend/pipeline/translate.py`, `prompts/translate*.md`) |
-| `POST /jobs/{kind}` | 위 작업들을 비동기로 제출 → `{job_id, position}` (kind: generate·extend·intake·intake_regenerate·research·verify·translate) |
+| `POST /jobs/{kind}` | 위 작업들을 비동기로 제출 → `{job_id, position}` (kind: generate·extend·intake·intake_regenerate·research·verify·translate). **동시 상한(2026-09-04)**: 초안(draft_id)당 3건(`max_jobs_per_client` — 강의실처럼 같은 IP 여러 명이 서로 안 막힘) · IP 당 천장 `max_jobs_per_ip`(300) · 인테이크는 IP 당 시간당 `max_intakes_per_ip_hour`(80) · 번역은 초안당 10 + 서버 전체 30(`translate:`). 초과 시 429 + `Retry-After` (프론트가 5초 뒤 재시도). IP 는 nginx 가 덧붙인 XFF **마지막** 항목만 믿는다(`trusted_proxies`). 저장된 결과에는 `draft_key`(초안 접근 열쇠)가 실려 온다 |
 | `GET /jobs/{id}` | `{status, position, result, error}` 폴링 |
 | `GET /jobs` | 큐 상태 (워커 수, 대기, 실행 중) |
-| `GET /drafts/{draft_id}` | 저장된 초안 한 벌 — 입력(아이디어·인테이크 답) + 문항별 생성 이력. 모든 요청은 끝날 때 `backend/storage.py` 가 DB 에 남긴다 (기본 SQLite `backend/.data/mochang.sqlite`, `config.yaml storage.url`/`MOCHANG_DATABASE_URL` 로 PostgreSQL 전환). **서비스 DB 에는 실제 사용자 입력만, 백업 DB(`storage.backup_url`, 기본 `mochang-backup.sqlite`)에는 전부** — 요청 헤더 `X-Mochang-Test: 1` 이 붙은 요청(사이트 주소 `?test=1` 로 연 탭, `scripts/load_test.py`, `scripts/foreign_e2e.py`)은 서비스 DB 를 건너뛰고 백업에 `is_test=1` 로 남는다. 삭제 도구 `scripts/drafts_delete.py` 는 **`is_test` 표시가 있는 행만** 지운다(실사용 행은 어떤 인자로도 안 지워짐). 최초 백업 복사 `scripts/db_copy_to_backup.py`. 목록 조회는 없음 — 운영자는 `scripts/drafts_report.py`. 응답의 `finisher: {enabled, in_progress}` 는 마무리 작업자(`backend/finisher.py`: 생성 도중 나간 학생의 빈 문항을 낮은 우선순위로 채움)가 이 초안을 채우는 중인지. 프론트는 재접속 때 이걸 받아 빈 문항을 채운다 (예전 `?draft=<id>` 링크도 아직 열린다) |
-| `POST /drafts/{draft_id}/share` | 공유 링크 토큰 `{ draft_id, share }` (2026-09-04). 처음 부르면 난수 토큰(`secrets.token_urlsafe`, DB `drafts.share_token`)을 만들어 저장하고 그 뒤로는 같은 값 — 다른 PC·폰에 주는 링크 `?share=<token>` 에 DB 키가 드러나지 않게. 백업 DB 에도 같은 토큰. 테스트 모드(`?test=1`) 초안은 서비스 DB 에 없어 404 |
-| `GET /shared/{token}` | 공유 토큰으로 초안 한 벌 (`GET /drafts/{id}` 와 같은 모양 + `share`). 프론트가 `?share=<token>` 으로 열릴 때 부른다 |
+| `GET /drafts/{draft_id}?key=<draft_key>` | 저장된 초안 한 벌 — 입력(아이디어·인테이크 답) + 문항별 생성 이력. **접근 열쇠 필요(2026-09-04)**: 첫 저장 응답의 `draft_key` 가 맞아야 하고 틀리면 404(존재 여부도 숨김). 열쇠 열이 생기기 전의 옛 초안은 같은 IP 에서만 열리고 응답의 `draft_key` 로 열쇠를 받는다. 같은 열쇠를 모든 요청의 `draft_key` 로 보내야 그 초안이 갱신된다(남의 초안 덮어쓰기 방지). 형식 밖 `draft_id` 는 저장하지 않는다(예전 track|idea 해시 대체 제거). 모든 요청은 끝날 때 `backend/storage.py` 가 DB 에 남긴다 (기본 SQLite `backend/.data/mochang.sqlite`, `config.yaml storage.url`/`MOCHANG_DATABASE_URL` 로 PostgreSQL 전환). **서비스 DB 에는 실제 사용자 입력만, 백업 DB(`storage.backup_url`, 기본 `mochang-backup.sqlite`)에는 전부** — 요청 헤더 `X-Mochang-Test: 1` 이 붙은 요청(사이트 주소 `?test=1` 로 연 탭, `scripts/load_test.py`, `scripts/foreign_e2e.py`)은 서비스 DB 를 건너뛰고 백업에 `is_test=1` 로 남는다. 삭제 도구 `scripts/drafts_delete.py` 는 **`is_test` 표시가 있는 행만** 지운다(실사용 행은 어떤 인자로도 안 지워짐). 최초 백업 복사 `scripts/db_copy_to_backup.py`. 목록 조회는 없음 — 운영자는 `scripts/drafts_report.py`. 응답의 `finisher: {enabled, in_progress}` 는 마무리 작업자(`backend/finisher.py`: 생성 도중 나간 학생의 빈 문항을 낮은 우선순위로 채움)가 이 초안을 채우는 중인지. 프론트는 재접속 때 이걸 받아 빈 문항을 채운다 (예전 `?draft=<id>` 링크도 아직 열린다) |
+| `POST /drafts/{draft_id}/share?key=<draft_key>` | 공유 링크 토큰 `{ draft_id, share }` (2026-09-04). 주인(열쇠 또는 옛 초안이면 같은 IP)만 만들 수 있다. 처음 부르면 난수 토큰(`secrets.token_urlsafe`, DB `drafts.share_token`)을 만들어 저장하고 그 뒤로는 같은 값 — 다른 PC·폰에 주는 링크 `?share=<token>` 에 DB 키가 드러나지 않게. 백업 DB 에도 같은 토큰. 테스트 모드(`?test=1`) 초안은 서비스 DB 에 없어 404 |
+| `GET /shared/{token}` | 공유 토큰으로 초안 한 벌 (`GET /drafts/{id}` 와 같은 모양 + `share` + `draft_key`). 프론트가 `?share=<token>` 으로 열릴 때 부르고, 받은 열쇠로 그 기기에서 같은 초안을 이어 쓴다 |
 | `POST /generate/dry-run` | 조립된 프롬프트만 반환 (프롬프트 튜닝용) |
 
 ---
@@ -311,7 +312,8 @@ python -m backend.rag.vane_setup          # .env 의 키로 OpenRouter + minimax
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                          # 83 tests, 모델·네트워크 호출 없음 (전부 mock)
+python -m pytest                          # 456 tests (2026-09-04), 모델·네트워크 호출 없음 (전부 mock)
+python scripts/db_snapshot.py --remote gpu:/opt/mochang-backup   # 서비스 DB 스냅샷(.sqlite.gz) + 다른 머신으로 복사 (작업 스케줄러에 매일 등록 — 스크립트 머리말)
 python -m scripts.load_test --n 50        # 동시 50 요청으로 큐 제한 확인 (가짜 모델)
 python -m scripts.load_test --n 50 --jobs # /jobs 제출+폴링 경로
 ```

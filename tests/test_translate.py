@@ -96,8 +96,9 @@ async def test_jobs_translate_bypasses_per_ip_limit_and_returns_translations():
     import httpx
     from backend import main as M
 
-    async def fake_complete(system, user, model):
+    async def fake_complete(system, user, model, extra=None):
         await asyncio.sleep(0.02)
+        assert extra == M.TRANSLATE_EXTRA          # 번역은 config translate.priority 를 extra_body 로 싣는다 (2026-09-04)
         return LLMResult(text="Hello from fake", model=model)
 
     saved = M.research_client._complete

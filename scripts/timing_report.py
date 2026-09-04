@@ -133,6 +133,25 @@ def main() -> None:
         for k, v in sorted(totals.items(), key=lambda kv: -kv[1]):
             print("  %-16s %6d" % (k, v))
 
+    # 저장 실패(2026-09-04): storage.record 가 삼킨 오류. 0 이 아니면 DB 잠금·디스크·스키마 문제를 의심한다. /health.storage 와 같은 수.
+    serr = [r for r in rows if r.get("event") == "storage_error"]
+    if serr:
+        print("
+[저장 실패] %d건 — 마지막: %s %s" % (len(serr), serr[-1]["ts"], (serr[-1].get("error") or "")[:100]))
+    # 벡터DB 임베딩 서버(Ollama) 다운(2026-09-04): 이 기간 색인·조회를 건너뛰고 웹 검색만 썼다.
+    deg = [r for r in rows if r.get("event") == "vectorstore_degraded"]
+    if deg:
+        print("
+[벡터DB 중단] Ollama 무응답 %d회 — 마지막 %s" % (len(deg), deg[-1]["ts"]))
+    # 조사 경로 대기(2026-09-04): sources 이벤트의 *_ms 합계 ÷ *_n 으로 페이지·호출당 평균 대기·실행을 본다.
+    if src:
+        def avg(total, count):
+            return (totals.get(total, 0) / totals[count]) if totals.get(count) else None
+        parts = [("본문 추출 대기", avg("extract_wait_ms", "extract_n")), ("본문 추출 실행", avg("extract_run_ms", "extract_n")),
+                 ("조사 모델 대기", avg("llm_wait_ms", "llm_n")), ("조사 모델 실행", avg("llm_run_ms", "llm_n"))]
+        if any(v is not None for _, v in parts):
+            print("
+[조사 경로 평균] " + " · ".join("%s %.0fms" % (k, v) for k, v in parts if v is not None))
     # 마무리 작업자(backend/finisher.py, 2026-09-03): 생성 도중 나간 학생의 빈 문항을 서버가 채운 기록
     auto = [r for r in rows if r.get("event") == "auto_finish"]
     if auto:

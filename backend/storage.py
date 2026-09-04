@@ -12,7 +12,7 @@
 쓰기는 스레드에서 돌려 이벤트 루프를 막지 않는다 (asyncio.to_thread).
 
 신청서 한 벌을 묶는 키는 draft_id — 프론트가 crypto.randomUUID() 로 만들어 모든 요청에 실어 보낸다.
-안 실려 오면(구 브라우저 캐시) track|idea 해시로 대신 묶는다 → 같은 아이디어 문항 9개가 한 초안이 된다.
+안 실려 오거나 형식(_ID_RE)에 안 맞으면 저장하지 않는다 (2026-09-04 — 예전의 track|idea 해시 대체는 없앴다).
 
 읽는 법:  .venv/Scripts/python scripts/drafts_report.py
 
@@ -20,11 +20,15 @@
 서비스 DB(url)에는 실제 사용자가 브라우저에서 입력한 것만 남긴다. 구분은 요청 헤더 `X-Mochang-Test`(부하 테스트·E2E 스크립트가 붙임) —
 record(..., test=True) 면 서비스 DB 를 건너뛴다. 쓰기 메서드(upsert_draft·add_generation·add_research)가 백업에 미러링하므로
 마무리 작업자처럼 record 를 안 거치는 쓰기도 백업에 남는다. 백업 쓰기 실패는 서비스 쓰기에 영향을 주지 않는다.
+
+접근 통제 (2026-09-04): draft_id 는 브라우저가 만든 UUID 라 추측은 어렵지만, 알기만 하면 누구나 읽고 덮어쓸 수 있었다.
+이제 초안마다 **접근 열쇠(owner_token)** 를 두어 upsert 갱신·GET /drafts·공유 토큰 발급에 열쇠(draft_key)를 요구한다.
+열쇠가 없는 옛 행은 요청 IP 가 저장된 owner 와 같을 때만 열어 주고 그때 열쇠를 채운다. 열쇠는 응답(draft_key)으로 나가
+브라우저 저장본에 함께 보관된다. 형식 밖 draft_id 는 해시로 대체하지 않고 저장하지 않는다 (아이디어로 키를 계산하는 구멍 제거).
 """
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -43,12 +47,18 @@ log = logging.getLogger("mochang.storage")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_URL = "sqlite:///backend/.data/mochang.sqlite"
-SCHEMA_VERSION = 4      # 2: research 테이블 (2026-09-03). 3: drafts.is_test (2026-09-03). 4: drafts.share_token (2026-09-04). 열 추가는 init 이 ALTER TABLE 로.
+SCHEMA_VERSION = 5      # 2: research 테이블 (2026-09-03). 3: drafts.is_test (2026-09-03). 4: drafts.share_token (2026-09-04).
+                        # 5: drafts.owner_token (2026-09-04, 초안 접근 열쇠). 열 추가는 init 이 ALTER TABLE 로.
 
-# 프론트가 보내는 draft_id 형식 (UUID 등). 이 밖의 값은 무시하고 해시로 대체한다 — DB 키에 임의 문자열이 들어오지 않게.
+# 프론트가 보내는 draft_id 형식 (UUID 등). 이 밖의 값은 **저장하지 않는다** (2026-09-04).
+# 예전엔 sha1(track|idea) 로 대체했는데, 그러면 아이디어 문장을 아는 사람이 키를 계산해 남의 초안을 읽을 수 있었다.
+# 프론트는 항상 UUID 를 보내므로 폴백이 쓰이는 경우는 API 직접 호출뿐이다.
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 # 공유 링크 토큰 형식 (secrets.token_urlsafe(18) = 24자). DB 키(draft_id)와 별개라 링크에 키가 드러나지 않는다.
 SHARE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
+# 초안 접근 열쇠(owner_token) 형식 — 같은 방식으로 만든다. 초안이 처음 저장될 때 생겨 응답(draft_key)으로 나가고,
+# 브라우저가 저장본에 함께 보관해 이후 모든 요청(draft_key)과 GET /drafts/{id}?key= 에 실어 보낸다.
+OWNER_TOKEN_RE = SHARE_TOKEN_RE
 
 # drafts 에 그대로 옮기는 입력 필드 (요청 스키마 GenerateRequest/IntakeRequest 공통부)
 _DRAFT_FIELDS = ("idea", "track", "is_business", "current_item", "team", "capability")
@@ -79,6 +89,9 @@ drafts = Table(
     # 공유 링크용 토큰 (2026-09-04). 다른 PC·폰에서 이어 보는 링크에 DB 키(draft_id) 대신 이걸 쓴다.
     # 처음 "링크 만들기" 를 눌렀을 때 만들어지고(share_token 메서드), 그 뒤로는 같은 값. 없는 초안은 NULL.
     Column("share_token", String(64), index=True),
+    # 초안 접근 열쇠 (2026-09-04). draft_id 만 알아서는 읽거나(GET /drafts) 덮어쓸(upsert) 수 없게 한다.
+    # NULL 인 행은 이 열이 생기기 전의 초안 — 요청 IP 가 owner 와 같을 때만 열어 주고, 그때 열쇠를 채워 응답으로 준다(과도기 규칙).
+    Column("owner_token", String(64)),
     Column("created_at", DateTime, nullable=False),
     Column("updated_at", DateTime, nullable=False, index=True),
 )
@@ -119,13 +132,17 @@ schema_meta = Table(
 )
 
 
-def draft_id_for(form: dict) -> str:
-    """요청 폼에서 초안 키를 정한다. draft_id 가 형식에 맞으면 그것, 아니면 track|idea 해시(접두 'h')."""
+def draft_id_for(form: dict) -> str | None:
+    """요청 폼에서 초안 키를 정한다. draft_id 가 형식에 맞으면 그것, 아니면 None(= 저장하지 않는다).
+
+    2026-09-04 이전엔 sha1(track|idea) 해시로 대체했다 — 아이디어 문장으로 키가 계산되는 구멍이라 없앴다."""
     did = str(form.get("draft_id") or "").strip()
-    if _ID_RE.match(did):
-        return did
-    raw = f"{form.get('track') or ''}|{(form.get('idea') or '').strip()}"
-    return "h" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:23]
+    return did if _ID_RE.match(did) else None
+
+
+def new_token() -> str:
+    """공유 링크·초안 열쇠에 쓰는 난수 (24자)."""
+    return secrets.token_urlsafe(18)
 
 
 def _dumps(v: Any) -> str:
@@ -147,6 +164,9 @@ class Storage:
         self.enabled = enabled
         self.engine: Engine | None = None
         self.backup = backup            # 전부 남기는 백업 저장소 (없으면 None). 백업 자신은 backup 이 None 이다.
+        # record() 가 삼킨 저장 실패 수 (2026-09-04). /health.storage.error_count 로 보인다 — 삼키되 보이게.
+        self.error_count = 0
+        self.last_error: str | None = None
 
     @classmethod
     def from_config(cls, config: dict) -> "Storage":
@@ -212,6 +232,9 @@ class Storage:
             if cols is not None and "share_token" not in cols:
                 conn.exec_driver_sql("ALTER TABLE drafts ADD COLUMN share_token VARCHAR(64)")
                 conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_drafts_share_token ON drafts (share_token)")
+            # v5 이행: 초안 접근 열쇠. 기존 행은 NULL — 주인(같은 IP)의 다음 요청에서 채워진다.
+            if cols is not None and "owner_token" not in cols:
+                conn.exec_driver_sql("ALTER TABLE drafts ADD COLUMN owner_token VARCHAR(64)")
             row = conn.execute(select(schema_meta.c.value).where(schema_meta.c.key == "version")).first()
             if row is None:
                 conn.execute(schema_meta.insert().values(key="version", value=str(SCHEMA_VERSION)))
@@ -233,17 +256,46 @@ class Storage:
             self.backup.close()
 
     # ── 쓰기 (동기; 스레드에서 부른다) ──
-    def upsert_draft(self, form: dict, owner: str | None = None, test: bool = False) -> str:
-        """아이디어·입력·인테이크 답을 저장하고 draft_id 를 돌려준다. 있으면 최신 입력으로 갱신. 백업에도 같은 행.
-        test=True 는 새 행에만 is_test=1 을 찍는다 — 이미 실사용으로 들어온 초안은 테스트로 바뀌지 않는다."""
-        did = self._upsert_draft(form, owner, test)
-        if self.backup:
-            self._mirror("upsert_draft", self.backup._upsert_draft, form, owner, test)
-        return did
+    def upsert_draft(self, form: dict, owner: str | None = None, test: bool = False) -> str | None:
+        """아이디어·입력·인테이크 답을 저장하고 draft_id 를 돌려준다. 거부(열쇠 불일치)·형식 밖 draft_id 면 None.
+        열쇠까지 필요하면 upsert() 를 쓴다."""
+        info = self.upsert(form, owner, test)
+        return info["draft_id"] if info else None
 
-    def _upsert_draft(self, form: dict, owner: str | None = None, test: bool = False) -> str:
+    def upsert(self, form: dict, owner: str | None = None, test: bool = False) -> dict | None:
+        """초안 upsert. → {"draft_id", "draft_key"} 또는 None(저장 안 함).
+
+        접근 규칙 (2026-09-04, 남의 초안 덮어쓰기 방지):
+          - 행이 없으면 새로 만들고 열쇠(owner_token)를 발급한다. test=True 는 새 행에만 is_test=1.
+          - 행이 있으면 form["draft_key"] 가 열쇠와 같아야 갱신한다.
+          - 열쇠가 NULL 인 옛 행은 요청 IP(owner)가 저장된 owner 와 같을 때만 갱신하고, 그때 열쇠를 채운다.
+          - 그 밖(열쇠 불일치·다른 IP)은 갱신도, 생성문 저장도 하지 않고 None.
+        백업 DB 에는 같은 열쇠로 미러링한다."""
+        token = new_token()
+        info = self._upsert_draft(form, owner, test, token)
+        if info and self.backup:
+            self._mirror("upsert_draft", self.backup._upsert_draft, form, owner, test, info["draft_key"])
+        return info
+
+    @staticmethod
+    def _access_ok(row, key: str | None, owner: str | None) -> bool:
+        """행의 열쇠·주인과 요청의 열쇠·IP 를 대조한다."""
+        if owner is None:
+            return True                      # 내부 호출(마무리 작업자의 조사 저장 등) — 요청에서 온 것이 아니다. main 은 항상 IP 를 넘긴다
+        stored = row["owner_token"] if row is not None else None
+        if stored:
+            return bool(key) and key == stored
+        # 열쇠가 없는 옛 행 — 같은 IP 면 주인으로 본다 (과도기).
+        return (not row["owner"]) or row["owner"] == owner
+
+    def _upsert_draft(self, form: dict, owner: str | None = None, test: bool = False,
+                      new_tok: str | None = None) -> dict | None:
         assert self.engine is not None
         did = draft_id_for(form)
+        if not did:
+            return None
+        key = str(form.get("draft_key") or "").strip() or None
+        new_tok = new_tok or new_token()
         now = datetime.now()
         values = {k: form.get(k) for k in _DRAFT_FIELDS}
         values["idea"] = values.get("idea") or ""
@@ -255,19 +307,34 @@ class Storage:
         values["updated_at"] = now
         if owner:
             values["owner"] = owner[:64]
-        update = (drafts.update().where(drafts.c.draft_id == did)
-                  .values(request_count=drafts.c.request_count + 1, **values))
+
+        def try_update(conn) -> dict | None:
+            row = conn.execute(select(drafts.c.owner_token, drafts.c.owner).where(drafts.c.draft_id == did)).mappings().first()
+            if row is None:
+                return None                                   # 없음 → 호출자가 insert
+            if not self._access_ok(row, key, owner):
+                log.info("초안 갱신 거부 (열쇠 불일치) %s", did[:8])
+                return {"draft_id": did, "draft_key": None, "accepted": False}
+            token = row["owner_token"] or new_tok             # 옛 행이면 이번에 열쇠를 채운다
+            upd = (drafts.update().where(drafts.c.draft_id == did)
+                   .values(request_count=drafts.c.request_count + 1, owner_token=token, **values))
+            conn.execute(upd)
+            return {"draft_id": did, "draft_key": token, "accepted": True}
+
         with self.engine.begin() as conn:
-            if conn.execute(update).rowcount:
-                return did
+            got = try_update(conn)
+        if got is not None:
+            return {"draft_id": did, "draft_key": got["draft_key"]} if got["accepted"] else None
         try:
             with self.engine.begin() as conn:
-                conn.execute(drafts.insert().values(draft_id=did, request_count=1, created_at=now, is_test=bool(test), **values))
+                conn.execute(drafts.insert().values(draft_id=did, request_count=1, created_at=now, is_test=bool(test),
+                                                    owner_token=new_tok, **values))
+            return {"draft_id": did, "draft_key": new_tok}
         except IntegrityError:
             # 같은 초안의 첫 요청 둘이 동시에 들어온 경우(문항 여러 개 동시 생성) — 다른 쪽이 먼저 넣었으니 갱신으로
             with self.engine.begin() as conn:
-                conn.execute(update)
-        return did
+                got = try_update(conn)
+            return {"draft_id": did, "draft_key": got["draft_key"]} if (got and got["accepted"]) else None
 
     def add_generation(self, draft_id: str, kind: str, form: dict, result: dict) -> int | None:
         """문항 생성문 한 건. 백업에도 같은 행 (마무리 작업자가 record 없이 직접 부르는 경로 포함)."""
@@ -326,30 +393,79 @@ class Storage:
             ))
             return res.inserted_primary_key[0] if res.inserted_primary_key else None
 
-    def _record_sync(self, kind: str, form: dict, result: Any, owner: str | None, test: bool = False) -> None:
+    def _record_sync(self, kind: str, form: dict, result: Any, owner: str | None, test: bool = False) -> dict | None:
         if not form.get("idea"):
-            return
-        did = self.upsert_draft(form, owner, test)
+            return None
+        info = self.upsert(form, owner, test)
+        if not info:
+            return None                                      # draft_id 형식 밖 또는 열쇠 불일치 — 생성문도 남기지 않는다
+        did = info["draft_id"]
         if kind in _TEXT_KINDS and isinstance(result, dict):
             self.add_generation(did, kind, form, result)
         elif kind in _RESEARCH_KINDS and isinstance(result, dict):
             qid = IDEA_QUESTION if kind == "idea_research" else str(form.get("question_id") or "")
             if qid:
                 self.add_research(did, qid, result)
+        return {"draft_id": did, "draft_key": info["draft_key"]}
 
-    async def record(self, kind: str, form: dict, result: Any, owner: str | None = None, test: bool = False) -> None:
+    async def record(self, kind: str, form: dict, result: Any, owner: str | None = None, test: bool = False) -> dict | None:
         """요청 하나가 끝났을 때 부른다. 어떤 경우에도 예외를 올리지 않는다 — 저장 때문에 생성이 실패하면 안 된다.
-        test=True(요청 헤더 X-Mochang-Test) 면 서비스 DB 는 건너뛰고 백업에만 남긴다."""
+        test=True(요청 헤더 X-Mochang-Test) 면 서비스 DB 는 건너뛰고 백업에만 남긴다.
+        → {"draft_id", "draft_key"} (저장했을 때) 또는 None. 호출자(main._persisted)가 draft_key 를 응답에 실어 준다."""
         if not self.enabled or self.engine is None:
-            return
+            return None
         try:
             if test:
                 if self.backup is not None and self.backup.engine is not None:
-                    await asyncio.to_thread(self.backup._record_sync, kind, form, result, owner, True)
-                return
-            await asyncio.to_thread(self._record_sync, kind, form, result, owner)     # 쓰기 메서드가 백업에 미러링한다
+                    return await asyncio.to_thread(self.backup._record_sync, kind, form, result, owner, True)
+                return None
+            return await asyncio.to_thread(self._record_sync, kind, form, result, owner)     # 쓰기 메서드가 백업에 미러링한다
         except Exception as e:
+            # 삼키되 보이게 (2026-09-04): 건수와 마지막 오류를 /health 에, 한 줄을 timing.jsonl 에 남긴다.
+            self.error_count += 1
+            self.last_error = f"{kind}: {str(e)[:200]}"
             log.warning("저장 실패 (%s): %s", kind, str(e)[:200])
+            try:
+                from . import timing
+                timing.log("storage_error", kind=kind, error=str(e)[:200])
+            except Exception:
+                pass
+            return None
+
+    # ── 접근 확인 (2026-09-04) ──
+    def check_access(self, draft_id: str, key: str | None, ip: str | None) -> bool:
+        """GET /drafts/{id}·POST /drafts/{id}/share 용. 초안이 있고, 열쇠가 맞거나(열쇠 없는 옛 행이면) IP 가 owner 와 같을 때 True."""
+        if self.engine is None:
+            return False
+        with self.engine.connect() as conn:
+            row = conn.execute(select(drafts.c.owner_token, drafts.c.owner).where(drafts.c.draft_id == draft_id)).mappings().first()
+        if row is None:
+            return False
+        return self._access_ok(row, (key or "").strip() or None, ip)
+
+    def owner_key(self, draft_id: str) -> str | None:
+        """초안의 접근 열쇠. 옛 행(NULL)이면 지금 만들어 채운다 — 주인이 확인된 뒤(check_access)에만 부른다."""
+        if self.engine is None:
+            return None
+        with self.engine.begin() as conn:
+            row = conn.execute(select(drafts.c.owner_token).where(drafts.c.draft_id == draft_id)).first()
+            if row is None:
+                return None
+            if row[0]:
+                return str(row[0])
+            token = new_token()
+            n = conn.execute(drafts.update().where(drafts.c.draft_id == draft_id, drafts.c.owner_token.is_(None))
+                             .values(owner_token=token)).rowcount
+            if not n:
+                token = str(conn.execute(select(drafts.c.owner_token).where(drafts.c.draft_id == draft_id)).scalar() or token)
+        if self.backup:
+            self._mirror("owner_key", self.backup._set_owner_token, draft_id, token)
+        return token
+
+    def _set_owner_token(self, draft_id: str, token: str) -> None:
+        assert self.engine is not None
+        with self.engine.begin() as conn:
+            conn.execute(drafts.update().where(drafts.c.draft_id == draft_id, drafts.c.owner_token.is_(None)).values(owner_token=token))
 
     # ── 삭제 (테스트 초안만) ──
     def delete_drafts(self, draft_ids: list[str] | None = None) -> list[str]:
@@ -385,6 +501,7 @@ class Storage:
                                 .order_by(generations.c.id)).mappings().all()
         out = dict(d)
         out.pop("share_token", None)             # 공유 토큰은 /drafts/{id}/share 로만 준다 (응답 모양 유지)
+        out.pop("owner_token", None)             # 접근 열쇠는 main 이 접근 확인을 통과한 응답에만 draft_key 로 붙인다
         out["answers"] = _loads(out.get("answers"), [])
         out["generations"] = [{**dict(g), "meta": _loads(g.get("meta"), None)} for g in gens]
         for row in [out, *out["generations"]]:
@@ -405,7 +522,7 @@ class Storage:
                 return None
             if row[0]:
                 return str(row[0])
-            token = secrets.token_urlsafe(18)
+            token = new_token()
             # 동시에 두 탭이 눌러도 먼저 넣은 값이 남는다 (share_token IS NULL 조건).
             n = conn.execute(drafts.update().where(drafts.c.draft_id == draft_id, drafts.c.share_token.is_(None))
                              .values(share_token=token)).rowcount

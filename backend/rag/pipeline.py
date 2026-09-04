@@ -12,7 +12,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re
+import time
+import weakref
 from dataclasses import dataclass
 
 from .. import timing
@@ -74,12 +77,17 @@ class ResearchConfig:
     vectorstore_use_for_search: bool = True
     vectorstore_min_hits: int = 5
     vectorstore_max_age_days: int = 730
+    vectorstore_freshness_days: int = 90    # 웹 검색 생략 조건: 적중 중 최근 N일 문서 1건 이상 (0 이면 끔, 2026-09-04)
+    # ── 조사 경로 전역 상한 (2026-09-04) — 조사 워커 80 × 페이지 3 이 전부 vLLM·추출로 몰리지 않게 ──
+    llm_concurrency: int = 60               # 조사용 모델 호출 전체 동시 상한 (본문 생성 몫을 남긴다). 0 이면 끔
+    extract_concurrency_global: int = 8     # trafilatura 추출 전체 동시 상한. 0 이면 끔
+    extract_pool_size: int = 8              # 추출 프로세스 풀 크기
 
     @classmethod
     def from_config(cls, config: dict) -> "ResearchConfig":
         rc = (config or {}).get("research") or {}
         vs = rc.get("vectorstore") or {}
-        return cls(
+        cfg = cls(
             max_queries=int(rc.get("max_queries", 4)),
             max_results_per_query=int(rc.get("max_results_per_query", 6)),
             max_pages_to_extract=int(rc.get("max_pages_to_extract", 6)),
@@ -97,8 +105,39 @@ class ResearchConfig:
             vectorstore_use_for_search=bool(vs.get("use_for_search", True)),
             vectorstore_min_hits=int(vs.get("min_hits", 5)),
             vectorstore_max_age_days=int(vs.get("max_age_days", 730)),
+            vectorstore_freshness_days=int(vs.get("freshness_days", 90)),
+            llm_concurrency=int(rc.get("llm_concurrency", 60)),
+            extract_concurrency_global=int(rc.get("extract_concurrency_global", 8)),
+            extract_pool_size=int(rc.get("extract_pool_size", 8)),
             cache_ttl=int(rc.get("cache_ttl_seconds", 7 * 24 * 3600)),
         )
+        apply_runtime_limits(cfg)
+        return cfg
+
+
+# ── 전역 세마포어 (2026-09-04) ──
+# asyncio.Semaphore 는 처음 쓰인 이벤트 루프에 묶인다 — 테스트처럼 루프가 바뀌면 "다른 루프" 오류가 나므로 루프마다 하나씩 둔다.
+EXTRACT_GLOBAL = 8          # apply_runtime_limits 가 config 값으로 덮는다. fetch_page 는 cfg 를 못 받아 모듈 값을 쓴다
+_sems: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict]" = weakref.WeakKeyDictionary()
+
+
+def _sem(name: str, n: int) -> asyncio.Semaphore | None:
+    """이 루프의 이름별 세마포어. n <= 0 이면 None(제한 없음)."""
+    if not n or int(n) <= 0:
+        return None
+    loop = asyncio.get_running_loop()
+    table = _sems.setdefault(loop, {})
+    key = (name, int(n))
+    if key not in table:
+        table[key] = asyncio.Semaphore(int(n))
+    return table[key]
+
+
+def apply_runtime_limits(cfg: "ResearchConfig") -> None:
+    """config 의 전역 상한을 모듈·추출 프로세스 풀에 반영한다 (main 이 ResearchConfig.from_config 를 부를 때)."""
+    global EXTRACT_GLOBAL
+    EXTRACT_GLOBAL = int(cfg.extract_concurrency_global or 0)
+    extract_proc.configure(cfg.extract_pool_size)
 
 
 # ────────────────────────── JSON 파싱 ──────────────────────────
@@ -212,6 +251,7 @@ async def fetch_page(url: str, timeout: int = 15) -> str:
         return ""
     import httpx
     timing.count("fetch")          # 성공·실패 무관하게 '나간 요청' 을 센다
+    t0 = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
                                      headers={"User-Agent": "Mozilla/5.0 (modoo-writer research)"}) as c:
@@ -221,8 +261,23 @@ async def fetch_page(url: str, timeout: int = 15) -> str:
             html = r.text
     except Exception:
         return ""
+    timing.count("fetch_ms", int((time.monotonic() - t0) * 1000))
     # 추출은 별도 프로세스에서 (extract_proc) — lxml 이 C 레벨에서 죽어도 API 프로세스는 살아남는다.
-    text = await extract_proc.extract(html, include_comments=False, include_tables=True, favor_precision=True)
+    # 전역 상한(EXTRACT_GLOBAL): 조사 워커 80 이 한꺼번에 받아온 페이지가 풀(8)에 줄을 서는 시간을 대기로 따로 센다 (2026-09-04).
+    sem = _sem("extract", EXTRACT_GLOBAL)
+    t1 = time.monotonic()
+    if sem is not None:
+        await sem.acquire()
+    try:
+        t2 = time.monotonic()
+        text = await extract_proc.extract(html, include_comments=False, include_tables=True, favor_precision=True)
+        t3 = time.monotonic()
+    finally:
+        if sem is not None:
+            sem.release()
+    timing.count("extract_n")
+    timing.count("extract_wait_ms", int((t2 - t1) * 1000))
+    timing.count("extract_run_ms", int((t3 - t2) * 1000))
     return (text or "")[:MAX_PAGE_CHARS]
 
 
@@ -240,11 +295,21 @@ def get_vector_store(cfg: ResearchConfig):
         return None
     if _vector_store is None:
         from .vectorstore import VectorStore, ollama_embedding
-        embed = (ollama_embedding(cfg.vectorstore_embed_model, cfg.vectorstore_ollama_url)
-                 if cfg.vectorstore_embed_model else None)
+        if cfg.vectorstore_embed_model:
+            embed = ollama_embedding(cfg.vectorstore_embed_model, cfg.vectorstore_ollama_url)
+            health_url = cfg.vectorstore_ollama_url
+        elif os.environ.get("MOCHANG_ALLOW_OFFLINE_EMBEDDING") == "1":
+            embed, health_url = None, None          # 테스트 전용 — 품질 없는 오프라인 임베딩
+        else:
+            # 운영에서 embed_model 이 비어 있으면 예전엔 오프라인 임베딩으로 색인해 벡터DB 를 오염시켰다 (2026-09-04) → 끈다
+            import logging
+            logging.getLogger("mochang.vectorstore").warning(
+                "research.vectorstore.embed_model 이 비어 있어 벡터DB 를 끕니다 (오프라인 임베딩은 테스트 전용)")
+            return None
         _vector_store = VectorStore(cfg.vectorstore_dir, embed_model=embed,
                                     min_score=cfg.vectorstore_min_score, min_hits=cfg.vectorstore_min_hits,
-                                    max_age_days=cfg.vectorstore_max_age_days)
+                                    max_age_days=cfg.vectorstore_max_age_days,
+                                    freshness_days=cfg.vectorstore_freshness_days, health_url=health_url)
     return _vector_store
 
 
@@ -412,11 +477,25 @@ async def _extract_from_page(client: LLMClient, form: dict, meta: dict, page: di
         f"[아이디어]\n{form.get('idea', '')}",
         "[수집한 웹 문서]\n" + doc,
     ])
+    # 조사용 모델 호출 전역 상한 (2026-09-04): 조사 큐 워커 80 × 페이지 3 이 전부 vLLM 로 가면 본문 생성 몫이 없어진다.
+    sem = _sem("research_llm", getattr(cfg, "llm_concurrency", 0))
+    t0 = time.monotonic()
+    if sem is not None:
+        await sem.acquire()
     try:
-        res = await client.complete(system, user, model=form.get("model"))
-        raw_facts = _parse_json_array(res.text)
-    except Exception:
-        return []                       # 한 페이지가 실패해도 나머지 페이지의 사실은 살린다
+        t1 = time.monotonic()
+        try:
+            res = await client.complete(system, user, model=form.get("model"))
+            raw_facts = _parse_json_array(res.text)
+        except Exception:
+            return []                       # 한 페이지가 실패해도 나머지 페이지의 사실은 살린다
+        finally:
+            timing.count("llm_n")
+            timing.count("llm_wait_ms", int((t1 - t0) * 1000))
+            timing.count("llm_run_ms", int((time.monotonic() - t1) * 1000))
+    finally:
+        if sem is not None:
+            sem.release()
     facts = _verify_quotes(raw_facts, [page])
     kind = page.get("source_type", "")
     out = []

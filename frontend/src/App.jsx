@@ -257,6 +257,7 @@ function migrate(saved) {
     // 초안 id 가 생기기 전 저장본 — 지금 아이디어로 새 초안을 연다
     draftId: saved.form.draftId || api.newDraftId(),
     draftIdea: saved.form.draftIdea ?? saved.form.idea ?? "",
+    draftKey: saved.form.draftKey || "",     // 접근 열쇠 (2026-09-04). 옛 저장본은 비어 있다 — 같은 IP 면 서버가 다음 응답에 채워 준다
   };
   // 고른 초안이 사라진 스타일이면 선택을 비운다 (남은 스타일의 초안이 있으면 그게 보이고, 없으면 다시 생성하면 된다)
   saved.picked = Object.fromEntries(Object.entries(saved.picked || {}).filter(([, sid]) => styleIds.includes(sid)));
@@ -293,7 +294,7 @@ function ideaSimilarity(a, b) {
 // form 변경을 적용하면서 아이디어가 기준과 많이 달라졌으면 새 초안 id 를 매긴다. 서버에는 보내는 순간에만 반영된다.
 function withDraft(next) {
   if (next.draftId && ideaSimilarity(next.idea, next.draftIdea) >= DRAFT_SAME_THRESHOLD) return next;
-  return { ...next, draftId: api.newDraftId(), draftIdea: next.idea || "", shareToken: "" };   // 새 초안 = 공유 링크도 새로
+  return { ...next, draftId: api.newDraftId(), draftIdea: next.idea || "", shareToken: "", draftKey: "" };   // 새 초안 = 공유 링크·열쇠도 새로
 }
 
 // ── 서버 저장본 복원 (2026-09-03) ──
@@ -357,7 +358,14 @@ export default function ModooWriter() {
     styles: ["logic"], // 기본 1개 (무료 티어 요청 수 절약). 2026-09-01: 논리·근거형이 실호출 품질 최고라 기본으로. 사용자가 더 고를 수 있음.
     draftId: api.newDraftId(),   // 서버 저장 묶음 키 (withDraft 가 아이디어가 확 바뀌면 새로 매김)
     draftIdea: "",
+    draftKey: "",                // 초안 접근 열쇠 — 첫 저장 응답(draft_key)에서 받아 보관, 모든 요청·복원에 실어 보낸다 (2026-09-04)
   });
+  // 서버 응답에 실려 온 접근 열쇠를 이 초안의 것으로 보관한다. 응답이 늦게 도착해 이미 다른 초안으로 바뀐 경우는 무시.
+  const adoptDraftKey = (res, draftId) => {
+    const key = res?.draft_key;
+    if (!key) return;
+    setForm((f) => (f.draftId === draftId && f.draftKey !== key ? { ...f, draftKey: key } : f));
+  };
   const [texts, setTexts] = useState(saved?.texts ?? {});   // texts[qid][styleId] = string
   // ── 화면 언어 (2026-09-03, 외국인 지원자) ──
   // 문구는 i18n.jsx 사전, 초안·카드는 한국어 그대로 두고 /jobs/translate 로 읽기 번역을 병기한다. 서버로 가는 값은 전부 한국어.
@@ -604,10 +612,12 @@ export default function ModooWriter() {
     setStat(q.id, style.id, "loading");
     setErr(q.id, style.id, "");
     try {
+      const draftId = form.draftId;
       const res = await run({
         onSubmit: (id) => rememberJob(key, id),
         onTick: (snap) => setJobTick(q.id, style.id, { status: snap.status, position: snap.position, busy: snap.busy }),
       });
+      adoptDraftKey(res, draftId);
       setText(q.id, style.id, res.text.slice(0, q.limit));
       setUsed(q.id, style.id, res.model);
       setStat(q.id, style.id, "done");
@@ -668,6 +678,7 @@ export default function ModooWriter() {
     setForm((f) => ({ ...f, draftIdea: f.idea }));
     try {
       const r = await api.intake(form, { onTick: (snap) => setIntakePos(snap.status === "queued" ? snap.position : null) });
+      adoptDraftKey(r, form.draftId);
       setIntake(r);
       setAnswers({});
       setCardIdx(0);
@@ -761,7 +772,8 @@ export default function ModooWriter() {
   async function syncFromServer() {
     if (!form.draftId) return false;
     try {
-      const row = await api.getDraft(form.draftId);
+      const row = await api.getDraft(form.draftId, form.draftKey);
+      adoptDraftKey(row, form.draftId);
       const left = applyServerTexts(row);
       const active = !!row.finisher?.enabled && left > 0;
       setAutoFill(active ? { remaining: left, inProgress: row.finisher?.in_progress || [] } : null);
@@ -805,6 +817,7 @@ export default function ModooWriter() {
           ...f, track: TRACKS[row.track] ? row.track : "tech", idea: row.idea || "", isBusiness: false, currentItem: "",
           team: row.team || "팀원 없음", capability: row.capability || "",
           styles: styles.length ? styles : [STYLES[0].id], draftId: did, draftIdea: row.idea || "", shareToken: share || "",
+          draftKey: row.draft_key || "",       // 공유 링크로 받은 초안은 열쇠도 함께 와서 이 기기에서 이어 쓸 수 있다
         }));
         restoredAnswersRef.current = row.answers || [];
         setAnswers(answersFromServer(row.answers));
@@ -828,7 +841,7 @@ export default function ModooWriter() {
     if (!form.draftId || shareBusy) return;
     setShareBusy(true); setShareError("");
     try {
-      const r = await api.shareDraft(form.draftId);
+      const r = await api.shareDraft(form.draftId, form.draftKey);
       const token = r.share || "";
       if (!token) throw new Error("empty");
       setForm((f) => (f.draftId === form.draftId ? { ...f, shareToken: token } : f));

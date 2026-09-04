@@ -17,8 +17,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
+import threading
+import time
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -28,13 +31,18 @@ from llama_index.core.node_parser import SentenceSplitter
 
 from .research import domain
 
+log = logging.getLogger("mochang.vectorstore")
+
 # 이보다 짧은 본문은 사실 추출에 못 쓴다 (pipeline.MIN_BODY_CHARS 와 같은 기준).
 # pipeline 을 import 하지 않는 것은 의도 — 이 모듈은 조사 파이프라인에 의존하지 않는다.
 MIN_TEXT_CHARS = 40
 CHUNK_SIZE = 512          # RAG_PLAN 3절: 약 512토큰 청크
 CHUNK_OVERLAP = 50
 # 색인 본문에 함께 넣지 않을 메타데이터 — 제목·URL 이 임베딩에 섞이면 유사도가 주제가 아니라 형식에 끌린다.
-_META_KEYS = ("url", "title", "publisher", "date", "fetched_at", "source_kind", "query")
+_META_KEYS = ("url", "title", "publisher", "date", "fetched_at", "source_kind", "query", "embed_model")
+# Ollama 헬스체크 간격 — 죽어 있으면 이 간격으로 다시 본다 (살아나면 색인·조회가 자동으로 재개된다)
+HEALTH_INTERVAL_S = 60.0
+HEALTH_TIMEOUT_S = 2.0
 
 
 def _url_key(url: str) -> str:
@@ -103,6 +111,16 @@ def ollama_embedding(model_name: str = "bge-m3", base_url: str = "http://localho
     return OllamaEmbedding(model_name=model_name, base_url=base_url, **kw)
 
 
+def ollama_alive(base_url: str, timeout: float = HEALTH_TIMEOUT_S) -> bool:
+    """Ollama 가 응답하는지 (GET /api/tags). 2초 안에 안 오면 죽은 것으로 본다."""
+    import httpx
+    try:
+        r = httpx.get(base_url.rstrip("/") + "/api/tags", timeout=timeout)
+        return r.status_code < 500
+    except Exception:
+        return False
+
+
 class VectorStore:
     """조사 페이지의 영구 축적층. RAG_PLAN 5-1절 인터페이스 그대로.
 
@@ -110,14 +128,51 @@ class VectorStore:
     같은 디렉터리로 다시 만들면 이어서 쓴다."""
 
     def __init__(self, persist_dir: str, embed_model=None, min_score: float = 0.8,
-                 min_hits: int = 5, max_age_days: int = 730):
+                 min_hits: int = 5, max_age_days: int = 730, freshness_days: int = 0,
+                 health_url: str | None = None, health_check=None):
+        """freshness_days: 웹 검색을 생략하려면 점수 좋은 적중 중 이 일수 안의 문서가 1건 이상 있어야 한다 (0 이면 끔, 2026-09-04).
+        health_url: Ollama 주소. 주면 HEALTH_INTERVAL_S 마다 살아 있는지 보고, 죽어 있으면 색인·조회를 건너뛴다(degraded).
+        health_check: 테스트용 — health_url 대신 부를 함수 () -> bool."""
         self.persist_dir = str(persist_dir)
         self.embed_model = embed_model or OfflineEmbedding()
+        name = getattr(self.embed_model, "model_name", None)         # OllamaEmbedding 은 "bge-m3", 기본값은 "unknown"
+        self.embed_name = name if name and name != "unknown" else type(self.embed_model).__name__
         self.min_score = float(min_score)
         self.min_hits = int(min_hits)
         self.max_age_days = int(max_age_days)     # 0 이하면 신선도 컷을 끈다
+        self.freshness_days = int(freshness_days or 0)
+        self._health_url = health_url
+        self._health_check = health_check
+        self._health_at = 0.0
+        self.degraded = False                     # True 면 색인·조회를 건너뛴다 (Ollama 죽음)
+        self._write_lock = threading.Lock()       # LlamaIndex 파일 persist 는 동시 쓰기에 안전하지 않다
         self._splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         self._index = self._open()
+
+    # ── 건강 ──
+
+    def healthy(self) -> bool:
+        """임베딩 서버가 살아 있는지. 확인 수단이 없으면(오프라인 임베딩) 항상 True. 결과는 HEALTH_INTERVAL_S 동안 캐시."""
+        check = self._health_check or (
+            (lambda: ollama_alive(self._health_url)) if self._health_url else None)
+        if check is None:
+            return True
+        now = time.monotonic()
+        if now - self._health_at < HEALTH_INTERVAL_S:
+            return not self.degraded
+        self._health_at = now
+        alive = bool(check())
+        if alive and self.degraded:
+            log.warning("임베딩 서버가 다시 응답합니다 — 벡터DB 색인·조회를 재개합니다")
+        if not alive and not self.degraded:
+            log.warning("임베딩 서버(%s)가 응답하지 않습니다 — 벡터DB 색인·조회를 건너뛰고 웹 검색만 씁니다", self._health_url or "?")
+            try:
+                from .. import timing
+                timing.log("vectorstore_degraded", url=self._health_url or "")
+            except Exception:
+                pass
+        self.degraded = not alive
+        return alive
 
     # ── 저장소 열기/만들기 ──
 
@@ -139,22 +194,26 @@ class VectorStore:
     # ── 쓰기 ──
 
     def upsert_pages(self, pages: list[dict]) -> int:
-        """collect_pages 가 만든 page dict 를 색인한다. 같은 url 은 다시 색인하지 않는다. → 새로 색인된 건수."""
-        known = {_doc_id(u) for u in self.indexed_urls() if u}
-        added = 0
-        for page in pages or []:
-            key = _url_key(str(page.get("url", "")))
-            text = str(page.get("text") or page.get("snippet") or "").strip()
-            if not key or len(text) < MIN_TEXT_CHARS:
-                continue                       # 본문 없는 검색 결과는 근거로 못 쓴다 — 색인도 하지 않는다
-            doc_id = _doc_id(key)
-            if doc_id in known:
-                continue
-            known.add(doc_id)
-            self._index.insert(self._document(doc_id, key, text, page))
-            added += 1
-        if added:
-            self._persist()
+        """collect_pages 가 만든 page dict 를 색인한다. 같은 url 은 다시 색인하지 않는다. → 새로 색인된 건수.
+        임베딩 서버가 죽어 있으면(degraded) 아무것도 하지 않는다 — 품질 없는 벡터로 색인을 오염시키지 않는다."""
+        if not pages or not self.healthy():
+            return 0
+        with self._write_lock:                 # 조사 워커 여럿이 동시에 색인해도 persist 는 한 번에 하나
+            known = {_doc_id(u) for u in self.indexed_urls() if u}
+            added = 0
+            for page in pages or []:
+                key = _url_key(str(page.get("url", "")))
+                text = str(page.get("text") or page.get("snippet") or "").strip()
+                if not key or len(text) < MIN_TEXT_CHARS:
+                    continue                       # 본문 없는 검색 결과는 근거로 못 쓴다 — 색인도 하지 않는다
+                doc_id = _doc_id(key)
+                if doc_id in known:
+                    continue
+                known.add(doc_id)
+                self._index.insert(self._document(doc_id, key, text, page))
+                added += 1
+            if added:
+                self._persist()
         return added
 
     def _document(self, doc_id: str, url_key: str, text: str, page: dict) -> Document:
@@ -168,6 +227,8 @@ class VectorStore:
             # RAG_PLAN 3절의 source_kind. 검색 결과의 source_type(news/web/blog/…)을 그대로 옮긴다.
             "source_kind": str(page.get("source_type") or page.get("source_kind") or ""),
             "query": str(page.get("query") or ""),
+            # 어떤 임베딩으로 색인했는지 (2026-09-04) — 오프라인 임베딩으로 오염된 문서를 나중에 골라낼 수 있게
+            "embed_model": self.embed_name,
         }
         return Document(
             id_=doc_id,
@@ -183,7 +244,7 @@ class VectorStore:
         """유사도 조회. page dict 와 같은 형태에 score 를 붙여 돌려준다 (신선도 컷 적용 후, 점수 내림차순).
 
         같은 문서의 청크가 여러 개 걸리면 가장 높은 점수 하나로 합친다 — 호출부는 '페이지 목록'을 기대한다."""
-        if not (text or "").strip():
+        if not (text or "").strip() or not self.healthy():
             return []
         # 청크 단위로 걸리므로 문서 수를 맞추려면 넉넉히 뽑아서 합친 뒤 자른다.
         nodes = self._index.as_retriever(similarity_top_k=max(k * 3, k)).retrieve(text)
@@ -216,8 +277,19 @@ class VectorStore:
         d = _parse_date(value)
         return d is not None and (date.today() - d).days > self.max_age_days
 
+    def _is_fresh(self, value: Any) -> bool:
+        d = _parse_date(value)
+        return d is not None and (date.today() - d).days <= self.freshness_days
+
     def is_sufficient(self, hits: list[dict]) -> bool:
-        """웹 검색을 생략해도 되는지. RAG_PLAN 5절 초기값: 유사도 0.8 이상이 5건 이상.
+        """웹 검색을 생략해도 되는지. RAG_PLAN 5절 초기값: 유사도 min_score 이상이 min_hits 건 이상,
+        **그리고** (freshness_days > 0 이면) 그중 최근 freshness_days 안의 문서가 1건 이상 (2026-09-04).
+        지원사업·시장 동향은 해마다 바뀐다 — 낡은 적중만으로 웹을 건너뛰면 안 된다. 날짜 모르는 문서는 신선하다고 보지 않는다.
 
         보수적으로 잡는 것이 중요하다 — 느슨하면 엉뚱한 주제의 자료가 근거로 끼어든다."""
-        return sum(1 for h in hits or [] if float(h.get("score", 0)) >= self.min_score) >= self.min_hits
+        good = [h for h in hits or [] if float(h.get("score", 0)) >= self.min_score]
+        if len(good) < self.min_hits:
+            return False
+        if self.freshness_days <= 0:
+            return True
+        return any(self._is_fresh(h.get("date")) for h in good)

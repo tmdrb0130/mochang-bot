@@ -21,7 +21,8 @@ import threading
 log = logging.getLogger("mochang.extract")
 
 ENABLED = os.environ.get("MOCHANG_EXTRACT_ISOLATION", "1") != "0"
-POOL_SIZE = 3            # EXTRACT_CONCURRENCY 와 같게. 추출 1건은 수십~수백 ms 라 이 정도면 조사 워커 6개를 감당한다
+POOL_SIZE = 3            # 기본값. 운영은 config.yaml research.extract_pool_size (2026-09-04: 8) 를 configure() 로 넣는다.
+                         # 프로세스당 메모리 ~100MB. 조사 워커 80 이 페이지를 동시에 받아오면 3개로는 추출이 줄을 선다.
 TIMEOUT_S = 30.0         # 한 페이지 추출 상한 (풀 워커가 멈춘 경우 대비)
 
 _pool: concurrent.futures.ProcessPoolExecutor | None = None
@@ -37,6 +38,13 @@ def _extract(html: str, kw: dict) -> str:
     """워커 프로세스에서 실행. 모듈 최상위 함수여야 spawn 이 pickle 할 수 있다."""
     import trafilatura
     return trafilatura.extract(html, **kw) or ""
+
+
+def configure(pool_size: int | None) -> None:
+    """풀 크기를 바꾼다 (config.yaml research.extract_pool_size). 이미 떠 있는 풀은 다음 재생성 때 반영된다."""
+    global POOL_SIZE
+    if pool_size and int(pool_size) > 0:
+        POOL_SIZE = int(pool_size)
 
 
 def _get_pool() -> concurrent.futures.ProcessPoolExecutor:

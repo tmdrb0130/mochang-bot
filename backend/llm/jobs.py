@@ -30,15 +30,24 @@ class QueueError(RuntimeError):
 
 
 class TooManyJobs(QueueError):
-    """한 클라이언트(IP)가 동시에 가진 작업이 상한을 넘었다 → HTTP 429.
+    """동시 작업 상한 초과 → HTTP 429. 세 겹으로 건다 (2026-09-04):
 
-    인증이 없어 IP 를 클라이언트 식별자로 쓴다. 한 명이 문항 9개를 연달아 눌러 큐를 독점하면
-    다른 사람이 몇 분씩 대기하게 되므로, 큐에 들어가기 전에 막는다."""
+    - owner  : 초안(draft_id) 단위. 한 명이 문항 9개를 연달아 눌러 큐를 독점하는 것을 막는다.
+               예전엔 IP 였는데 강의실 NAT(같은 공인 IP 40명)에서 서로 막혀 초안 단위로 바꿨다. draft_id 가 없으면 IP.
+    - ip     : IP 단위의 느슨한 천장. 초안 id 를 무한히 만들어 우회하는 것을 막는다 (강의실 한 반이 다 들어갈 만큼 넉넉하게).
+    - kind   : 작업 종류 단위의 전역 상한 (예: translate 전체 동시 30건). 무제한이던 번역을 남용하는 것을 막는다."""
 
-    def __init__(self, active: int, limit: int):
+    def __init__(self, active: int, limit: int, scope: str = "owner"):
         self.active = active
         self.limit = limit
-        super().__init__(f"동시에 진행할 수 있는 작업은 {limit}건까지입니다 (현재 {active}건). 하나가 끝나면 다시 시도해 주세요.")
+        self.scope = scope
+        if scope == "ip":
+            msg = f"같은 네트워크에서 동시에 진행할 수 있는 작업은 {limit}건까지입니다 (현재 {active}건). 잠시 뒤 다시 시도해 주세요."
+        elif scope == "kind":
+            msg = f"이 종류의 작업은 서버 전체에서 동시에 {limit}건까지입니다 (현재 {active}건). 잠시 뒤 다시 시도해 주세요."
+        else:
+            msg = f"동시에 진행할 수 있는 작업은 {limit}건까지입니다 (현재 {active}건). 하나가 끝나면 다시 시도해 주세요."
+        super().__init__(msg)
 
 
 @dataclass
@@ -47,7 +56,8 @@ class Job:
     factory: Factory
     kind: str = "llm"
     status: str = "queued"          # queued | running | done | error
-    owner: str | None = None        # 제출한 클라이언트 식별자(IP). 동시 작업 제한용 — 응답에는 내보내지 않는다
+    owner: str | None = None        # 제출자 식별자(초안 id 또는 IP). 동시 작업 제한용 — 응답에는 내보내지 않는다
+    ip: str | None = None           # 제출한 클라이언트 IP. IP 단위 천장(max_per_ip)용 — 응답에는 내보내지 않는다
     result: Any = None
     error: str | None = None
     attempts: int = 0
@@ -120,14 +130,26 @@ class JobQueue:
         return bool(self._workers)
 
     # ── 제출 ──
-    def submit(self, factory: Factory, kind: str = "llm", owner: str | None = None) -> Job:
+    def submit(self, factory: Factory, kind: str = "llm", owner: str | None = None, *,
+               ip: str | None = None, max_per_owner: int | None = None, max_per_ip: int = 0, max_per_kind: int = 0) -> Job:
+        """큐에 넣는다. 상한 검사 순서: owner(초안) → ip → kind. 0 이면 그 검사는 안 한다.
+        max_per_owner 가 None 이면 큐 기본값(max_per_client). 어느 하나라도 넘으면 TooManyJobs(scope)."""
         if not self._workers:
             raise QueueError("JobQueue 가 시작되지 않았습니다 (app startup 에서 await queue.start()).")
-        if owner and self.max_per_client:
+        per_owner = self.max_per_client if max_per_owner is None else max(0, int(max_per_owner))
+        if owner and per_owner:
             active = self.active_for(owner)
-            if active >= self.max_per_client:
-                raise TooManyJobs(active, self.max_per_client)
-        job = Job(id=uuid.uuid4().hex[:12], factory=factory, kind=kind, owner=owner,
+            if active >= per_owner:
+                raise TooManyJobs(active, per_owner, "owner")
+        if ip and max_per_ip:
+            active = self.active_ip(ip)
+            if active >= int(max_per_ip):
+                raise TooManyJobs(active, int(max_per_ip), "ip")
+        if max_per_kind:
+            active = self.active_kind(kind)
+            if active >= int(max_per_kind):
+                raise TooManyJobs(active, int(max_per_kind), "kind")
+        job = Job(id=uuid.uuid4().hex[:12], factory=factory, kind=kind, owner=owner, ip=ip,
                   future=asyncio.get_running_loop().create_future())
         self._jobs[job.id] = job
         self._trim_history()
@@ -175,8 +197,16 @@ class JobQueue:
         return ahead
 
     def active_for(self, owner: str) -> int:
-        """해당 클라이언트가 아직 끝나지 않은(queued+running) 작업 수."""
+        """해당 제출자(초안 또는 IP)가 아직 끝나지 않은(queued+running) 작업 수."""
         return sum(1 for j in self._jobs.values() if j.owner == owner and j.status in ("queued", "running"))
+
+    def active_ip(self, ip: str) -> int:
+        """해당 IP 가 아직 끝나지 않은 작업 수 (초안 id 가 달라도 합산)."""
+        return sum(1 for j in self._jobs.values() if j.ip == ip and j.status in ("queued", "running"))
+
+    def active_kind(self, kind: str) -> int:
+        """해당 종류(kind)의 진행 중 작업 수 — 종류별 전역 상한용."""
+        return sum(1 for j in self._jobs.values() if j.kind == kind and j.status in ("queued", "running"))
 
     def stats(self) -> dict:
         statuses = [j.status for j in self._jobs.values()]
