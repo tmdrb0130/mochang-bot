@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import re
+import secrets
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -42,10 +43,12 @@ log = logging.getLogger("mochang.storage")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_URL = "sqlite:///backend/.data/mochang.sqlite"
-SCHEMA_VERSION = 3      # 2: research 테이블 (2026-09-03). 3: drafts.is_test (2026-09-03, 열 추가는 init 이 ALTER TABLE 로).
+SCHEMA_VERSION = 4      # 2: research 테이블 (2026-09-03). 3: drafts.is_test (2026-09-03). 4: drafts.share_token (2026-09-04). 열 추가는 init 이 ALTER TABLE 로.
 
 # 프론트가 보내는 draft_id 형식 (UUID 등). 이 밖의 값은 무시하고 해시로 대체한다 — DB 키에 임의 문자열이 들어오지 않게.
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+# 공유 링크 토큰 형식 (secrets.token_urlsafe(18) = 24자). DB 키(draft_id)와 별개라 링크에 키가 드러나지 않는다.
+SHARE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 
 # drafts 에 그대로 옮기는 입력 필드 (요청 스키마 GenerateRequest/IntakeRequest 공통부)
 _DRAFT_FIELDS = ("idea", "track", "is_business", "current_item", "team", "capability")
@@ -73,6 +76,9 @@ drafts = Table(
     # 테스트로 만들어진 초안 (요청 헤더 X-Mochang-Test). 서비스 DB 에는 들어오지 않고 백업 DB 에서만 1 이다.
     # 삭제 도구(delete_drafts)는 이 표시가 있는 행만 지운다 — 실사용 행은 어떤 옵션으로도 지우지 않는다 (2026-09-03 사용자 결정).
     Column("is_test", Boolean, nullable=False, default=False, server_default="0"),
+    # 공유 링크용 토큰 (2026-09-04). 다른 PC·폰에서 이어 보는 링크에 DB 키(draft_id) 대신 이걸 쓴다.
+    # 처음 "링크 만들기" 를 눌렀을 때 만들어지고(share_token 메서드), 그 뒤로는 같은 값. 없는 초안은 NULL.
+    Column("share_token", String(64), index=True),
     Column("created_at", DateTime, nullable=False),
     Column("updated_at", DateTime, nullable=False, index=True),
 )
@@ -202,6 +208,10 @@ class Storage:
             cols = {r[1] for r in conn.exec_driver_sql("PRAGMA table_info(drafts)").fetchall()} if self.is_sqlite else None
             if cols is not None and "is_test" not in cols:
                 conn.exec_driver_sql("ALTER TABLE drafts ADD COLUMN is_test BOOLEAN NOT NULL DEFAULT 0")
+            # v4 이행: 공유 링크 토큰 열. 기존 행은 NULL — 학생이 링크를 만들 때 채워진다.
+            if cols is not None and "share_token" not in cols:
+                conn.exec_driver_sql("ALTER TABLE drafts ADD COLUMN share_token VARCHAR(64)")
+                conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_drafts_share_token ON drafts (share_token)")
             row = conn.execute(select(schema_meta.c.value).where(schema_meta.c.key == "version")).first()
             if row is None:
                 conn.execute(schema_meta.insert().values(key="version", value=str(SCHEMA_VERSION)))
@@ -374,6 +384,7 @@ class Storage:
             gens = conn.execute(select(generations).where(generations.c.draft_id == draft_id)
                                 .order_by(generations.c.id)).mappings().all()
         out = dict(d)
+        out.pop("share_token", None)             # 공유 토큰은 /drafts/{id}/share 로만 준다 (응답 모양 유지)
         out["answers"] = _loads(out.get("answers"), [])
         out["generations"] = [{**dict(g), "meta": _loads(g.get("meta"), None)} for g in gens]
         for row in [out, *out["generations"]]:
@@ -381,6 +392,41 @@ class Storage:
                 if isinstance(row.get(k), datetime):
                     row[k] = row[k].isoformat(timespec="seconds")
         return out
+
+    # ── 공유 링크 (2026-09-04) ──
+    def share_token(self, draft_id: str) -> str | None:
+        """이 초안의 공유 토큰. 없으면 새로 만들어 저장하고(백업에도 같은 값) 돌려준다. 초안이 없으면 None.
+        토큰은 draft_id 와 무관한 난수라 링크에 DB 키가 드러나지 않는다."""
+        if self.engine is None:
+            return None
+        with self.engine.begin() as conn:
+            row = conn.execute(select(drafts.c.share_token).where(drafts.c.draft_id == draft_id)).first()
+            if row is None:
+                return None
+            if row[0]:
+                return str(row[0])
+            token = secrets.token_urlsafe(18)
+            # 동시에 두 탭이 눌러도 먼저 넣은 값이 남는다 (share_token IS NULL 조건).
+            n = conn.execute(drafts.update().where(drafts.c.draft_id == draft_id, drafts.c.share_token.is_(None))
+                             .values(share_token=token)).rowcount
+            if not n:
+                token = str(conn.execute(select(drafts.c.share_token).where(drafts.c.draft_id == draft_id)).scalar() or token)
+        if self.backup:
+            self._mirror("share_token", self.backup._set_share_token, draft_id, token)
+        return token
+
+    def _set_share_token(self, draft_id: str, token: str) -> None:
+        assert self.engine is not None
+        with self.engine.begin() as conn:
+            conn.execute(drafts.update().where(drafts.c.draft_id == draft_id, drafts.c.share_token.is_(None)).values(share_token=token))
+
+    def draft_id_for_share(self, token: str) -> str | None:
+        """공유 토큰 → draft_id. 형식이 다르거나 없으면 None."""
+        if self.engine is None or not SHARE_TOKEN_RE.match(token or ""):
+            return None
+        with self.engine.connect() as conn:
+            row = conn.execute(select(drafts.c.draft_id).where(drafts.c.share_token == token)).first()
+        return str(row[0]) if row else None
 
     def get_research(self, draft_id: str, question_id: str) -> list[dict] | None:
         """이 초안·문항의 가장 최근 조사 사실 목록. 없으면 None (빈 목록과 구분)."""

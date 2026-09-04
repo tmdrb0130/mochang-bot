@@ -419,16 +419,41 @@ async def queue_stats(request: Request):
     return out
 
 
-@app.get("/drafts/{draft_id}")
-async def get_draft(draft_id: str):
-    """저장된 초안 한 벌: 입력(아이디어·인테이크 답) + 문항별 생성 이력(오래된 것부터).
-    draft_id 는 프론트가 만든 UUID(추측 불가) 또는 서버가 매긴 해시. 목록 조회는 두지 않는다 — 인증이 없어 남의 아이디어가
-    보이면 안 되므로 운영자는 scripts/drafts_report.py 로 본다."""
+async def _draft_row(draft_id: str) -> dict:
     row = await asyncio.to_thread(storage.get_draft, draft_id) if storage.enabled else None
     if row is None:
         raise HTTPException(status_code=404, detail="저장된 초안이 없습니다.")
     # 프론트 복원용 (2026-09-03): 마무리 작업자가 켜져 있으면 빈 문항이 곧 채워질 수 있으니 폴링하라는 신호.
     row["finisher"] = {"enabled": bool(_finisher_settings.get("enabled")), "in_progress": finisher.in_progress_for(draft_id)}
+    return row
+
+
+@app.get("/drafts/{draft_id}")
+async def get_draft(draft_id: str):
+    """저장된 초안 한 벌: 입력(아이디어·인테이크 답) + 문항별 생성 이력(오래된 것부터). 재접속 복원용(이 브라우저의 draft_id).
+    draft_id 는 프론트가 만든 UUID(추측 불가) 또는 서버가 매긴 해시. 목록 조회는 두지 않는다 — 인증이 없어 남의 아이디어가
+    보이면 안 되므로 운영자는 scripts/drafts_report.py 로 본다. 다른 기기 공유는 /drafts/{id}/share → /shared/{token}."""
+    return await _draft_row(draft_id)
+
+
+@app.post("/drafts/{draft_id}/share")
+async def share_draft(draft_id: str):
+    """공유 링크 토큰 (2026-09-04): { draft_id, share }. 처음 부르면 난수 토큰을 만들어 저장하고, 그 뒤로는 같은 값.
+    링크(`?share=<token>`)에 DB 키가 드러나지 않게 하려고 draft_id 와 별개로 둔다. 테스트 모드 초안은 서비스 DB 에 없어 404."""
+    token = await asyncio.to_thread(storage.share_token, draft_id) if storage.enabled else None
+    if not token:
+        raise HTTPException(status_code=404, detail="저장된 초안이 없습니다.")
+    return {"draft_id": draft_id, "share": token}
+
+
+@app.get("/shared/{token}")
+async def get_shared(token: str):
+    """공유 토큰으로 초안 한 벌 (GET /drafts/{id} 와 같은 모양 + share). 다른 PC·폰에서 이어 보기."""
+    did = await asyncio.to_thread(storage.draft_id_for_share, token) if storage.enabled else None
+    if not did:
+        raise HTTPException(status_code=404, detail="공유 링크에 해당하는 초안이 없습니다.")
+    row = await _draft_row(did)
+    row["share"] = token
     return row
 
 

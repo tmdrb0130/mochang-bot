@@ -248,3 +248,60 @@ def test_init_adds_is_test_column_to_old_db(tmp_path):
     rows = st.list_drafts()
     assert rows and rows[0]["draft_id"] == "old-000000000001" and rows[0]["is_test"] is False
     assert st.delete_drafts(["old-000000000001"]) == []
+
+
+# ── 공유 링크 토큰 (2026-09-04): 링크에 DB 키 대신 난수 토큰 ──
+
+def test_share_token_is_random_stable_and_mirrored(tmp_path):
+    bak = S.Storage("sqlite:///" + (tmp_path / "b.sqlite").as_posix())
+    st = _mk(tmp_path, backup=bak)
+    form = {"draft_id": "share-000000001", "idea": "공유 링크 아이디어", "track": "tech"}
+    st.upsert_draft(form)
+    assert st.share_token("없는-초안-00000") is None
+    tok = st.share_token("share-000000001")
+    assert tok and S.SHARE_TOKEN_RE.match(tok) and tok != "share-000000001"
+    assert st.share_token("share-000000001") == tok                      # 두 번째는 같은 값
+    assert st.draft_id_for_share(tok) == "share-000000001"
+    assert st.draft_id_for_share("x" * 24) is None and st.draft_id_for_share("short") is None
+    assert st.get_draft("share-000000001").get("share_token") is None    # 초안 응답에는 토큰이 안 실린다
+    assert bak.draft_id_for_share(tok) == "share-000000001"              # 백업에도 같은 토큰
+    st.close(); bak.close()
+
+
+def test_init_adds_share_token_column_to_old_db(tmp_path):
+    import sqlite3
+    path = tmp_path / "old3.sqlite"
+    with sqlite3.connect(path) as c:
+        c.execute("create table drafts (draft_id varchar(64) primary key, idea text not null default '', track varchar(16), is_business boolean, "
+                  "current_item text, team text, capability text, answers text, owner varchar(64), model varchar(160), request_count integer, "
+                  "is_test boolean not null default 0, created_at datetime not null, updated_at datetime not null)")
+        c.execute("insert into drafts (draft_id, idea, created_at, updated_at) values ('old-000000000002', '옛 초안', '2026-09-01 00:00:00', '2026-09-01 00:00:00')")
+    st = S.Storage("sqlite:///" + path.as_posix())
+    st.init()
+    tok = st.share_token("old-000000000002")
+    assert tok and st.draft_id_for_share(tok) == "old-000000000002"
+    st.close()
+
+
+@pytest.mark.asyncio
+async def test_share_endpoints_roundtrip(tmp_path):
+    """POST /drafts/{id}/share → GET /shared/{token} 이 GET /drafts/{id} 와 같은 초안을 준다. 모르는 토큰은 404."""
+    import httpx
+    from backend import main as M
+
+    async with M.lifespan(M.app):
+        M.storage.upsert_draft({"draft_id": "share-api-000001", "idea": "공유 API 아이디어", "track": "tech"})
+        transport = httpx.ASGITransport(app=M.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=30) as c:
+            assert (await c.post("/drafts/no-such-draft-0001/share")).status_code == 404
+            r = await c.post("/drafts/share-api-000001/share")
+            assert r.status_code == 200
+            tok = r.json()["share"]
+            assert tok != "share-api-000001" and (await c.post("/drafts/share-api-000001/share")).json()["share"] == tok
+            r2 = await c.get(f"/shared/{tok}")
+            assert r2.status_code == 200
+            body = r2.json()
+            assert body["draft_id"] == "share-api-000001" and body["idea"] == "공유 API 아이디어" and body["share"] == tok
+            assert "finisher" in body and "share_token" not in body
+            assert (await c.get("/shared/" + "z" * 24)).status_code == 404
+            assert (await c.get("/shared/bad")).status_code == 404

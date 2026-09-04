@@ -293,7 +293,7 @@ function ideaSimilarity(a, b) {
 // form 변경을 적용하면서 아이디어가 기준과 많이 달라졌으면 새 초안 id 를 매긴다. 서버에는 보내는 순간에만 반영된다.
 function withDraft(next) {
   if (next.draftId && ideaSimilarity(next.idea, next.draftIdea) >= DRAFT_SAME_THRESHOLD) return next;
-  return { ...next, draftId: api.newDraftId(), draftIdea: next.idea || "" };
+  return { ...next, draftId: api.newDraftId(), draftIdea: next.idea || "", shareToken: "" };   // 새 초안 = 공유 링크도 새로
 }
 
 // ── 서버 저장본 복원 (2026-09-03) ──
@@ -314,15 +314,20 @@ function answersFromServer(list) {
   for (const a of list || []) if (a?.slot) out[a.slot] = { answer: a.answer ?? null, unknown: !!a.unknown };
   return out;
 }
-function draftLinkFor(draftId) {
-  return `${location.origin}${location.pathname}?draft=${draftId}`;
+// 공유 링크(2026-09-04): DB 키(draft_id)가 아니라 서버가 따로 만든 난수 토큰(/drafts/{id}/share)을 싣는다.
+// 예전에 복사해 둔 ?draft=<id> 링크도 그대로 열린다(아래 draftIdFromUrl).
+const SHARE_TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
+function shareLinkFor(token) {
+  return `${location.origin}${location.pathname}?share=${token}`;
 }
-function draftIdFromUrl() {
+function urlParam(name, re) {
   try {
-    const id = new URLSearchParams(location.search).get("draft") || "";
-    return DRAFT_ID_RE.test(id) ? id : "";
+    const v = new URLSearchParams(location.search).get(name) || "";
+    return re.test(v) ? v : "";
   } catch { return ""; }
 }
+const draftIdFromUrl = () => urlParam("draft", DRAFT_ID_RE);
+const shareFromUrl = () => urlParam("share", SHARE_TOKEN_RE);
 
 function loadJobs() {
   try {
@@ -783,18 +788,23 @@ export default function ModooWriter() {
     return () => { stopped = true; };
   }, [step, running]);
 
-  // 개인 링크(?draft=id): 이 브라우저의 저장본과 다른 초안이면 서버 저장본으로 화면을 세운다 (다른 PC·폰에서 이어 보기).
+  // 공유 링크(?share=토큰) 또는 예전 개인 링크(?draft=id): 이 브라우저의 저장본과 다른 초안이면 서버 저장본으로 화면을 세운다
+  // (다른 PC·폰에서 이어 보기). 같은 초안이면 아무것도 안 한다 — 저장본이 더 최신일 수 있다.
   useEffect(() => {
-    const id = draftIdFromUrl();
-    if (!id || id === saved?.form?.draftId) return;
+    const share = shareFromUrl();
+    const id = share ? "" : draftIdFromUrl();
+    if (!share && !id) return;
+    if (id && id === saved?.form?.draftId) return;
+    if (share && share === saved?.form?.shareToken) return;
     (async () => {
       try {
-        const row = await api.getDraft(id);
+        const row = share ? await api.getShared(share) : await api.getDraft(id);
+        const did = row.draft_id || id;
         const styles = [...new Set((row.generations || []).map((g) => g.style).filter((sid) => STYLES.some((x) => x.id === sid)))];
         setForm((f) => ({
           ...f, track: TRACKS[row.track] ? row.track : "tech", idea: row.idea || "", isBusiness: false, currentItem: "",
           team: row.team || "팀원 없음", capability: row.capability || "",
-          styles: styles.length ? styles : [STYLES[0].id], draftId: id, draftIdea: row.idea || "",
+          styles: styles.length ? styles : [STYLES[0].id], draftId: did, draftIdea: row.idea || "", shareToken: share || "",
         }));
         restoredAnswersRef.current = row.answers || [];
         setAnswers(answersFromServer(row.answers));
@@ -809,6 +819,26 @@ export default function ModooWriter() {
       }
     })();
   }, []);
+
+  // "공유 링크 만들기": 서버에서 토큰을 받아 폼에 보관하고 바로 복사까지 시도한다 (Safari 는 비동기 뒤 복사가 막힐 수 있어
+  // 링크가 화면에 남고 복사 버튼을 한 번 더 누르면 된다). 서버에 아직 없는 초안(생성 전·테스트 모드)은 실패 문구.
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState("");
+  async function makeShareLink() {
+    if (!form.draftId || shareBusy) return;
+    setShareBusy(true); setShareError("");
+    try {
+      const r = await api.shareDraft(form.draftId);
+      const token = r.share || "";
+      if (!token) throw new Error("empty");
+      setForm((f) => (f.draftId === form.draftId ? { ...f, shareToken: token } : f));
+      copy("link", shareLinkFor(token));
+    } catch (e) {
+      setShareError(String(e.message || e));
+    } finally {
+      setShareBusy(false);
+    }
+  }
 
   // 남은 문항만 이어서 만든다. 이어받기 직후 자동으로, 그리고 "남은 N개 계속 만들기" 버튼에서 부른다.
   async function generateMissing() {
@@ -935,7 +965,8 @@ export default function ModooWriter() {
         {busy && <div className="text-xs text-slate-500">{t("tr.busy")}</div>}
         {!busy && stale && <div className="text-xs text-amber-700 mb-1">{t("tr.stale")}</div>}
         {!busy && cur_t?.error && !cur_t?.text && <div className="text-xs text-red-600">{t("tr.fail")}{cur_t.error}</div>}
-        {cur_t?.text && <p className="whitespace-pre-wrap leading-relaxed text-slate-700">{cur_t.text}</p>}
+        {/* 문항 본문이 2,000자까지라 번역도 길다 — 일정 높이 안에서 스크롤 (2026-09-04 사용자 요청). */}
+        {cur_t?.text && <div className="max-h-56 overflow-y-auto pr-2"><p className="whitespace-pre-wrap leading-relaxed text-slate-700">{cur_t.text}</p></div>}
       </div>
     );
   }
@@ -1199,10 +1230,16 @@ export default function ModooWriter() {
                 {t("dr.autofill", { n: autoFill.remaining })}
               </p>
             )}
-            {form.draftId && (
+            {form.draftId && form.shareToken && (
               <p className="text-xs text-slate-500 break-all">
-                {t("dr.link")}<span className="font-mono">{draftLinkFor(form.draftId)}</span>{" "}
-                <button onClick={() => copy("link", draftLinkFor(form.draftId))} className="underline">{copied === "link" ? t("copied") : copied === "link!" ? t("copy.fail.short") : t("copy")}</button>
+                {t("dr.link")}<span className="font-mono">{shareLinkFor(form.shareToken)}</span>{" "}
+                <button onClick={() => copy("link", shareLinkFor(form.shareToken))} className="underline">{copied === "link" ? t("copied") : copied === "link!" ? t("copy.fail.short") : t("copy")}</button>
+              </p>
+            )}
+            {form.draftId && !form.shareToken && Object.keys(status).length > 0 && (
+              <p className="text-xs text-slate-500">
+                <button onClick={makeShareLink} disabled={shareBusy} className="underline disabled:opacity-50">{shareBusy ? t("dr.share.busy") : t("dr.share")}</button>
+                {shareError && <span className="ml-2 text-red-600">{t("dr.share.fail")}{shareError}</span>}
               </p>
             )}
             <div className="flex items-center justify-between flex-wrap gap-3">

@@ -168,6 +168,17 @@ export function getDraft(draftId) {
   return request(`/drafts/${encodeURIComponent(draftId)}`);
 }
 
+/** 공유 링크 토큰 (2026-09-04) → { draft_id, share }. 처음 부르면 만들고 그 뒤로는 같은 값.
+ *  다른 PC·폰에 주는 링크(?share=<token>)에 DB 키(draft_id)가 드러나지 않게 따로 둔다. 테스트 모드 초안은 404. */
+export function shareDraft(draftId) {
+  return request(`/drafts/${encodeURIComponent(draftId)}/share`, { method: "POST" });
+}
+
+/** 공유 토큰으로 초안 한 벌 → getDraft 와 같은 모양 + share. 없으면 404. */
+export function getShared(token) {
+  return request(`/shared/${encodeURIComponent(token)}`);
+}
+
 /** 서버 상태 → { ok, model, base_url, fallback, usage: { used, limit, remaining, reset } } */
 export function health() {
   return request("/health");
