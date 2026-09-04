@@ -5,6 +5,8 @@
     .venv/Scripts/python scripts/drafts_delete.py --tests               # 테스트 표시 초안 미리보기
     .venv/Scripts/python scripts/drafts_delete.py --tests --yes         # 테스트 표시 초안 전부 삭제 (drafts + generations + research)
     .venv/Scripts/python scripts/drafts_delete.py 72d5e24c --yes        # 특정 초안 — 테스트 표시가 있을 때만 지워진다
+    .venv/Scripts/python scripts/drafts_delete.py 72d5e24c --mark-test --yes            # 운영자가 사이트에서 직접 만들어 본 초안에 표시를 찍는다(그 뒤 위 명령으로 삭제)
+    .venv/Scripts/python scripts/drafts_delete.py 72d5e24c --mark-test --yes --backup   # 백업 DB 에도 같은 표시(기록은 남기고 삭제는 안 한다 — 전례)
 
 테스트 표시는 요청 헤더 X-Mochang-Test(사이트 주소 ?test=1, scripts/load_test.py, scripts/foreign_e2e.py)로 들어온 초안에만 붙고,
 그런 초안은 서비스 DB 에 아예 들어오지 않는다(백업 DB 에만). 따라서 보통은 --backup 과 함께 쓴다.
@@ -30,6 +32,10 @@ def main() -> int:
     ap.add_argument("--tests", action="store_true", help="테스트 표시가 있는 초안 전부")
     ap.add_argument("--backup", action="store_true", help="서비스 DB 대신 백업 DB 를 다룬다")
     ap.add_argument("--yes", action="store_true", help="실제로 지운다 (없으면 미리보기)")
+    ap.add_argument("--mark-test", action="store_true",
+                    help="지정한 초안에 테스트 표시(is_test=1)를 찍는다. 운영자가 사이트에서 직접 만들어 본 초안을 지우려면 "
+                         "이 표시가 필요하다 — 두 단계로 나눈 것은 한 번의 명령으로 실사용 데이터가 사라지지 않게 하기 위함이다. "
+                         "이 도구는 한 번에 한 DB 만 다루므로 백업 DB 에도 남기려면 --backup 을 붙여 한 번 더 실행한다")
     args = ap.parse_args()
 
     st = S.Storage.from_config(load_config())
@@ -60,6 +66,30 @@ def main() -> int:
         targets.append(hits[0])
     if not targets:
         print("대상 없음."); return 0
+
+    # ── 테스트 표시 찍기 (2026-09-04) ──
+    # 운영자가 브라우저에서 ?test=1 없이 만들어 본 초안은 실사용 행과 구분되지 않아 도구가 거부한다.
+    # 지울 대상을 id 로 콕 집어 표시한 뒤에만 삭제할 수 있게 두 단계로 나눈다 (사용자 결정 2026-09-03:
+    # "실사용 데이터는 어떤 일이 있어도 안 날아가게" — 한 번의 명령으로는 절대 지워지지 않는다).
+    if args.mark_test:
+        if args.tests:
+            print("  ! --mark-test 는 지울 id 를 콕 집어 줄 때만 씁니다 (--tests 와 함께 쓰지 않습니다)."); return 1
+        if not args.yes:
+            for r in targets:
+                show(r, "표시예정")
+            print("실제로 표시하려면 --yes"); return 0
+        import sqlalchemy as sa
+        from backend.storage import drafts as drafts_tbl
+        ids = [r["draft_id"] for r in targets]
+        with st.engine.begin() as conn:
+            n = conn.execute(sa.update(drafts_tbl).where(drafts_tbl.c.draft_id.in_(ids)).values(is_test=True)).rowcount
+        where = "백업" if args.backup else "서비스"
+        print(f"{where} DB 에 테스트 표시 {n}건. 이제 --mark-test 를 빼고 --yes 로 지울 수 있습니다.")
+        if not args.backup:
+            print("  (백업 DB 에도 기록을 남기려면: 같은 명령에 --backup 을 붙여 한 번 더 — 백업은 지우지 말고 표시만 두는 것이 전례다)")
+        st.close()
+        return 0
+
     for r in targets:
         show(r, "삭제" if (args.yes and r["is_test"]) else ("거부" if not r["is_test"] else "예정"))
     real = [r for r in targets if not r["is_test"]]
