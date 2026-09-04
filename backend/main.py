@@ -480,6 +480,9 @@ async def submit_job(kind: str, body: dict, request: Request):
         job = q.submit(lambda: _persisted(kind, form, runner(form), ip, test) if kind != "intake" else _intake_full(form, ip, test),
                        kind=kind, owner=owner, ip=ip, max_per_owner=per_owner, max_per_ip=MAX_JOBS_PER_IP, max_per_kind=per_kind)
     except TooManyJobs as e:
+        # 어느 상한에 걸렸는지 남긴다 (2026-09-04): 부하 테스트에서 owner(초안)·ip(천장)·kind(번역 전역) 를 나눠 봐야
+        # 값을 어디서 올릴지 정할 수 있다. scripts/timing_report.py "[동시 상한 429]" 절.
+        timing.log("limit", kind=kind, scope=e.scope, active=e.active, limit=e.limit)
         raise HTTPException(status_code=429, detail=str(e),
                             headers={"Retry-After": "10"})
     return {"job_id": job.id, "kind": kind, "position": q.position(job.id), "queue": q.stats()}

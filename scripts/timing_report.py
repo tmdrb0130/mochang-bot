@@ -133,6 +133,19 @@ def main() -> None:
         for k, v in sorted(totals.items(), key=lambda kv: -kv[1]):
             print("  %-16s %6d" % (k, v))
 
+    # 동시 상한 429 (2026-09-04): scope 별로 나눠 봐야 어느 값을 올릴지 알 수 있다.
+    #   owner = 초안당 max_jobs_per_client / ip = max_jobs_per_ip 천장 / kind = translate.global_limit
+    lim = [r for r in rows if r.get("event") == "limit"]
+    if lim:
+        by = {}
+        for r in lim:
+            by.setdefault((r.get("scope", "?"), r.get("kind", "?")), []).append(r)
+        print("
+[동시 상한 429] %d건 — 정상 운영에서는 0 이어야 한다" % len(lim))
+        for (scope, kind), rs in sorted(by.items()):
+            worst = max(int(r.get("active") or 0) for r in rs)
+            print("  %-6s %-18s %4d건  (상한 %s, 최대 동시 %d)" % (scope, kind, len(rs), rs[-1].get("limit"), worst))
+
     # 저장 실패(2026-09-04): storage.record 가 삼킨 오류. 0 이 아니면 DB 잠금·디스크·스키마 문제를 의심한다. /health.storage 와 같은 수.
     serr = [r for r in rows if r.get("event") == "storage_error"]
     if serr:

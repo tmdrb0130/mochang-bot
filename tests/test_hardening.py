@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import gzip
+import json
 import re
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -21,6 +22,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend import storage as S
+from backend import timing as T
 from backend.llm.client import LLMResult
 from backend.llm.jobs import JobQueue, TooManyJobs
 
@@ -269,6 +271,10 @@ async def test_same_ip_many_drafts_pass_but_ip_ceiling_and_translate_limits_hold
                 assert t4.status_code == 200 and t5.status_code == 429 and "서버 전체" in t5.json()["detail"]
                 stats = (await c.get("/jobs", headers=head)).json()
                 assert stats["your_active"] == 7
+                # 429 는 scope 와 함께 timing 에 남는다 — 부하 테스트에서 어느 상한에 걸렸는지 나눠 보려고 (2026-09-04)
+                lines = [json.loads(x) for x in T.PATH.read_text(encoding="utf-8").splitlines() if '"limit"' in x]
+                scopes = {r["scope"] for r in lines if r.get("event") == "limit"}
+                assert {"owner", "ip", "kind"} <= scopes
                 gate.set()
                 for _ in range(300):
                     await asyncio.sleep(0.02)
