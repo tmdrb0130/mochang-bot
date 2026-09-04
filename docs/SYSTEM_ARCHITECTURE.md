@@ -1230,7 +1230,7 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `backend/.vectorstore/` | `VectorStore._persist` | LlamaIndex docstore·index (조사 페이지 청크 + 메타) | 만료 없음 (조회 시 730일 신선도 컷) |
 | `backend/.data/mochang.sqlite` (+`-wal`,`-shm`) | `Storage` | 서비스 DB | 영구 |
 | `backend/.data/mochang-backup.sqlite` | `Storage(backup)` | 백업 DB (테스트 포함 전부) — 같은 PC 라 장애 대비 백업은 아니다 | 영구 |
-| `backend/.data/snapshots/mochang-YYYY-MM-DD.sqlite.gz` | `scripts/db_snapshot.py` | 서비스 DB 스냅샷(sqlite backup API, 무중단). `--remote gpu:/opt/mochang-backup` 으로 다른 머신에 복사 → **오프사이트 백업** | 로컬 7일 보관 |
+| `backend/.data/snapshots/mochang-YYYY-MM-DD.sqlite.gz` | `scripts/db_snapshot.py` | 서비스 DB 스냅샷(sqlite backup API, 무중단) ≈340 KB. 매일 04:30 예약 작업이 GPU 서버 `~/mochang-backup` 으로 복사 → **오프사이트 백업** | 로컬 7일 보관 |
 | `backend/.usage.json` / `.usage.research.json` | `UsageCounter` | UTC 날짜별 요청 수·모델별 | 날짜 바뀌면 리셋 |
 | `backend/.timing.jsonl` (+`.1`) | `timing.log` | http/job/sources/auto_finish 이벤트 | 20MB 롤링 |
 | `scripts/.foreign_e2e_result.json` | `foreign_e2e.py` | E2E 결과 | — |
@@ -1259,8 +1259,11 @@ https://www.bustartup.kr:50001/            nginx (Desktop\nginx\conf\nginx.conf 
 - 백엔드(코드·프롬프트·config)를 고치면 **`nssm restart mochang-api`** (관리자 PowerShell, 큐가 빌 때). 재시작 때 `storage.init()` 이 스키마 이행(ALTER TABLE)을 수행한다.
 - 열어 둔 탭은 App.jsx 의 자동 새로고침 effect 로 1분 안에 새 번들을 받는다.
 - 테스트는 사이트 주소에 `?test=1` 을 붙여 열거나 `scripts/load_test.py`·`scripts/foreign_e2e.py`(헤더 자동)로만. 실사용 데이터는 어떤 도구로도 지워지지 않는다.
-- **오프사이트 백업(2026-09-04)**: `scripts/db_snapshot.py --remote gpu:/opt/mochang-backup` 을 작업 스케줄러(`schtasks`, 스크립트 머리말의 명령)에 매일 등록한다. 등록은 사용자가 한다(관리자 창).
+- **오프사이트 백업(2026-09-04 등록 완료)**: Windows 예약 작업 `mochang-db-snapshot` — 매일 04:30, `python scripts/db_snapshot.py --remote gpu:mochang-backup`, `-StartWhenAvailable`(PC 가 꺼져 있었으면 켜질 때 실행), 30분 제한. 관리자 없이 현재 사용자로 등록됐고 **"로그인해 있을 때만" 실행**된다 — 이 PC 는 RDP 세션이 계속 살아 있는 구성이라 문제없다([[bustartup-kr 운영구조]] 함정 2). 확인: `Get-ScheduledTaskInfo mochang-db-snapshot` 의 `LastTaskResult` 가 0, 또는 `.timing.jsonl` 의 `event=db_snapshot` 줄(`remote_ok: true`).
+  대상이 `/opt` 가 아니라 GPU 서버 **홈**인 이유: `/opt` 는 root 권한이 필요한데 공유 GPU 서버에 시스템 변경을 남기지 않으려고. SSH 는 ssh-agent 없이 키 파일로 붙으므로 무인 실행에서도 동작한다(실행 검증 완료).
+- **8000 포트**: `127.0.0.1:8000` 전용 바인딩 확인(2026-09-04) — nginx 를 우회한 직접 접속 경로가 없다.
 - **SSH 터널 서비스화(권장, 미적용)**: `nssm install mochang-tunnel ssh "-N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 30801:localhost:30801 gpu"` 로 터널을 NSSM 서비스로 두면 끊겨도 재시작된다. `/health.llm_reachable` 이 False 면 터널 또는 vLLM 이 죽은 것.
+- **서비스 제어 권한**: 이 계정은 `mochang-api` 를 stop/start 할 수 없다(`nssm start` → `OpenService(): 액세스가 거부되었습니다`). 재시작은 항상 사용자의 **관리자 PowerShell** 에서.
 
 ### 18-2. GPU 서버 (k8s)
 
@@ -1485,14 +1488,32 @@ python -m backend.test_generate q2 --call             # 실제 생성
 
 ### 24-4. 배포 시 알아 둘 것
 
+- **순서**: 큐가 빈 시간대에 ① `nssm restart mochang-api`(관리자 창, 스키마 5 이행) → ② `cd frontend; npx vite build`(즉시 공개) → ③ 열려 있던 탭은 1분 안에 자동 새로고침. **백엔드가 먼저**여야 한다 — 새 번들은 `draft_key` 를 기대하는데 옛 백엔드는 주지 않는다(그 창에 초안을 시작한 학생은 열쇠 없이 남고, 옛 행 규칙 덕에 같은 IP 에서만 이어진다).
 - 재시작 때 `storage.init()` 이 서비스·백업 DB 에 `owner_token` 열을 붙인다(무해, 기존 행 NULL).
 - **재빌드 필수**: 프론트가 `draft_key` 를 보관·전송하고 카드 재생성을 큐로 보낸다. 백엔드만 올리면 옛 번들은 (a) 동기 `/intake/regenerate` 가 404 → "다른 보기 보기" 실패, (b) 열쇠를 저장하지 않아 두 번째 요청부터 서버 저장이 거부된다(글은 브라우저에 남음). 큐가 빌 때 둘을 함께 배포하면 자동 새로고침(1분)으로 창이 닫힌다.
 - `live_load_test.py` 가 XFF 로 40명을 흉내내던 방식은 nginx 뒤에서 이제 **한 IP** 로 보인다 — 그 테스트가 곧 "같은 IP 40명" 시나리오다. `max_jobs_per_ip 300`·`max_intakes_per_ip_hour 80` 안이면 429 가 없어야 한다.
-- `backend/.vectorstore/` 는 지우지 않았다. 오프라인 임베딩 문서가 섞였을 수 있어(메타에 `embed_model` 없음) 비우고 재축적하는 것은 사용자 결정.
+- **벡터스토어는 오염되지 않았다 — 재축적 불필요(2026-09-04 확인)**. 메타(`embed_model`)가 없는 옛 문서라도 **임베딩 차원**으로 판별된다: `OfflineEmbedding` 은 256차원, bge-m3 는 1024차원. `default__vector_store.json` 의 8,803청크가 **전부 1024차원**이고 256차원은 0개였다(고유 URL 1,190). 앞으로도 같은 방법으로 확인할 수 있다:
+  ```python
+  import json, collections
+  v = json.load(open("backend/.vectorstore/default__vector_store.json", encoding="utf-8"))
+  print(collections.Counter(len(x) for x in v["embedding_dict"].values()))   # {1024: N} 이어야 정상
+  ```
 - 세마포어(60/8/8)·천장(300/80) 값은 제안값이다. 5차 부하 테스트의 `timing_report` "[조사 경로 평균]" 과 429 건수로 조정한다.
 
-### 24-5. 남은 것 (이번에 하지 않은 것)
+### 24-5. 남은 것 · 다음 반복 후보
 
-- 4번(사용자가 제외).
-- SSH 터널 NSSM 서비스 등록, 작업 스케줄러 `db_snapshot` 등록 — 관리자 권한이 필요해 명령만 문서화.
-- 벡터DB 재축적, 5차 부하 테스트와 값 조정.
+**이번 보강이 새로 연 이슈 두 개** (2026-09-04 검토에서 지적, 둘 다 긴급하지 않다 — 보강 **이전**에는 열쇠 자체가 없어 누구나 쓸 수 있었으므로 회귀가 아니라 "덜 조인 부분"이다):
+
+| # | 내용 | 왜 남겨 두는가 | 다듬는 방향 |
+|---|---|---|---|
+| A | **공유 링크가 쓰기 권한까지 넘긴다** — `GET /shared/{token}` 이 `draft_key` 를 함께 준다. 기기 이동(내 폰에서 이어 쓰기)에는 맞지만, 멘토·친구에게 링크를 보내면 그 사람도 서버 측 초안을 덮어쓸 수 있다. #1 의 취지와 반쯤 충돌 | 지금은 공유 = 기기 이동 용도로 쓰이고 있고, 보강 전에도 토큰을 아는 사람은 쓸 수 있었다 | 공유를 **열람 전용**(열쇠 미포함)으로 하고, 기기 이동은 `?move=1` 같은 별도 파라미터일 때만 열쇠를 싣는다. 또는 공유 토큰을 읽기용/이동용 두 종류로 |
+| B | **`GET /jobs/{job_id}` 로 열쇠가 샐 수 있다** — `_persisted` 가 결과에 `draft_key` 를 붙이므로 폴링 응답이 그대로 실어 나르는데, `/jobs/{id}` 에는 소유 확인이 없다 | `job_id` 가 `uuid4[:12]`(48비트)라 원격 추측은 비현실적 | `Job.ip` 를 이미 저장하므로 `job.ip == _client_key(request)` 일 때만 `draft_key` 를 포함하거나, 완료 후 첫 조회에서 한 번만 내보내고 지운다 |
+
+**과도기 규칙의 한계** (문서화만, 코드 변경 없음): 열쇠 없는 옛 초안은 "같은 IP" 로 여는데 — ① 강의실 NAT 에서는 반 전체가 같은 IP 라 `draft_id` 를 아는 사람이 남의 옛 초안을 열고 열쇠를 먼저 가져갈 수 있다(UUID 라 실질 위험은 낮다). ② 더 현실적인 쪽은 반대다 — **학교에서 만든 초안을 집에서 복원하면 IP 가 달라 404** 가 된다. 글은 localStorage 에 남아 치명적이지 않지만, 배포 뒤 "복원이 안 돼요" 문의가 오면 이것이 첫 번째 용의자다. 열쇠가 한 번 발급된 뒤로는 IP 와 무관하므로 시간이 지나면 저절로 사라진다.
+
+**운영 작업 잔여**: 5차 부하 테스트(같은 IP 40명)와 값 확정, SSH 터널 NSSM 서비스화(관리자 필요). 4번은 사용자가 제외.
+
+**부하 테스트에서 볼 것** (이번 변경의 실질 검증):
+1. **429 를 scope 별로** — `timing_report.py` 의 "[동시 상한 429]" 절(`owner`/`ip`/`kind`). 정상이면 **0건**. `ip` 가 뜨면 `max_jobs_per_ip`(300)를, `kind` 가 뜨면 `translate.global_limit`(30)을 올린다. 한국어 40명은 40×6=240 이라 여유가 있지만 외국어 화면은 번역이 초안당 10 까지라 이론상 더 오른다 — 전역 30 이 먼저 끊어 ≈270 에서 멈추므로 여유가 30밖에 없다.
+2. **"[조사 경로 평균]"** — `llm_wait_ms`(세마포어 60이 병목인지), `extract_wait_ms`(풀 8이 병목인지) vs `*_run_ms`. 대기가 실행보다 크게 길면 그 값을 올린다.
+3. **본문 생성 대기**가 조사 피크에 밀리는지 — "[작업 큐] generate" 의 대기 p50/p95 를 4차(157s/—)와 비교.

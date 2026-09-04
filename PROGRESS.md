@@ -1,4 +1,4 @@
-# PROGRESS — 2026-09-04 오후 (보강 묶음: 접근 열쇠·상한 개편·조사 세마포어·벡터DB 헬스체크·오프사이트 백업 + 시스템 구조도) — **코드만, 재시작·재빌드 대기**
+# PROGRESS — 2026-09-04 오후 (보강 묶음 + 운영 작업) — **오프사이트 백업 등록 완료 / 배포는 관리자 재시작 대기**
 
 > 이 절이 최신. 아래 절들은 그대로 둠. 실호출 없음(모델 호출 0). 배포하려면 `nssm restart mochang-api`(스키마 5 이행: drafts.owner_token 열 ALTER)
 > **와** `cd frontend; npx vite build` **둘 다** (프론트가 draft_key 를 보관·전송하고 카드 재생성을 큐로 보낸다).
@@ -44,11 +44,35 @@
 복원되고 이후 응답에 draft_key 가 실리는지. ③ `?test=1` 로 English 카드 번역이 여전히 도는지(초안당 10 제한). ④ `/health` 에 `llm_reachable: true`, `storage.error_count: 0`.
 ⑤ 5차 부하 테스트: `live_load_test.py --users 40` 은 이제 같은 IP 40명 시나리오 — `max_jobs_per_ip` 300 안에서 429 가 없어야 하고, `timing_report` 의 "[조사 경로 평균]" 으로 세마포어 값을 정한다.
 
+## 검토 뒤 운영 작업 (22:4x~22:5x)
+
+사용자 검토 결론: "9개 수정은 전부 올바름. 지금 할 일은 수정이 아니라 배포·schtasks·재축적·5차 측정 네 개의 운영 작업." 그중 셋을 처리했고 하나(배포)는 관리자 권한에서 막혔다.
+
+- **벡터DB 재축적 — 안 한다. 오염이 없다(확정).** 사용자 판단은 "메타가 없어 옛 문서를 가려낼 수 없으니 비우고 재축적" 이었는데, **임베딩 차원으로 판별된다**: OfflineEmbedding 256 / bge-m3 1024.
+  `default__vector_store.json` 의 **8,803청크가 전부 1024차원, 256차원 0개**(고유 URL 1,190). 지웠다면 1,190페이지를 이유 없이 버릴 뻔했다. 판별 코드는 구조도 §24-4 에 남겨 뒀다.
+- **오프사이트 백업 — 등록·검증 완료.** 예약 작업 `mochang-db-snapshot`(매일 04:30, StartWhenAvailable, 30분 제한)을 `Register-ScheduledTask` 로 등록(관리자 불필요, 현재 사용자·로그인 시 실행 — 이 PC 는 RDP 세션 상주라 맞다).
+  **즉시 1회 실행해 끝까지 확인**: LastTaskResult 0x0 → 원격 파일 시각 22:49:17 갱신 → `gzip -t` 무결성 OK → 로컬 복원 시 초안 26(테스트 0)·생성문 214·조사 173·스키마 4. 다음 날을 기다릴 필요가 없어졌다.
+  경로는 `gpu:mochang-backup`(GPU 서버 **홈**) — `/opt` 는 root 가 필요한데 공유 서버에 시스템 변경을 남기지 않으려고 바꿨다. SSH 는 ssh-agent 없이 키 파일로 붙어 무인 실행에서도 동작한다. 스크립트에 cp949 방어(`stdout.reconfigure`)도 넣었다.
+- **8000 포트**: `127.0.0.1:8000` 전용 바인딩 확인 — nginx 우회 직접 접속 경로 없음.
+- **429 scope 계측 추가**(커밋 `0d98e37`): `TooManyJobs.scope` 를 `timing.log("limit", ...)` 로 남기고 `timing_report.py` 에 "[동시 상한 429]" 절. 5차 부하 테스트에서 owner/ip/kind 중 어느 상한에 걸렸는지 나눠 본다. 테스트 456 그대로.
+- **배포 — 막힘.** 이 계정은 서비스를 제어할 수 없다(`nssm start` → `OpenService(): 액세스가 거부되었습니다`). 배포 창은 지금이 좋다: **최근 15분 사용자 요청 0건, 마지막 작업 20:14:57, 큐 running 0 / queued 0**.
+
+## 검토에서 새로 열린 이슈 2개 (다음 반복, 긴급 아님)
+
+보강 **이전**에는 열쇠 자체가 없어 누구나 쓸 수 있었으므로 회귀가 아니라 "덜 조인 부분"이다. 상세·수정 방향은 구조도 §24-5 표.
+
+- **A. 공유 링크가 쓰기 권한까지 넘긴다** — `/shared/{token}` 이 `draft_key` 를 함께 준다. 기기 이동에는 맞지만 멘토·친구에게 보내면 그 사람도 덮어쓸 수 있다 → 공유는 열람 전용, 이동은 `?move=1` 로 분리.
+- **B. `/jobs/{id}` 폴링으로 열쇠가 샐 수 있다** — 소유 확인이 없다(job_id 48비트라 추측은 비현실적) → `job.ip == 요청 IP` 일 때만 포함하거나 첫 조회 1회만.
+- **과도기 규칙 한계(문서화만)**: 열쇠 없는 옛 초안의 "같은 IP" 규칙은 NAT 에서 약하고, 반대로 **학교에서 만들고 집에서 복원하면 404** 가 된다. 배포 뒤 "복원이 안 돼요" 문의의 첫 용의자. 열쇠가 한 번 발급되면 IP 와 무관해져 저절로 사라진다.
+
 ## 다음 순서
 
-1. 배포: `nssm restart mochang-api` + `cd frontend; npx vite build` (큐 빌 때). 재시작 때 서비스·백업 DB 에 owner_token 열이 붙는다(무해, 기존 행 NULL).
-2. 위 ①~④ 확인 → `schtasks` 로 `db_snapshot.py --remote gpu:/opt/mochang-backup` 매일 등록(먼저 `ssh gpu "mkdir -p /opt/mochang-backup"`) → (선택) 터널 NSSM 서비스화.
-3. 벡터DB 재축적 여부 결정 → 5차 부하 테스트(같은 IP 40명) → 세마포어·천장 값 조정 → LOAD_TEST 문서 5차 기록.
+1. **배포 (사용자 관리자 PowerShell)** — 큐가 빈 지금:
+   `nssm restart mochang-api` → 확인되면 클로드가 `cd frontend; npx vite build`. **백엔드가 먼저**여야 한다(새 번들은 draft_key 를 기대, 옛 백엔드는 안 줌).
+   재시작 때 서비스·백업 DB 에 owner_token 열이 붙는다(무해, 기존 행 NULL). 확인: `/health` 에 `llm_reachable`·`storage` 키가 보이면 새 코드.
+2. 배포 뒤 확인: 새 초안 → 새로고침 복원 → 공유 링크 → 폰에서 이어 만들기 / 옛 초안이 같은 브라우저에서 복원되고 이후 draft_key 가 실리는지 / `?test=1` 로 English 카드 번역 / `/health.storage.error_count 0`.
+3. **5차 부하 테스트**(`live_load_test.py --users 40` = 이제 같은 IP 40명 시나리오) → ① "[동시 상한 429]" 0건인지 ② "[조사 경로 평균]" 의 대기 vs 실행 ③ generate 대기 p50/p95 를 4차와 비교 → 60/8/8·300/80 확정 → LOAD_TEST 5차 기록.
+4. (선택) 터널 NSSM 서비스화, 위 이슈 A·B.
 
 ---
 

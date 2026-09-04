@@ -1,7 +1,7 @@
 """서비스 DB 스냅샷 → 날짜 파일(.sqlite.gz) → (선택) 다른 머신으로 복사 → 오래된 스냅샷 정리 (2026-09-04, 오프사이트 백업).
 
     .venv/Scripts/python scripts/db_snapshot.py                          # 스냅샷만 (backend/.data/snapshots/mochang-YYYY-MM-DD.sqlite.gz)
-    .venv/Scripts/python scripts/db_snapshot.py --remote gpu:/opt/mochang-backup   # + scp 로 GPU 서버에 복사 (SSH 설정 'gpu' 재사용)
+    .venv/Scripts/python scripts/db_snapshot.py --remote gpu:mochang-backup   # + scp 로 GPU 서버 홈에 복사 (SSH 설정 'gpu' 재사용)
     .venv/Scripts/python scripts/db_snapshot.py --keep-days 14 --dir D:/backup     # 보관 일수·폴더 변경
     .venv/Scripts/python scripts/db_snapshot.py --dry-run                # 무엇을 할지만 출력
 
@@ -12,7 +12,9 @@
 매일 새벽 자동 실행 (Windows 작업 스케줄러 — 관리자 PowerShell, 이 스크립트는 등록하지 않는다):
     schtasks /Create /TN "mochang-db-snapshot" /SC DAILY /ST 04:30 /RU "%USERNAME%" ^
       /TR "C:\\Users\\bon505\\Desktop\\mochang-bot\\.venv\\Scripts\\python.exe C:\\Users\\bon505\\Desktop\\mochang-bot\\scripts\\db_snapshot.py --remote gpu:/opt/mochang-backup"
-  GPU 서버에는 먼저 `ssh gpu "mkdir -p /opt/mochang-backup"`. 결과는 backend/.timing.jsonl 에 event=db_snapshot 으로 남는다.
+  실제 등록(2026-09-04)은 PowerShell `Register-ScheduledTask` 로 했다 — 작업 이름 `mochang-db-snapshot`, 매일 04:30,
+  대상 `gpu:mochang-backup`(= GPU 서버 홈. /opt 는 root 권한이 필요해 공유 서버에 시스템 변경을 남기지 않으려고 홈으로).
+  `Get-ScheduledTaskInfo mochang-db-snapshot` 의 LastTaskResult 0 이면 성공. 결과는 backend/.timing.jsonl 에 event=db_snapshot 으로도 남는다.
 """
 from __future__ import annotations
 
@@ -25,6 +27,12 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# 예약 작업(schtasks)으로 무인 실행되므로 콘솔 인코딩(cp949)에서 죽지 않게 — drafts_delete.py 와 같은 처방.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
