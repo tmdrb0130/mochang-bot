@@ -1261,6 +1261,7 @@ https://www.bustartup.kr:50001/            nginx (Desktop\nginx\conf\nginx.conf 
 - 테스트는 사이트 주소에 `?test=1` 을 붙여 열거나 `scripts/load_test.py`·`scripts/foreign_e2e.py`(헤더 자동)로만. 실사용 데이터는 어떤 도구로도 지워지지 않는다.
 - **오프사이트 백업(2026-09-04 등록 완료)**: Windows 예약 작업 `mochang-db-snapshot` — 매일 04:30, `python scripts/db_snapshot.py --remote gpu:mochang-backup`, `-StartWhenAvailable`(PC 가 꺼져 있었으면 켜질 때 실행), 30분 제한. 관리자 없이 현재 사용자로 등록됐고 **"로그인해 있을 때만" 실행**된다 — 이 PC 는 RDP 세션이 계속 살아 있는 구성이라 문제없다([[bustartup-kr 운영구조]] 함정 2). 확인: `Get-ScheduledTaskInfo mochang-db-snapshot` 의 `LastTaskResult` 가 0, 또는 `.timing.jsonl` 의 `event=db_snapshot` 줄(`remote_ok: true`).
   대상이 `/opt` 가 아니라 GPU 서버 **홈**인 이유: `/opt` 는 root 권한이 필요한데 공유 GPU 서버에 시스템 변경을 남기지 않으려고. SSH 는 ssh-agent 없이 키 파일로 붙으므로 무인 실행에서도 동작한다(실행 검증 완료).
+  **원격 권한·보관(2026-09-04)**: 스냅샷에는 학생들의 아이디어·경력이 그대로 들어 있고 GPU 서버는 공유다 → 복사 뒤 디렉터리 `700`·파일 `600` 으로 조인다(기본은 775/644 였다). 원격 보관은 `--remote-keep-days`(기본 30일, 로컬 7일보다 길게 — 오프사이트 사본이 본체다)로 `find -name 'mochang-*.sqlite.gz' -mtime +30 -delete`. 0 이면 정리하지 않는다(무한 누적 주의). 정리·권한 단계가 실패해도 사본이 도착했으면 백업은 성공으로 본다.
 - **8000 포트**: `127.0.0.1:8000` 전용 바인딩 확인(2026-09-04) — nginx 를 우회한 직접 접속 경로가 없다.
 - **SSH 터널 서비스화(권장, 미적용)**: `nssm install mochang-tunnel ssh "-N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 30801:localhost:30801 gpu"` 로 터널을 NSSM 서비스로 두면 끊겨도 재시작된다. `/health.llm_reachable` 이 False 면 터널 또는 vLLM 이 죽은 것.
 - **서비스 제어 권한**: 이 계정은 `mochang-api` 를 stop/start 할 수 없다(`nssm start` → `OpenService(): 액세스가 거부되었습니다`). 재시작은 항상 사용자의 **관리자 PowerShell** 에서.
