@@ -55,7 +55,13 @@
   경로는 `gpu:mochang-backup`(GPU 서버 **홈**) — `/opt` 는 root 가 필요한데 공유 서버에 시스템 변경을 남기지 않으려고 바꿨다. SSH 는 ssh-agent 없이 키 파일로 붙어 무인 실행에서도 동작한다. 스크립트에 cp949 방어(`stdout.reconfigure`)도 넣었다.
 - **8000 포트**: `127.0.0.1:8000` 전용 바인딩 확인 — nginx 우회 직접 접속 경로 없음.
 - **429 scope 계측 추가**(커밋 `0d98e37`): `TooManyJobs.scope` 를 `timing.log("limit", ...)` 로 남기고 `timing_report.py` 에 "[동시 상한 429]" 절. 5차 부하 테스트에서 owner/ip/kind 중 어느 상한에 걸렸는지 나눠 본다. 테스트 456 그대로.
-- **배포 — 막힘.** 이 계정은 서비스를 제어할 수 없다(`nssm start` → `OpenService(): 액세스가 거부되었습니다`). 배포 창은 지금이 좋다: **최근 15분 사용자 요청 0건, 마지막 작업 20:14:57, 큐 running 0 / queued 0**.
+- **배포 — 프론트 완료, 백엔드 재시작만 남음.**
+  - **순서를 정정했다**: 처음 문서에 "백엔드 먼저" 라고 적었으나 코드를 다시 보니 **프론트가 먼저**여야 한다.
+    새 번들 + 옛 백엔드는 깨지는 곳이 없다(`draft_key` 는 Pydantic `extra='ignore'` 가 버리고, `?key=` 는 FastAPI 가 무시, `adoptDraftKey` 는 키 없으면 no-op, `toPayload` 는 빈 키를 안 싣고, `/jobs/intake_regenerate` 는 옛 백엔드에도 있었다).
+    반대로 옛 번들 + 새 백엔드는 셋이 깨진다(동기 regenerate 404 · 저장 거부 · 복원 404). 즉 예전 판단은 뒤집힌 것이고, 이 순서면 **깨지는 창이 아예 없다**.
+  - 22:5x 사용자 0명일 때 `npx vite build` → 번들 `index-Bp04yE_y.js`(이전 `index-Bs94yF8v.js`) 서빙 확인, `/api/models`·`/api/health`·`/api/jobs` 200 정상.
+  - 남은 것: **`nssm restart mochang-api`** — 이 계정은 서비스를 제어할 수 없다(`nssm start` → `OpenService(): 액세스가 거부되었습니다`). 사용자 관리자 PowerShell 필요. 큐 비어 있음(running 0 / queued 0, 마지막 작업 20:14:57).
+  - 새 코드가 실 `config.yaml` 로 import 되는지 미리 확인함(임시 DB로): sync_endpoints False · trusted_proxies 2개 · ip천장 300 · intake 80/h · translate 10/30/priority50 · 세마포어 60/8/8 · 벡터DB freshness 90 · 스키마 목표 5.
 
 ## 검토에서 새로 열린 이슈 2개 (다음 반복, 긴급 아님)
 
@@ -67,8 +73,7 @@
 
 ## 다음 순서
 
-1. **배포 (사용자 관리자 PowerShell)** — 큐가 빈 지금:
-   `nssm restart mochang-api` → 확인되면 클로드가 `cd frontend; npx vite build`. **백엔드가 먼저**여야 한다(새 번들은 draft_key 를 기대, 옛 백엔드는 안 줌).
+1. **`nssm restart mochang-api`** (사용자 관리자 PowerShell) — 프론트는 이미 배포됨. 큐가 빌 때.
    재시작 때 서비스·백업 DB 에 owner_token 열이 붙는다(무해, 기존 행 NULL). 확인: `/health` 에 `llm_reachable`·`storage` 키가 보이면 새 코드.
 2. 배포 뒤 확인: 새 초안 → 새로고침 복원 → 공유 링크 → 폰에서 이어 만들기 / 옛 초안이 같은 브라우저에서 복원되고 이후 draft_key 가 실리는지 / `?test=1` 로 English 카드 번역 / `/health.storage.error_count 0`.
 3. **5차 부하 테스트**(`live_load_test.py --users 40` = 이제 같은 IP 40명 시나리오) → ① "[동시 상한 429]" 0건인지 ② "[조사 경로 평균]" 의 대기 vs 실행 ③ generate 대기 p50/p95 를 4차와 비교 → 60/8/8·300/80 확정 → LOAD_TEST 5차 기록.
