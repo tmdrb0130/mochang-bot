@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 import time
 import weakref
 from dataclasses import dataclass
@@ -286,38 +287,54 @@ def _url_key(url: str) -> str:
 
 
 _vector_store = None          # 프로세스당 하나 (색인 저장소를 열어 두는 비용이 크다)
+# 저장소 열기는 **느리다** — 2026-09-04 실측으로 125MB(벡터) + 39MB(문서) JSON 을 파싱하는 데 32초가 걸렸다.
+# 그동안 이벤트 루프가 멈추면 폴링·헬스체크·다른 사용자 요청이 전부 대기한다(부하 테스트에서 인테이크 폴링이 ReadTimeout).
+# → 호출부는 반드시 asyncio.to_thread 로 부르고(open_vector_store), 여기서는 락으로 중복 생성만 막는다.
+_vector_store_lock = threading.Lock()
 
 
 def get_vector_store(cfg: ResearchConfig):
-    """설정이 켜져 있을 때만 벡터 저장소를 연다. llama_index import 도 이때 처음 일어난다."""
+    """설정이 켜져 있을 때만 벡터 저장소를 연다. llama_index import 도 이때 처음 일어난다.
+
+    **동기 함수다. 이벤트 루프에서 직접 부르지 말고 open_vector_store(cfg) 를 await 할 것** (첫 호출이 수십 초)."""
     global _vector_store
     if not cfg.vectorstore_enabled:
         return None
     if _vector_store is None:
-        from .vectorstore import VectorStore, ollama_embedding
-        if cfg.vectorstore_embed_model:
-            embed = ollama_embedding(cfg.vectorstore_embed_model, cfg.vectorstore_ollama_url)
-            health_url = cfg.vectorstore_ollama_url
-        elif os.environ.get("MOCHANG_ALLOW_OFFLINE_EMBEDDING") == "1":
-            embed, health_url = None, None          # 테스트 전용 — 품질 없는 오프라인 임베딩
-        else:
-            # 운영에서 embed_model 이 비어 있으면 예전엔 오프라인 임베딩으로 색인해 벡터DB 를 오염시켰다 (2026-09-04) → 끈다
-            import logging
-            logging.getLogger("mochang.vectorstore").warning(
-                "research.vectorstore.embed_model 이 비어 있어 벡터DB 를 끕니다 (오프라인 임베딩은 테스트 전용)")
-            return None
-        _vector_store = VectorStore(cfg.vectorstore_dir, embed_model=embed,
-                                    min_score=cfg.vectorstore_min_score, min_hits=cfg.vectorstore_min_hits,
-                                    max_age_days=cfg.vectorstore_max_age_days,
-                                    freshness_days=cfg.vectorstore_freshness_days, health_url=health_url)
+      with _vector_store_lock:
+        if _vector_store is None:
+            from .vectorstore import VectorStore, ollama_embedding
+            if cfg.vectorstore_embed_model:
+                embed = ollama_embedding(cfg.vectorstore_embed_model, cfg.vectorstore_ollama_url)
+                health_url = cfg.vectorstore_ollama_url
+            elif os.environ.get("MOCHANG_ALLOW_OFFLINE_EMBEDDING") == "1":
+                embed, health_url = None, None          # 테스트 전용 — 품질 없는 오프라인 임베딩
+            else:
+                # 운영에서 embed_model 이 비어 있으면 예전엔 오프라인 임베딩으로 색인해 벡터DB 를 오염시켰다 (2026-09-04) → 끈다
+                import logging
+                logging.getLogger("mochang.vectorstore").warning(
+                    "research.vectorstore.embed_model 이 비어 있어 벡터DB 를 끕니다 (오프라인 임베딩은 테스트 전용)")
+                return None
+            t0 = time.monotonic()
+            _vector_store = VectorStore(cfg.vectorstore_dir, embed_model=embed,
+                                        min_score=cfg.vectorstore_min_score, min_hits=cfg.vectorstore_min_hits,
+                                        max_age_days=cfg.vectorstore_max_age_days,
+                                        freshness_days=cfg.vectorstore_freshness_days, health_url=health_url)
+            timing.log("vectorstore_open", dir=cfg.vectorstore_dir, took_s=round(time.monotonic() - t0, 1))
     return _vector_store
+
+
+async def open_vector_store(cfg: ResearchConfig):
+    """get_vector_store 를 **스레드에서** 연다 — 첫 호출이 수십 초라 이벤트 루프를 막으면 안 된다 (2026-09-04).
+    startup 에서 미리 한 번 부르면 첫 사용자가 그 비용을 치르지 않는다."""
+    return await asyncio.to_thread(get_vector_store, cfg)
 
 
 async def index_pages(pages: list[dict], cfg: ResearchConfig) -> int:
     """조사해온 페이지를 벡터DB 에 쌓는다 (색인만 — 조회는 다음 단계).
 
     LlamaIndex 는 동기라 to_thread 로 감싼다. **색인 실패는 조사를 막지 않는다** — 부가 기능이다."""
-    store = get_vector_store(cfg)
+    store = await open_vector_store(cfg)
     if store is None or not pages:
         return 0
     try:
@@ -394,7 +411,7 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
     skip_urls: 이미 다른 조사에서 본문을 받아온 URL — 다시 받지 않는다 (요청 절약).
     max_pages: 이번 호출에서 쓸 페이지 수 상한 (기본 cfg.max_pages_to_extract)."""
     want = cfg.max_pages_to_extract if max_pages is None else max_pages
-    store = get_vector_store(cfg)
+    store = await open_vector_store(cfg)          # 스레드에서 — 첫 호출 32초가 이벤트 루프를 막지 않게
 
     # ① 이미 쌓아 둔 자료부터 본다. 충분하면 웹 검색·fetch 를 아예 하지 않는다 (RAG_PLAN 5절).
     reuse: list[dict] = []

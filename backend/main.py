@@ -84,7 +84,15 @@ async def lifespan(_: FastAPI):
         storage.enabled = False
     if storage.enabled:
         finisher.start()            # config.yaml finisher.enabled 가 아니면 아무것도 안 한다
+    # 벡터DB 를 백그라운드에서 미리 연다 (2026-09-04): 열기에 30초 넘게 걸려서, 첫 조사 때 열면 그 사용자가 기다린다.
+    # 스레드에서 돌므로 이벤트 루프를 막지 않고, 로딩 중 조사가 들어와도 같은 락에서 순서대로 기다린다.
+    # 테스트는 건너뛴다(conftest 가 환경변수를 세운다) — 운영 저장소를 열면 테스트가 30초씩 느려진다.
+    warm = None
+    if not os.environ.get("MOCHANG_SKIP_VECTORSTORE_WARMUP"):
+        warm = asyncio.create_task(research_pipeline.open_vector_store(research_cfg))
     yield
+    if warm is not None:
+        warm.cancel()
     await finisher.stop()
     await finisher_client.queue.stop()
     await client.queue.stop()

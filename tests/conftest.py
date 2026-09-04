@@ -16,6 +16,9 @@ os.environ.setdefault("MOCHANG_EXTRACT_ISOLATION", "0")
 os.environ.setdefault("MOCHANG_SYNC_ENDPOINTS", "1")
 # ⑤ 오프라인 임베딩(품질 없음)은 테스트 전용 — 운영 코드 경로는 이 변수가 없으면 벡터DB 를 끈다.
 os.environ.setdefault("MOCHANG_ALLOW_OFFLINE_EMBEDDING", "1")
+# ⑥ startup 벡터DB 예열은 끈다 — 운영 저장소(125MB)를 열면 lifespan 을 쓰는 테스트마다 30초가 붙는다.
+#    벡터DB 동작 자체는 tests/test_vectorstore.py 와 test_pipeline.py 가 임시 디렉터리로 본다.
+os.environ.setdefault("MOCHANG_SKIP_VECTORSTORE_WARMUP", "1")
 os.environ["MOCHANG_DATABASE_URL"] = "sqlite:///" + Path(tempfile.mkdtemp(prefix="mochang-test-db-")).joinpath("t.sqlite").as_posix()
 # 백업 DB 도 임시로 — 안 그러면 config.yaml 의 backend/.data/mochang-backup.sqlite 에 가짜 초안이 쌓인다.
 os.environ["MOCHANG_BACKUP_DATABASE_URL"] = "sqlite:///" + Path(tempfile.mkdtemp(prefix="mochang-test-bak-")).joinpath("b.sqlite").as_posix()

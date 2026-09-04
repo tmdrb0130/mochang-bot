@@ -122,9 +122,19 @@ async def job(c: httpx.AsyncClient, kind: str, body: dict, hdr: dict) -> dict:
         await asyncio.sleep(3)
     r.raise_for_status()
     j = r.json()
+    fails = 0
     while True:
         await asyncio.sleep(2.5)
-        s = (await c.get(f"{B}/jobs/{j['job_id']}", timeout=60)).json()
+        try:
+            s = (await c.get(f"{B}/jobs/{j['job_id']}", timeout=60)).json()
+        except Exception:
+            # 폴링 한 번 실패로 작업을 버리지 않는다 — 프론트 api.js 의 POLL_FAILS_ALLOWED 와 같은 규칙 (2026-09-04).
+            # (서버가 순간적으로 바쁘면 폴링이 타임아웃날 수 있는데, 작업 자체는 계속 돌고 있다.)
+            fails += 1
+            if fails > 3:
+                raise
+            continue
+        fails = 0
         if s["status"] in ("done", "error"):
             s["_position"] = j.get("position")
             return s
@@ -168,6 +178,9 @@ async def run_user(c: httpx.AsyncClient, i: int, log: list, t_start: float) -> d
         t = time.time()
         try:
             s = await job(c, "research", {**form, "question_id": q}, hdr)
+            # 인테이크가 실패하면 이 조사 요청이 초안의 첫 쓰기가 된다 — 그때 발급된 열쇠를 받아 두어야
+            # 뒤따르는 생성이 저장된다 (프론트 App.jsx ensureResearch 와 같은 처리, 2026-09-04).
+            adopt_key(form, s)
             res = s.get("result") or {}
             if s["status"] != "done":
                 raise RuntimeError(s.get("error") or "job error")
