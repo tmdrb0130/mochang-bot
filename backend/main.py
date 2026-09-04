@@ -388,6 +388,10 @@ class TranslateRequest(BaseModel):
     lang: str                          # en | zh | ja (pipeline/translate.py LANG_NAMES)
     texts: list[str]                   # 한국어 원문 목록. 하나면 평문 모드(문항 본문), 여럿이면 목록 모드(카드 문구)
     model: str | None = None
+    # 동시 제한을 **초안 단위**로 걸기 위한 것 (2026-09-05). 번역은 storage 에 남지 않지만(idea 가 없어 record 가 건너뛴다)
+    # 이 값이 없으면 _job_owner 가 IP 폴백을 타서, nginx 뒤 같은 강의실의 외국인 전원이 한 통(10건)에 묶인다.
+    # 15명 실측(2026-09-05): 429 재시도 981회·실패 43건이 전부 이 원인이었다.
+    draft_id: str | None = None
 
 
 @app.post("/translate", dependencies=[Depends(_require_sync)])

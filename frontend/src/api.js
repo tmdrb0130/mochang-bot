@@ -199,7 +199,9 @@ export function models() {
 /** 읽기 번역 (2026-09-03, 외국인 지원자용) → { lang, translations: [원문과 같은 길이], model }
  *  lang: en | zh | ja. texts 가 하나면 평문 모드(문항 본문 2,000자), 여럿이면 목록 모드(카드 질문·보기·힌트).
  *  신청서는 한국어로만 만들고 제출도 한국어 — 이 결과는 화면에 병기하는 이해용이다. 실패한 항목은 "" (원문을 그대로 보여준다).
- *  조사 큐에서 돌고 IP 동시 제한을 안 받으므로 생성·조사가 도는 중에도 429 없이 들어간다. */
-export function translate(texts, lang, opts) {
-  return runJob("translate", { lang, texts }, opts);
+ *  조사 큐에서 돌고(우선순위 50) 초안당 10건·서버 전체 30건까지 동시에 받는다. 넘으면 429 → runJob 이 5초 뒤 재시도. */
+export function translate(texts, lang, draftId, opts) {
+  // draft_id 를 함께 보낸다 (2026-09-05): 서버가 동시 작업 제한을 초안 단위로 건다.
+  // 없으면 IP 단위로 묶여 같은 강의실의 외국인 전원이 동시 10건을 나눠 쓰게 된다(실측: 429 재시도 981회).
+  return runJob("translate", { lang, texts, ...(draftId ? { draft_id: draftId } : {}) }, opts);
 }

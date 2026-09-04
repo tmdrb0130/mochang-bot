@@ -922,7 +922,7 @@ export default function ModooWriter() {
     const failed = cardFailedRef.current[reqLang] || new Set();
     cardReqRef.current = { lang: reqLang };
     setCardBusy(true);
-    api.translate(todo, reqLang)
+    api.translate(todo, reqLang, form.draftId)
       .then((r) => {
         const got = {}; const bad = new Set(failed);
         todo.forEach((sKo, i) => { const v = (r.translations?.[i] || "").trim(); if (v) got[sKo] = v; else bad.add(sKo); });
@@ -959,7 +959,7 @@ export default function ModooWriter() {
     if (!foreign || !koText.trim() || transBusy[key]) return;
     setTransBusy((p) => ({ ...p, [key]: true }));
     try {
-      const r = await api.translate([koText], lang);
+      const r = await api.translate([koText], lang, form.draftId);
       const out = (r.translations?.[0] || "").trim();
       if (!out) throw new Error("empty");
       setTrans((p) => ({ ...p, [q.id]: { ...(p[q.id] || {}), [lang]: { text: out, source: koText, error: "" } } }));

@@ -391,6 +391,54 @@ async def test_intake_returns_key_and_following_requests_are_saved(monkeypatch):
             assert len(row2["generations"]) == 1, "열쇠 없는 요청이 저장돼 버렸다"
 
 
+@pytest.mark.asyncio
+async def test_translate_limit_is_per_draft_not_per_ip(monkeypatch):
+    """2026-09-05 실측 회귀: 번역 요청에 draft_id 가 없으면 _job_owner 가 IP 폴백을 타서
+    **같은 강의실의 외국인 전원이 한 통(초안당 10)에 묶인다**. 15명 부하에서 429 재시도 981회·실패 43건이 났다.
+    프론트가 draft_id 를 실어 보내므로 학생마다 자기 통을 갖고, 진짜 천장은 서버 전체 한도(global_limit)여야 한다."""
+    import httpx
+    from backend import main as M
+
+    gate = asyncio.Event()
+
+    async def slow(system, user, model, extra=None):
+        await gate.wait()
+        return LLMResult(text="Hello", model=model)
+
+    monkeypatch.setattr(M.research_client, "_complete", slow)
+    monkeypatch.setattr(M, "TRANSLATE_MAX_PER_CLIENT", 2)
+    monkeypatch.setattr(M, "TRANSLATE_GLOBAL_LIMIT", 10)
+    head = {"X-Forwarded-For": "10.55.0.1"}          # 외국인 셋이 같은 공인 IP
+    try:
+        async with M.lifespan(M.app):
+            transport = httpx.ASGITransport(app=M.app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=30) as c:
+                async def post(did, n):
+                    body = {"lang": "en", "texts": [f"문장 {n}"]}
+                    if did:
+                        body["draft_id"] = did
+                    return (await c.post("/jobs/translate", json=body, headers=head)).status_code
+
+                # 초안이 다르면 각자 2건씩 — 같은 IP 여도 서로 막지 않는다
+                codes = [await post(f"draft-tr-{i:08d}", n) for i in range(3) for n in range(2)]
+                assert codes == [200] * 6
+                # 같은 초안의 3번째는 초안당 상한에 걸린다
+                r = await c.post("/jobs/translate", json={"lang": "en", "texts": ["또"], "draft_id": "draft-tr-00000000"}, headers=head)
+                assert r.status_code == 429 and "동시에 진행" in r.json()["detail"]
+                # draft_id 가 없으면 예전처럼 IP 한 통 — 이미 6건이 돌지만 owner 는 ip: 라 별도로 2건까지
+                assert [await post(None, 9), await post(None, 8)] == [200, 200]
+                r2 = await c.post("/jobs/translate", json={"lang": "en", "texts": ["셋"]}, headers=head)
+                assert r2.status_code == 429
+                gate.set()
+                for _ in range(300):
+                    await asyncio.sleep(0.02)
+                    st = M.research_client.queue.stats()
+                    if st["running"] == 0 and st["queued"] == 0:
+                        break
+    finally:
+        gate.set()
+
+
 # ────────────────────────── ④ vectorstore ──────────────────────────
 
 def test_is_sufficient_requires_a_fresh_hit_when_freshness_days_set(tmp_path):

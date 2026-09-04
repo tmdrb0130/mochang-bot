@@ -12,11 +12,19 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 import time
 import uuid
 from pathlib import Path
 
 import httpx
+
+# 콘솔(cp949)에서 "—" 같은 글자로 죽지 않게 — drafts_delete.py·db_snapshot.py 와 같은 처방 (2026-09-05).
+# 주의: from __future__ 는 파일의 첫 문장이어야 하므로 이 블록은 반드시 임포트 **뒤**에 온다.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 QIDS = ["q1", "q2", "q3_1", "q3_2", "q4_1", "q4_2", "q8", "q10"]
 OUT = Path(__file__).with_name(".foreign_e2e_result.json")
