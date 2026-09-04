@@ -861,29 +861,49 @@ export default function ModooWriter() {
 
   // ── 읽기 번역 (2026-09-03) ──
   // 카드 문구: 인테이크가 오거나 언어를 바꾸면 아직 번역 안 된 한국어 문구만 모아 한 번에 번역한다 (목록 모드, 40개씩 호출).
+  const cardStringsOf = (c) => {
+    const out = [];
+    for (const v of [c?.question, c?.why, c?.label]) if (v) out.push(v);
+    for (const o of c?.options || []) { if (o.label) out.push(o.label); if (o.hint) out.push(o.hint); }
+    return out;
+  };
   const cardStrings = () => {
     const out = new Set();
     if (intake?.summary) out.add(intake.summary);
     for (const sl of intake?.slots || []) if (sl.label) out.add(sl.label);
-    for (const c of intake?.cards || []) {
-      for (const v of [c.question, c.why, c.label]) if (v) out.add(v);
-      for (const o of c.options || []) { if (o.label) out.add(o.label); if (o.hint) out.add(o.hint); }
-    }
+    for (const c of intake?.cards || []) for (const v of cardStringsOf(c)) out.add(v);
     return [...out];
   };
   // 진행 중 요청은 ref 로 하나만. 결과는 요청 당시 언어(reqLang)의 지도에 합친다 — 상태가 바뀌어도 버리지 않는다.
   // 빈 결과·실패 문구는 저장본에 남기지 않고(다음 방문 때 다시 시도) 이번 세션 안에서만 cardFailedRef 로 재시도를 막는다.
+  // 순서 (2026-09-04, 사용자 관찰 "언어를 바꿔도 카드가 한국어"): 서버 번역은 80문구에 15~18초라 그동안 한국어가 보였다.
+  //   ① 지금 보고 있는 카드의 문구만 먼저(작은 요청, 3~5초) ② 이 언어의 나머지 ③ 다른 외국어를 미리(언어를 바꿔도 기다리지 않게).
+  const FOREIGN_LANGS = LANGS.map((l) => l.id).filter((id) => id !== "ko");
   const cardReqRef = useRef(null);
   const cardFailedRef = useRef({});                 // cardFailedRef[lang] = Set(한국어 원문)
   const [cardTick, setCardTick] = useState(0);       // 요청이 끝나거나 "다시 시도" 를 누르면 effect 를 한 번 더 돌린다
+  const cardPending = (L) => {
+    const have = cardI18n?.maps?.[L] || {}; const failed = cardFailedRef.current[L] || new Set();
+    return cardStrings().filter((sKo) => !have[sKo] && !failed.has(sKo));
+  };
   const cardUntranslated = foreign ? cardStrings().filter((sKo) => !cardI18n?.maps?.[lang]?.[sKo]).length : 0;
+  // 이 카드에 아직 이 언어로 안 바뀐 문구가 있는지 (카드 안의 "번역 중" 표시용)
+  const cardNeedsTr = (c) => foreign && cardStringsOf(c).some((sKo) => !cardI18n?.maps?.[lang]?.[sKo]);
   useEffect(() => {
     if (!foreign || !intake || cardReqRef.current) return;
-    const have = cardI18n?.maps?.[lang] || {};
-    const failed = cardFailedRef.current[lang] || new Set();
-    const todo = cardStrings().filter((sKo) => !have[sKo] && !failed.has(sKo));
-    if (!todo.length) return;
-    const reqLang = lang;
+    let reqLang = lang;
+    let todo = cardPending(lang);
+    if (todo.length) {
+      const cur = intake.cards?.[cardIdx];
+      const first = new Set([intake.summary, ...cardStringsOf(cur)].filter(Boolean));
+      const head = todo.filter((sKo) => first.has(sKo));
+      if (head.length && head.length < todo.length) todo = head;          // ① 보고 있는 카드 먼저
+    } else {
+      const other = FOREIGN_LANGS.find((L) => L !== lang && cardPending(L).length);   // ③ 다른 외국어 미리 받기
+      if (!other) return;
+      reqLang = other; todo = cardPending(other);
+    }
+    const failed = cardFailedRef.current[reqLang] || new Set();
     cardReqRef.current = { lang: reqLang };
     setCardBusy(true);
     api.translate(todo, reqLang)
@@ -897,14 +917,15 @@ export default function ModooWriter() {
       .catch((e) => {
         todo.forEach((sKo) => failed.add(sKo));
         cardFailedRef.current[reqLang] = failed;
-        setCardI18n((prev) => ({ maps: prev?.maps || {}, error: String(e.message || e) }));
+        // 미리 받던 다른 언어의 실패는 화면에 알리지 않는다 (그 언어로 바꾸면 "다시 시도" 로 다시 받는다)
+        if (reqLang === lang) setCardI18n((prev) => ({ maps: prev?.maps || {}, error: String(e.message || e) }));
       })
       .finally(() => { cardReqRef.current = null; setCardBusy(false); setCardTick((n) => n + 1); });
-  }, [foreign, lang, intake, cardI18n, cardTick]);
+  }, [foreign, lang, intake, cardI18n, cardTick, cardIdx]);
   const retryCardTranslation = () => { cardFailedRef.current[lang] = new Set(); setCardTick((n) => n + 1); };
   // 번역 진행·미번역 안내 한 줄 (카드 화면 머리와 초안 화면의 "정보 보태기" 패널에 같이 쓴다)
   const cardI18nNote = () => {
-    if (!foreign) return null;
+    if (!foreign || cardUntranslated === 0) return null;     // 이 언어는 다 됐으면(다른 언어를 미리 받는 중이어도) 조용히
     if (cardBusy) return <p className="text-xs text-indigo-700 mt-2">{t("card.translating", { lang: LANG_NAMES[lang] })}</p>;
     if (cardUntranslated > 0) return (
       <p className="text-xs text-amber-700 mt-2">
@@ -1196,7 +1217,11 @@ export default function ModooWriter() {
                     <span>{tr(card.why)}</span>
                   </div>
                   <h3 className="font-semibold text-base">{tr(card.question)}</h3>
-                  <CardOptions key={`${card.slot}-${regen[card.slot]?.count || 0}`} card={card} value={answers[card.slot]} onChange={(v) => setAnswer(card.slot, v)} />
+                  {/* 외국어 화면: 이 카드의 보기가 아직 한국어면 카드 안에서도 알린다 (머리의 한 줄은 놓치기 쉽다) */}
+                  {cardNeedsTr(card) && cardBusy && <p className="text-xs text-indigo-700">{t("card.translating.card", { lang: LANG_NAMES[lang] })}</p>}
+                  <div className={cardNeedsTr(card) && cardBusy ? "opacity-60 transition-opacity" : ""}>
+                    <CardOptions key={`${card.slot}-${regen[card.slot]?.count || 0}`} card={card} value={answers[card.slot]} onChange={(v) => setAnswer(card.slot, v)} />
+                  </div>
                   <RegenerateBar slot={card.slot} state={regen[card.slot]} onNote={setRegenNote} onRun={regenerateCard} />
                   <div className="flex items-center justify-between pt-2 flex-wrap gap-2">
                     <button onClick={() => setCardIdx(Math.max(cardIdx - 1, 0))} disabled={cardIdx === 0} className="text-sm text-slate-500 underline disabled:text-slate-300">{t("card.prev")}</button>
@@ -1348,7 +1373,10 @@ export default function ModooWriter() {
                             {cardsForQuestion(q.id).map((c) => (
                               <div key={c.slot} className="space-y-1.5">
                                 <div className="text-xs font-medium text-slate-700">{tr(c.question)} <span className="text-slate-400 font-normal">· {tr(c.label)}</span></div>
-                                <CardOptions key={`${c.slot}-${regen[c.slot]?.count || 0}`} card={c} value={answers[c.slot]} onChange={(v) => setAnswer(c.slot, v)} compact />
+                                {cardNeedsTr(c) && cardBusy && <p className="text-xs text-indigo-700">{t("card.translating.card", { lang: LANG_NAMES[lang] })}</p>}
+                                <div className={cardNeedsTr(c) && cardBusy ? "opacity-60 transition-opacity" : ""}>
+                                  <CardOptions key={`${c.slot}-${regen[c.slot]?.count || 0}`} card={c} value={answers[c.slot]} onChange={(v) => setAnswer(c.slot, v)} compact />
+                                </div>
                                 <RegenerateBar slot={c.slot} state={regen[c.slot]} onNote={setRegenNote} onRun={regenerateCard} compact />
                               </div>
                             ))}
