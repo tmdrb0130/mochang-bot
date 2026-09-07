@@ -311,7 +311,7 @@ PAGE = """<!doctype html>
 
   <div class="grid md:grid-cols-3 gap-3">
     <div class="bg-white rounded-xl border border-slate-200 p-4">
-      <div class="text-xs text-slate-500 mb-1">지금 작업 중인 학생 (최근 2분에 저장된 초안 수 — 브라우저 단위)</div>
+      <div class="text-xs text-slate-500 mb-1">지금 작업 중인 초안 (최근 2분에 저장이 있었던 초안 수)</div>
       <div class="text-4xl font-bold" id="active2">—</div>
       <div class="text-xs text-slate-500 mt-1"><span id="active5"></span> · <span id="active15"></span></div>
       <div class="text-xs text-slate-400 mt-2" id="netnote"></div>
@@ -329,7 +329,7 @@ PAGE = """<!doctype html>
 
   <div class="grid md:grid-cols-2 gap-3">
     <div class="bg-white rounded-xl border border-slate-200 p-4">
-      <div class="text-xs text-slate-500 mb-2">최근 7일 — 초안(≈학생) / 네트워크(IP) / 생성문</div>
+      <div class="text-xs text-slate-500 mb-2">최근 7일 — 초안 / 네트워크(IP) / 생성문</div>
       <div id="days" class="space-y-1 text-xs"></div>
     </div>
     <div class="bg-white rounded-xl border border-slate-200 p-4">
@@ -374,13 +374,13 @@ async function load() {
   // 작업 로그에 owner 가 찍히는 서버면 그 값(번역까지 포함)을 우선 쓴다.
   const a2 = T.owner_logging ? T.owners_2m : D.active_2m, a5 = T.owner_logging ? T.owners_5m : D.active_5m;
   $("active2").textContent = a2 ?? "—";
-  $("active5").textContent = `5분 ${a5 ?? "—"}명`; $("active15").textContent = `15분 ${D.active_15m ?? "—"}명`;
-  $("netnote").textContent = `네트워크(IP) 기준 2분 ${N.active_2m} · 5분 ${N.active_5m} · 15분 ${N.active_15m} — 교내는 여러 명이 IP 하나로 보이므로 이 숫자는 하한입니다`;
+  $("active5").textContent = `5분 ${a5 ?? "—"}개`; $("active15").textContent = `15분 ${D.active_15m ?? "—"}개`;
+  $("netnote").textContent = `네트워크(IP) 기준 2분 ${N.active_2m} · 5분 ${N.active_5m} · 15분 ${N.active_15m} — 교내는 여러 명이 IP 하나로 보입니다. 초안 수도 사람 수는 아닙니다(한 사람이 아이디어를 바꿔 여러 초안을 만들 수 있음)`;
   $("activelist").innerHTML = (N.active_list || []).map(a => `<li class="flex justify-between"><span class="font-mono">${a.ip}</span><span class="text-slate-500">${a.did.join(",") || "보는 중"}</span><span class="text-slate-400">${a.last}</span></li>`).join("") || `<li class="text-slate-400">${N.log_ok ? "없음" : "nginx 로그를 못 읽음"}</li>`;
   const jd = T.jobs_done || {}, je = T.jobs_error || {};
   const errs = Object.values(je).reduce((a,b)=>a+b,0);
   $("today").innerHTML = [
-    ["<b>이용 학생(초안)</b>", `<b>${D.today_drafts}</b>`], ["생성문(DB)", D.today_generations],
+    ["<b>초안 수</b>", `<b>${D.today_drafts}</b>`], ["생성문(DB)", D.today_generations],
     ["방문 네트워크(IP)", N.today_visitors], ["인테이크 낸 네트워크", N.today_intake_ips],
     ["인테이크 완료", jd.intake||0], ["생성 완료", jd.generate||0], ["번역 완료", jd.translate||0], ["조사 완료", jd.research||0],
     ["모델 호출", L.usage_today ?? "?"], ["생성 p50", T.p50_run_s?.generate != null ? T.p50_run_s.generate + "초" : "—"],
@@ -388,11 +388,11 @@ async function load() {
     ["빈 번역", `<b class="${T.translate_empty ? "text-amber-700" : ""}">${T.translate_empty}</b>`], ["저장 거부", `<b class="${T.storage_refused ? "text-red-600" : ""}">${T.storage_refused}</b>`],
   ].map(([k,v]) => `<div class="text-slate-500">${k}</div><div class="text-right font-medium">${v}</div>`).join("");
   $("total").innerHTML = D.ok ? [
-    ["<b>초안(≈이용 학생)</b>", `<b>${D.drafts}</b>`], ["네트워크(IP) — 교내는 여럿이 하나", D.owners], ["생성문", D.generations], ["조사 자료", D.research],
+    ["<b>초안 수</b>", `<b>${D.drafts}</b>`], ["네트워크(IP) — 교내는 여럿이 하나", D.owners], ["생성문", D.generations], ["조사 자료", D.research],
     ["한국어 / 외국어", `${D.lang.ko} / ${D.lang.foreign}`], ["마지막 활동", D.last_activity],
   ].map(([k,v]) => `<div class="text-slate-500">${k}</div><div class="text-right font-medium">${v}</div>`).join("") : `<div class="col-span-2 text-red-600">DB 읽기 실패: ${D.error||""}</div>`;
   const dmax = Math.max(1, ...(D.days||[]).map(d => Math.max(d.drafts, d.owners, d.generations/8)));
-  $("days").innerHTML = (D.days||[]).map(d => bar(d.day, [d.drafts, d.owners, Math.round(d.generations/8)], ["bg-indigo-500","bg-sky-400","bg-emerald-400"], dmax)).join("") + `<div class="text-slate-400 mt-1">파랑 초안(≈학생) · 하늘 네트워크(IP) · 초록 생성문÷8(≈완주)</div>`;
+  $("days").innerHTML = (D.days||[]).map(d => bar(d.day, [d.drafts, d.owners, Math.round(d.generations/8)], ["bg-indigo-500","bg-sky-400","bg-emerald-400"], dmax)).join("") + `<div class="text-slate-400 mt-1">파랑 초안 · 하늘 네트워크(IP) · 초록 생성문÷8(≈완주 초안)</div>`;
   const hmax = Math.max(1, ...(T.hourly||[]).map(h => Math.max(h.intake, h.generate, h.translate)));
   $("hourly").innerHTML = (T.hourly||[]).map(h => bar(h.h + "시", [h.intake, h.generate, h.translate], ["bg-indigo-500","bg-emerald-400","bg-amber-400"], hmax)).join("") || `<div class="text-slate-400">오늘 완료된 작업 없음</div>`;
   $("drafts").innerHTML = (D.recent_drafts||[]).map(r => `<tr class="border-t border-slate-100"><td class="font-mono">${r.id}</td><td>${r.created}</td><td class="text-center">${r.updated}</td><td class="text-center">${r.lang}</td><td class="text-center ${r.done ? "text-emerald-700" : "text-amber-700"}">${r.gen}</td><td class="text-center">${r.res}</td></tr>`).join("");
