@@ -369,12 +369,20 @@ export default function ModooWriter() {
   // 같은 틱에 나가는 요청이 있다(startIntake → prefetchResearch). 그 요청들은 아직 열쇠가 없는 옛 form 을 읽어
   // 서버에서 전부 거부됐다 — 열쇠 도입(09-05) 뒤 초안당 조사 저장이 평균 10.1건 → 2건대로 떨어진 원인이다.
   // id 를 같이 들고 다녀서, 그새 다른 초안으로 바뀌었으면(withDraft) 옛 열쇠를 쓰지 않는다.
-  const draftKeyRef = useRef({ id: form.draftId, key: form.draftKey || "" });
-  const keyFor = (id) => (draftKeyRef.current.id === id ? draftKeyRef.current.key : "");
+  // 이 ref 가 **나가는 요청이 쓰는 초안 신원**이다. setForm 은 다음 렌더에야 반영되는데, 인테이크가 끝나자마자
+  // 같은 틱에 나가는 요청이 있다(startIntake → prefetchResearch). 그 요청들이 옛 form 을 읽어
+  // ① 열쇠 없이 나가 서버에서 거부되거나(09-05 뒤 조사 저장 10.1건 → 2건대로 급락)
+  // ② 옛 draft_id 로 나가 **한 세션이 초안 두 개로 갈렸다**(2026-09-07 13:13 테스트에서 실측: 조사는 f46c7bd0,
+  //    생성은 208051c9 로 나뉘어 저장됐다). 그래서 id 와 열쇠를 함께 동기로 들고 다닌다.
+  const draftRef = useRef({ id: form.draftId, key: form.draftKey || "" });
+  const setDraftRef = (id, key) => { draftRef.current = { id, key: key || "" }; };
+  const keyFor = (id) => (draftRef.current.id === id ? draftRef.current.key : "");
+  // withDraft 가 아이디어 변화로 새 draft_id 를 매기면 ref 도 같이 옮긴다 — 안 그러면 요청이 옛 초안으로 간다.
+  const applyDraft = (next) => { setDraftRef(next.draftId, next.draftKey); return next; };
   const adoptDraftKey = (res, draftId) => {
     const key = res?.draft_key;
     if (!key) return;
-    draftKeyRef.current = { id: draftId, key };
+    setDraftRef(draftId, key);
     setForm((f) => (f.draftId === draftId && f.draftKey !== key ? { ...f, draftKey: key } : f));
   };
   const [texts, setTexts] = useState(saved?.texts ?? {});   // texts[qid][styleId] = string
@@ -519,7 +527,8 @@ export default function ModooWriter() {
   const textsRef = useRef(texts);
   useEffect(() => { textsRef.current = texts; }, [texts]);
 
-  const formForApi = () => ({ ...form, draftKey: keyFor(form.draftId) || form.draftKey, answers: buildAnswers() });
+  const formForApi = () => ({ ...form, draftId: draftRef.current.id || form.draftId,
+                             draftKey: draftRef.current.key || form.draftKey, answers: buildAnswers() });
   const answeredCount = Object.values(answers).filter((a) => a && (a.unknown || a.answer)).length;
   // 문항에 연결된 카드. 모델이 question_ids 를 비워 보냈으면 모든 문항에 보여준다.
   const cardsForQuestion = (qid) => (intake?.cards || []).filter((c) => !c.question_ids?.length || c.question_ids.includes(qid));
@@ -706,7 +715,7 @@ export default function ModooWriter() {
       } catch { /* 404 — 첫 인테이크이거나, 다른 흐름이 이미 이 id 를 가져갔다 */ }
     }
     if (!draftKey) draftId = api.newDraftId();
-    draftKeyRef.current = { id: draftId, key: draftKey };   // 바로 뒤 prefetchResearch 가 이 값을 읽는다
+    setDraftRef(draftId, draftKey);   // 바로 뒤 prefetchResearch·generateAll 이 이 값을 읽는다
     const fresh = draftId !== form.draftId;
     const sent = { ...form, draftId, draftKey, draftIdea: form.idea, ...(fresh ? { shareToken: "" } : {}) };
     // 지금 제출하는 아이디어가 이 초안의 기준이 된다 — 이후 편집은 이 글과 비교해 같은 초안인지 가른다
@@ -847,6 +856,7 @@ export default function ModooWriter() {
       try {
         const row = share ? await api.getShared(share) : await api.getDraft(id);
         const did = row.draft_id || id;
+        setDraftRef(did, row.draft_key);        // 공유 링크로 들어온 초안도 나가는 요청이 같은 신원을 쓰게
         const styles = [...new Set((row.generations || []).map((g) => g.style).filter((sid) => STYLES.some((x) => x.id === sid)))];
         setForm((f) => ({
           ...f, track: TRACKS[row.track] ? row.track : "tech", idea: row.idea || "", isBusiness: false, currentItem: "",
@@ -1163,7 +1173,7 @@ export default function ModooWriter() {
                 <p className="text-xs text-slate-500 mb-2">{t("in.idea.help")}</p>
                 {/* 외국어 화면: 자기 언어로 써도 된다는 안내. 초안은 한국어로 나오고(프롬프트가 고정) 번역이 병기된다. */}
                 {foreign && <p className="text-xs text-indigo-800 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2 mb-2">{t("in.idea.foreign")}</p>}
-                <textarea value={form.idea} onChange={(e) => setForm(withDraft({ ...form, idea: e.target.value }))} rows={8}
+                <textarea value={form.idea} onChange={(e) => setForm(applyDraft(withDraft({ ...form, idea: e.target.value })))} rows={8}
                   placeholder={t("in.idea.ph")}
                   className="w-full p-3 rounded-lg border border-slate-300 focus:border-indigo-600 focus:outline-none text-sm leading-relaxed" />
                 <div className="text-xs text-slate-400 text-right">
