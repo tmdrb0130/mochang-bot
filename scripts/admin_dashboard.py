@@ -172,9 +172,21 @@ def timing_stats(now: datetime) -> dict:
             recent.append({"ts": ts[11:19], "what": "저장 오류", "s": None, "err": (d.get("error") or "")[:80]})
     def p50(v):
         v = sorted(v); return round(v[len(v) // 2], 1) if v else None
+    # 테스트 모드(?test=1) 작업도 로그엔 같은 모양으로 남는다. 서비스 DB 에 있는 초안만 센다 — 테스트 초안은 백업 DB 에만 있다.
+    # (2026-09-07 22:09 운영자 스모크가 "작업 중 1" 로 보인 뒤 추가)
+    known: set = set()
+    try:
+        con = sqlite3.connect(f"file:{DB.as_posix()}?mode=ro", uri=True)
+        ids = [ow[2:] for ow in owners_recent]
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            known.update(r[0] for r in con.execute(f"select draft_id from drafts where draft_id in ({','.join('?' * len(chunk))})", chunk))
+        con.close()
+    except Exception:
+        known = {ow[2:] for ow in owners_recent}        # DB 를 못 읽으면 거르지 않는다
     def owners_within(minutes):
         cut = now - timedelta(minutes=minutes)
-        return sum(1 for t in owners_recent.values() if t >= cut)
+        return sum(1 for ow, t in owners_recent.items() if t >= cut and ow[2:] in known)
     return {
         # 작업 로그에 owner 가 찍히는 서버(2026-09-07 이후 재시작)에서만 값이 있다. 없으면 None → 화면은 DB 값을 쓴다.
         "owners_2m": owners_within(2) if owners_recent else None,
