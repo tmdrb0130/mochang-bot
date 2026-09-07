@@ -37,9 +37,11 @@
   background: #1a73ff;
   clip-path: polygon(0 0, 100% 0, 100% 100%, 44% 100%);
   display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  padding: 10px 14px 0 0;
+  align-items: center;
+  justify-content: center;
+  /* 사선이라 상자 한가운데는 왼쪽으로 치우쳐 보인다. 높이 중간에서 파란 영역은 폭의 22%(=44%/2) 지점부터
+     시작하므로, 그만큼 왼쪽을 비워 **보이는 파란 면의 가운데**에 화살표가 오게 한다. 76 × 0.22 ≈ 17px. */
+  padding-left: 16px;
   box-sizing: border-box;
 }
 
@@ -69,6 +71,6 @@
   }
   .modoo-link .wedge {
     width: 62px;
-    padding: 8px 12px 0 0;
+    padding-left: 13px;      /* 62 × 0.22 ≈ 14px — 같은 계산 */
   }
 }
