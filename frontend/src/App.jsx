@@ -859,6 +859,7 @@ export default function ModooWriter() {
         const row = share ? await api.getShared(share) : await api.getDraft(id);
         const did = row.draft_id || id;
         setDraftRef(did, row.draft_key);        // 공유 링크로 들어온 초안도 나가는 요청이 같은 신원을 쓰게
+        api.adoptClientId(row.client_id);       // 링크를 들고 옮긴 건 본인 — 이 기기도 같은 사람으로 센다 (2026-09-07)
         const styles = [...new Set((row.generations || []).map((g) => g.style).filter((sid) => STYLES.some((x) => x.id === sid)))];
         setForm((f) => ({
           ...f, track: TRACKS[row.track] ? row.track : "tech", idea: row.idea || "", isBusiness: false, currentItem: "",

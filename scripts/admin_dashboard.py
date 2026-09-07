@@ -205,6 +205,17 @@ def db_stats(now: datetime) -> dict:
         out["generations"] = con.execute("select count(*) from generations").fetchone()[0]
         out["research"] = con.execute("select count(*) from research").fetchone()[0]
         out["today_drafts"] = con.execute("select count(*) from drafts where created_at like ?", (today + "%",)).fetchone()[0]
+        # 사람 수 (2026-09-07): 브라우저 익명 id. 공유 링크로 옮긴 기기는 같은 id 를 물려받으므로 폰→PC 도 한 사람.
+        # client_id 가 NULL 인 초안(이 기능 배포 전)은 셀 수 없어 "미상" 으로 따로 센다.
+        cols = {r[1] for r in con.execute("PRAGMA table_info(drafts)")}
+        if "client_id" in cols:
+            out["people"] = con.execute("select count(distinct client_id) from drafts where client_id is not null").fetchone()[0]
+            out["people_unknown"] = con.execute("select count(*) from drafts where client_id is null").fetchone()[0]
+            out["today_people"] = con.execute("select count(distinct client_id) from drafts where client_id is not null and created_at like ?", (today + "%",)).fetchone()[0]
+            cut2 = (now - timedelta(minutes=2)).strftime("%Y-%m-%d %H:%M:%S")
+            out["active_people_2m"] = con.execute("select count(distinct client_id) from drafts where client_id is not null and updated_at >= ?", (cut2,)).fetchone()[0]
+        else:
+            out["people"] = None
         out["today_generations"] = con.execute("select count(*) from generations where created_at like ?", (today + "%",)).fetchone()[0]
         last = con.execute("select max(updated_at) from drafts").fetchone()[0]
         out["last_activity"] = (last or "")[:19]
@@ -374,13 +385,13 @@ async function load() {
   // 작업 로그에 owner 가 찍히는 서버면 그 값(번역까지 포함)을 우선 쓴다.
   const a2 = T.owner_logging ? T.owners_2m : D.active_2m, a5 = T.owner_logging ? T.owners_5m : D.active_5m;
   $("active2").textContent = a2 ?? "—";
-  $("active5").textContent = `5분 ${a5 ?? "—"}개`; $("active15").textContent = `15분 ${D.active_15m ?? "—"}개`;
+  $("active5").textContent = `5분 ${a5 ?? "—"}개`; $("active15").textContent = `15분 ${D.active_15m ?? "—"}개` + (D.active_people_2m != null ? ` · 사람 ${D.active_people_2m}명(2분)` : "");
   $("netnote").textContent = `네트워크(IP) 기준 2분 ${N.active_2m} · 5분 ${N.active_5m} · 15분 ${N.active_15m} — 교내는 여러 명이 IP 하나로 보입니다. 초안 수도 사람 수는 아닙니다(한 사람이 아이디어를 바꿔 여러 초안을 만들 수 있음)`;
   $("activelist").innerHTML = (N.active_list || []).map(a => `<li class="flex justify-between"><span class="font-mono">${a.ip}</span><span class="text-slate-500">${a.did.join(",") || "보는 중"}</span><span class="text-slate-400">${a.last}</span></li>`).join("") || `<li class="text-slate-400">${N.log_ok ? "없음" : "nginx 로그를 못 읽음"}</li>`;
   const jd = T.jobs_done || {}, je = T.jobs_error || {};
   const errs = Object.values(je).reduce((a,b)=>a+b,0);
   $("today").innerHTML = [
-    ["<b>초안 수</b>", `<b>${D.today_drafts}</b>`], ["생성문(DB)", D.today_generations],
+    ["<b>초안 수</b>", `<b>${D.today_drafts}</b>`], ["사람(브라우저 id)", D.people == null ? "배포 전" : D.today_people], ["생성문(DB)", D.today_generations],
     ["방문 네트워크(IP)", N.today_visitors], ["인테이크 낸 네트워크", N.today_intake_ips],
     ["인테이크 완료", jd.intake||0], ["생성 완료", jd.generate||0], ["번역 완료", jd.translate||0], ["조사 완료", jd.research||0],
     ["모델 호출", L.usage_today ?? "?"], ["생성 p50", T.p50_run_s?.generate != null ? T.p50_run_s.generate + "초" : "—"],
@@ -388,7 +399,7 @@ async function load() {
     ["빈 번역", `<b class="${T.translate_empty ? "text-amber-700" : ""}">${T.translate_empty}</b>`], ["저장 거부", `<b class="${T.storage_refused ? "text-red-600" : ""}">${T.storage_refused}</b>`],
   ].map(([k,v]) => `<div class="text-slate-500">${k}</div><div class="text-right font-medium">${v}</div>`).join("");
   $("total").innerHTML = D.ok ? [
-    ["<b>초안 수</b>", `<b>${D.drafts}</b>`], ["네트워크(IP) — 교내는 여럿이 하나", D.owners], ["생성문", D.generations], ["조사 자료", D.research],
+    ["<b>초안 수</b>", `<b>${D.drafts}</b>`], ["사람(브라우저 id) · 미상", D.people == null ? "배포 전" : `${D.people} · ${D.people_unknown}`], ["네트워크(IP) — 교내는 여럿이 하나", D.owners], ["생성문", D.generations], ["조사 자료", D.research],
     ["한국어 / 외국어", `${D.lang.ko} / ${D.lang.foreign}`], ["마지막 활동", D.last_activity],
   ].map(([k,v]) => `<div class="text-slate-500">${k}</div><div class="text-right font-medium">${v}</div>`).join("") : `<div class="col-span-2 text-red-600">DB 읽기 실패: ${D.error||""}</div>`;
   const dmax = Math.max(1, ...(D.days||[]).map(d => Math.max(d.drafts, d.owners, d.generations/8)));

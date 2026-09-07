@@ -47,8 +47,9 @@ log = logging.getLogger("mochang.storage")
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_URL = "sqlite:///backend/.data/mochang.sqlite"
-SCHEMA_VERSION = 5      # 2: research 테이블 (2026-09-03). 3: drafts.is_test (2026-09-03). 4: drafts.share_token (2026-09-04).
-                        # 5: drafts.owner_token (2026-09-04, 초안 접근 열쇠). 열 추가는 init 이 ALTER TABLE 로.
+SCHEMA_VERSION = 6      # 2: research 테이블 (2026-09-03). 3: drafts.is_test (2026-09-03). 4: drafts.share_token (2026-09-04).
+                        # 5: drafts.owner_token (2026-09-04, 초안 접근 열쇠). 6: drafts.client_id (2026-09-07, 브라우저 익명 id).
+                        # 열 추가는 init 이 ALTER TABLE 로.
 
 # 프론트가 보내는 draft_id 형식 (UUID 등). 이 밖의 값은 **저장하지 않는다** (2026-09-04).
 # 예전엔 sha1(track|idea) 로 대체했는데, 그러면 아이디어 문장을 아는 사람이 키를 계산해 남의 초안을 읽을 수 있었다.
@@ -92,6 +93,10 @@ drafts = Table(
     # 초안 접근 열쇠 (2026-09-04). draft_id 만 알아서는 읽거나(GET /drafts) 덮어쓸(upsert) 수 없게 한다.
     # NULL 인 행은 이 열이 생기기 전의 초안 — 요청 IP 가 owner 와 같을 때만 열어 주고, 그때 열쇠를 채워 응답으로 준다(과도기 규칙).
     Column("owner_token", String(64)),
+    # 브라우저 익명 id (2026-09-07). 프론트가 localStorage 에 난수 하나를 두고 모든 요청에 X-Mochang-Client 로 싣는다.
+    # "몇 명이 썼나" 를 IP(교내는 하나로 합쳐짐)나 초안 수(한 사람이 여럿)로는 못 세서 둔 것. 공유 링크로 다른 기기에서
+    # 열면 그 기기가 이 값을 물려받으므로 폰→PC 이어하기도 한 사람으로 센다. 처음 만든 값을 유지하고 덮어쓰지 않는다.
+    Column("client_id", String(64), index=True),
     Column("created_at", DateTime, nullable=False),
     Column("updated_at", DateTime, nullable=False, index=True),
 )
@@ -235,6 +240,10 @@ class Storage:
             # v5 이행: 초안 접근 열쇠. 기존 행은 NULL — 주인(같은 IP)의 다음 요청에서 채워진다.
             if cols is not None and "owner_token" not in cols:
                 conn.exec_driver_sql("ALTER TABLE drafts ADD COLUMN owner_token VARCHAR(64)")
+            # v6 이행: 브라우저 익명 id. 기존 행은 NULL — 그 브라우저의 다음 요청에서 채워진다.
+            if cols is not None and "client_id" not in cols:
+                conn.exec_driver_sql("ALTER TABLE drafts ADD COLUMN client_id VARCHAR(64)")
+                conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_drafts_client_id ON drafts (client_id)")
             row = conn.execute(select(schema_meta.c.value).where(schema_meta.c.key == "version")).first()
             if row is None:
                 conn.execute(schema_meta.insert().values(key="version", value=str(SCHEMA_VERSION)))
@@ -295,6 +304,8 @@ class Storage:
         if not did:
             return None
         key = str(form.get("draft_key") or "").strip() or None
+        cid = str(form.get("client_id") or "").strip()
+        cid = cid if _ID_RE.match(cid) else None               # 형식 밖이면 없는 것으로 (main 이 이미 거르지만 이중으로)
         new_tok = new_tok or new_token()
         now = datetime.now()
         values = {k: form.get(k) for k in _DRAFT_FIELDS}
@@ -309,15 +320,17 @@ class Storage:
             values["owner"] = owner[:64]
 
         def try_update(conn) -> dict | None:
-            row = conn.execute(select(drafts.c.owner_token, drafts.c.owner).where(drafts.c.draft_id == did)).mappings().first()
+            row = conn.execute(select(drafts.c.owner_token, drafts.c.owner, drafts.c.client_id)
+                               .where(drafts.c.draft_id == did)).mappings().first()
             if row is None:
                 return None                                   # 없음 → 호출자가 insert
             if not self._access_ok(row, key, owner):
                 log.info("초안 갱신 거부 (열쇠 불일치) %s", did[:8])
                 return {"draft_id": did, "draft_key": None, "accepted": False}
             token = row["owner_token"] or new_tok             # 옛 행이면 이번에 열쇠를 채운다
+            extra = {"client_id": cid} if (cid and not row["client_id"]) else {}   # 처음 값만 채우고 덮어쓰지 않는다
             upd = (drafts.update().where(drafts.c.draft_id == did)
-                   .values(request_count=drafts.c.request_count + 1, owner_token=token, **values))
+                   .values(request_count=drafts.c.request_count + 1, owner_token=token, **extra, **values))
             conn.execute(upd)
             return {"draft_id": did, "draft_key": token, "accepted": True}
 
@@ -328,7 +341,7 @@ class Storage:
         try:
             with self.engine.begin() as conn:
                 conn.execute(drafts.insert().values(draft_id=did, request_count=1, created_at=now, is_test=bool(test),
-                                                    owner_token=new_tok, **values))
+                                                    owner_token=new_tok, client_id=cid, **values))
             return {"draft_id": did, "draft_key": new_tok}
         except IntegrityError:
             # 같은 초안의 첫 요청 둘이 동시에 들어온 경우(문항 여러 개 동시 생성) — 다른 쪽이 먼저 넣었으니 갱신으로

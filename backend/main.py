@@ -119,6 +119,14 @@ def _require_sync():
         raise HTTPException(status_code=404, detail="Not Found")
 
 
+def _client_id(request: Request) -> str | None:
+    """브라우저 익명 id (2026-09-07). 프론트가 localStorage 의 난수를 X-Mochang-Client 로 싣는다.
+    storage 가 초안 행에 남겨 "몇 명이 썼나" 를 센다(IP 는 교내에서 하나로 합쳐지고, 초안 수는 한 사람이 여럿).
+    형식 밖이면 없는 것으로 — 인증 값이 아니라 집계용이라 거부하지 않고 조용히 버린다."""
+    v = str(request.headers.get("x-mochang-client") or "").strip()
+    return v if storage_mod._ID_RE.match(v) else None
+
+
 def _is_test(request: Request) -> bool:
     """부하 테스트·E2E 스크립트가 붙이는 헤더. 실제 사용자(브라우저)는 안 붙이므로 서비스 DB 에 남는다."""
     v = str(request.headers.get("x-mochang-test") or "").strip().lower()
@@ -488,6 +496,7 @@ async def submit_job(kind: str, body: dict, request: Request):
     ip = _client_key(request)                 # 저장(owner)·IP 천장·옛 초안 접근용
     owner = _job_owner(form, ip)              # 동시 작업 제한 단위 (초안 → 없으면 IP)
     test = _is_test(request)
+    form["client_id"] = _client_id(request)   # 집계용 브라우저 id — storage 가 초안 행에 남긴다 (2026-09-07)
     q = _queue_for(kind)
     try:
         if kind == "intake":

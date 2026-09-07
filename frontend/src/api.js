@@ -41,7 +41,26 @@ export function testMode() {
   } catch { return false; }
 }
 
+// ── 브라우저 익명 id (2026-09-07) ──
+// "몇 명이 썼나" 를 세기 위한 값. IP 는 교내에서 하나로 합쳐지고 초안 수는 한 사람이 여럿 만들 수 있어서,
+// 브라우저마다 난수 하나를 localStorage 에 두고 모든 요청에 X-Mochang-Client 로 싣는다(서버가 초안 행에 남긴다).
+// 공유 링크로 다른 기기에서 열면 그 초안의 id 를 물려받아(adoptClientId) 폰→PC 이어하기도 한 사람으로 센다.
+// 인증 값이 아니다 — 열쇠(draft_key)와 무관하고, 지워져도 동작에는 아무 영향이 없다.
+const CLIENT_KEY = "modoo-client-v1";
+export function clientId() {
+  try {
+    let v = localStorage.getItem(CLIENT_KEY);
+    if (!v || !/^[A-Za-z0-9_-]{8,64}$/.test(v)) { v = newDraftId(); localStorage.setItem(CLIENT_KEY, v); }
+    return v;
+  } catch { return ""; }
+}
+export function adoptClientId(v) {
+  try { if (v && /^[A-Za-z0-9_-]{8,64}$/.test(v)) localStorage.setItem(CLIENT_KEY, v); } catch { /* 접근 차단 */ }
+}
+
 async function request(path, options) {
+  const cid = clientId();
+  if (cid) options = { ...(options || {}), headers: { ...((options && options.headers) || {}), "X-Mochang-Client": cid } };
   if (testMode()) options = { ...(options || {}), headers: { ...((options && options.headers) || {}), "X-Mochang-Test": "1" } };
   const res = await fetch(`${API_BASE}${path}`, options);
   if (!res.ok) {
