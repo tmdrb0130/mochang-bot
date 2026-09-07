@@ -16,6 +16,7 @@ import math
 import re
 
 from ..llm.client import LLMClient
+from .. import timing
 from . import assemble
 
 # 화면 언어 코드 → 프롬프트에 넣는 언어 이름. 프론트 i18n.jsx 의 LANGS 와 맞춘다.
@@ -108,6 +109,19 @@ async def _batch(client: LLMClient, system: str, header: str, items: list[str], 
     return out, res.model
 
 
+def _log_empty(lang: str, mode: str, todo: list[int], result: list[str]) -> None:
+    """번역이 비어 나온 항목 수를 남긴다 (2026-09-07).
+
+    작업 자체는 성공(done)으로 끝나므로 이 줄이 없으면 **번역이 비었다는 사실을 사후에 알 수 없다**.
+    학생 화면에는 "n개가 아직 한국어로 보입니다"로만 나타난다 (frontend/src/App.jsx cardUntranslated).
+    빈 항목이 있을 때만 남긴다 — 정상 번역까지 남기면 timing.jsonl 이 배로 커진다.
+    읽기: scripts/timing_report.py, 또는 grep translate_empty backend/.timing.jsonl
+    """
+    empty = sum(1 for i in todo if not result[i].strip())
+    if empty:
+        timing.log("translate_empty", lang=lang, mode=mode, requested=len(todo), empty=empty)
+
+
 async def translate_texts(client: LLMClient, texts: list[str], lang: str, model: str | None = None,
                           extra: dict | None = None) -> dict:
     """texts 를 lang 으로. → {lang, translations: [str]*len(texts), model}. 빈 항목은 호출 없이 "".
@@ -130,6 +144,7 @@ async def translate_texts(client: LLMClient, texts: list[str], lang: str, model:
         system = assemble.render("translate.md", lang_name=LANG_NAMES[code])
         out, used = await _plain(client, system, headers.get("translate_source", "[원문]"), items[idx], model, extra)
         result[idx] = out
+        _log_empty(code, "plain", todo, result)
         return {"lang": code, "translations": result, "model": used}
 
     system = assemble.render("translate_batch.md", lang_name=LANG_NAMES[code])
@@ -141,4 +156,5 @@ async def translate_texts(client: LLMClient, texts: list[str], lang: str, model:
         used = m
         for i, t in zip(ch, out):
             result[i] = t
+    _log_empty(code, "batch", todo, result)
     return {"lang": code, "translations": result, "model": used}

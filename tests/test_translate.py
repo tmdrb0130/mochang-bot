@@ -79,6 +79,38 @@ async def test_broken_json_yields_blanks_not_errors():
     assert out["translations"] == ["", ""]
 
 
+# ── 빈 번역 계측 (2026-09-07) — 번역이 비어도 작업은 done 이라 로그가 없으면 사후에 알 수 없다 ──
+
+@pytest.mark.asyncio
+async def test_blank_translations_are_logged(monkeypatch):
+    rows = []
+    monkeypatch.setattr(T.timing, "log", lambda event, **f: rows.append((event, f)))
+    c = FakeClient(["죄송합니다, 번역할 수 없습니다"])          # 파싱 실패 → 재시도도 빈 응답 → 전부 빈 값
+    out = await T.translate_texts(c, ["가", "나"], "en")
+    assert out["translations"] == ["", ""]
+    assert rows == [("translate_empty", {"lang": "en", "mode": "batch", "requested": 2, "empty": 2})]
+
+
+@pytest.mark.asyncio
+async def test_successful_translation_logs_nothing(monkeypatch):
+    """정상 번역까지 남기면 timing.jsonl 이 배로 커진다 — 빈 항목이 있을 때만 남긴다."""
+    rows = []
+    monkeypatch.setattr(T.timing, "log", lambda event, **f: rows.append((event, f)))
+    c = FakeClient([json.dumps({"1": "A", "2": "B"})])
+    out = await T.translate_texts(c, ["가", "나"], "en")
+    assert out["translations"] == ["A", "B"] and rows == []
+
+
+@pytest.mark.asyncio
+async def test_plain_mode_blank_is_logged_too(monkeypatch):
+    rows = []
+    monkeypatch.setattr(T.timing, "log", lambda event, **f: rows.append((event, f)))
+    c = FakeClient(["", ""])                                    # 평문 모드도 1회 재시도 뒤 빈 값
+    out = await T.translate_texts(c, ["문항 본문"], "ja")
+    assert out["translations"] == [""]
+    assert rows == [("translate_empty", {"lang": "ja", "mode": "plain", "requested": 1, "empty": 1})]
+
+
 @pytest.mark.asyncio
 async def test_rejects_too_many_items_and_truncates_long_ones():
     c = FakeClient(["x"])
