@@ -895,7 +895,9 @@ export default function ModooWriter() {
       setForm((f) => (f.draftId === form.draftId ? { ...f, shareToken: token } : f));
       copy("link", shareLinkFor(token));
     } catch (e) {
-      setShareError(String(e.message || e));
+      // 테스트 모드(?test=1) 초안은 서비스 DB 에 없어 서버가 404 를 준다 — 설계상 그렇다(backend/main.py share_draft).
+      // 그대로 두면 운영자가 테스트할 때마다 "저장된 초안이 없습니다" 를 보고 버그로 오해한다 (2026-09-07 실제로 그랬다).
+      setShareError(api.testMode() ? t("dr.share.test") : `${t("dr.share.fail")}${e.message || e}`);
     } finally {
       setShareBusy(false);
     }
@@ -1331,7 +1333,7 @@ export default function ModooWriter() {
             {form.draftId && !form.shareToken && Object.keys(status).length > 0 && (
               <p className="text-xs text-slate-500">
                 <button onClick={makeShareLink} disabled={shareBusy} className="underline disabled:opacity-50">{shareBusy ? t("dr.share.busy") : t("dr.share")}</button>
-                {shareError && <span className="ml-2 text-red-600">{t("dr.share.fail")}{shareError}</span>}
+                {shareError && <span className={`ml-2 ${api.testMode() ? "text-amber-700" : "text-red-600"}`}>{shareError}</span>}
               </p>
             )}
             <div className="flex items-center justify-between flex-wrap gap-3">
