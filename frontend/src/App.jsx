@@ -580,10 +580,11 @@ export default function ModooWriter() {
     const run = (async () => {
       setResearchState((p) => ({ ...p, [qid]: { ...(p[qid] || {}), busy: true, error: "" } }));
       try {
+        const sentId = draftRef.current.id || form.draftId;   // 요청이 실제로 쓴 신원 (form 은 아직 옛 값일 수 있다)
         const r = await api.research(formForApi(), qid);
         // 인테이크가 실패해 바로 생성으로 넘어온 경우 이 조사 요청이 이 초안의 첫 쓰기가 된다 —
         // 그때 서버가 발급한 열쇠를 여기서 받아 두지 않으면 뒤따르는 생성이 저장되지 않는다 (2026-09-04).
-        adoptDraftKey(r, form.draftId);
+        adoptDraftKey(r, sentId);
         researchRef.current[qid] = r.facts || [];
         setResearchState((p) => ({ ...p, [qid]: { busy: false, error: "", facts: r.facts || [], queries: r.queries || [], pages: r.pages || [], backend: r.backend, cached: r.cached } }));
         setResearchWarm(true);
@@ -635,7 +636,7 @@ export default function ModooWriter() {
     setStat(q.id, style.id, "loading");
     setErr(q.id, style.id, "");
     try {
-      const draftId = form.draftId;
+      const draftId = draftRef.current.id || form.draftId;   // 요청이 실제로 쓴 신원
       const res = await run({
         onSubmit: (id) => rememberJob(key, id),
         onTick: (snap) => setJobTick(q.id, style.id, { status: snap.status, position: snap.position, busy: snap.busy }),
@@ -816,8 +817,9 @@ export default function ModooWriter() {
   async function syncFromServer() {
     if (!form.draftId) return false;
     try {
-      const row = await api.getDraft(form.draftId, keyFor(form.draftId) || form.draftKey);
-      adoptDraftKey(row, form.draftId);
+      const did = draftRef.current.id || form.draftId;
+      const row = await api.getDraft(did, keyFor(did) || form.draftKey);
+      adoptDraftKey(row, did);
       const left = applyServerTexts(row);
       const active = !!row.finisher?.enabled && left > 0;
       setAutoFill(active ? { remaining: left, inProgress: row.finisher?.in_progress || [] } : null);
@@ -886,7 +888,8 @@ export default function ModooWriter() {
     if (!form.draftId || shareBusy) return;
     setShareBusy(true); setShareError("");
     try {
-      const r = await api.shareDraft(form.draftId, keyFor(form.draftId) || form.draftKey);
+      const sid = draftRef.current.id || form.draftId;
+      const r = await api.shareDraft(sid, keyFor(sid) || form.draftKey);
       const token = r.share || "";
       if (!token) throw new Error("empty");
       setForm((f) => (f.draftId === form.draftId ? { ...f, shareToken: token } : f));
