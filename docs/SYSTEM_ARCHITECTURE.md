@@ -1,6 +1,7 @@
 # 모창봇 시스템 구조도 — 코드 단위 전체 해설
 
-> 작성일: 2026-09-04 (브랜치 `llama-switch-and-diagnostics`). 같은 날 오후의 보강(접근 열쇠·상한 개편·신선도·가시화 — §22 마지막 행)까지 반영.
+> 작성일 2026-09-04, **최종 갱신 2026-09-07 밤** (브랜치 `llama-switch-and-diagnostics`).
+> 09-05~09-07 변경(5차 부하 재측정·저장 유실 3건 수정·관리자 대시보드/워치독·브라우저 익명 id)은 §25 에 모아 두고, 본문 각 절의 값도 그에 맞춰 고쳤다.
 > 이 문서 하나로 저장소 전체(백엔드·프론트·프롬프트·DB·큐·조사·배포·테스트)를 파악할 수 있게 쓴 해설이다.
 > 코드 인용은 `파일:함수` 형식. 값(워커 수·한도 등)은 `backend/config.yaml` 현재 값 기준이며, 바뀌면 그 파일이 정답이다.
 > 설계 **결정의 이유**는 `docs/PROJECT_CONTEXT.md`, 시간순 작업 기록은 `PROGRESS.md` 에 있다. 이 문서는 "지금 무엇이 어떻게 돌아가는가" 에 집중한다.
@@ -33,6 +34,7 @@
 22. [주요 설계 결정 요약과 현재 상태](#22-주요-설계-결정-요약과-현재-상태)
 23. [용어집](#23-용어집)
 24. [2026-09-04 보강 — 발견된 문제와 수정 내용](#24-2026-09-04-보강--발견된-문제와-수정-내용)
+25. [2026-09-05~09-07 — 부하 재측정 · 저장 유실 3건 · 관리 도구](#25-2026-09-0509-07--부하-재측정--저장-유실-3건--관리-도구)
 
 ---
 
@@ -80,7 +82,7 @@ Q6(사업 분야)는 AI 가 고르지 않고 사람이 UI 의 선택지(modoo �
 | 벡터DB | LlamaIndex + Ollama `bge-m3` 임베딩 | `backend/.vectorstore/` (색인만, 조회는 "충분하면 웹 검색 생략" 단계까지) |
 | DB | SQLAlchemy Core + SQLite(WAL) ×2 (서비스/백업) | URL 만 바꾸면 PostgreSQL |
 | 배포 | nginx(50001) → NSSM 서비스 `mochang-api`(8000) | 같은 PC 의 bustartup.kr nginx 에 얹혀 있음 |
-| 테스트 | pytest + pytest-asyncio, 모델·네트워크 호출 0 | 456 passed (2026-09-04 오후) |
+| 테스트 | pytest + pytest-asyncio, 모델·네트워크 호출 0 | **466 passed** (2026-09-07 밤) |
 
 ---
 
@@ -99,7 +101,7 @@ flowchart LR
     subgraph API["FastAPI (NSSM 서비스 mochang-api, :8000)"]
       MAIN["main.py 라우트"]
       QG["본문 큐<br/>client.queue<br/>워커 80 · IP당 3"]
-      QR["조사 큐<br/>research_client.queue<br/>워커 80 · IP당 3<br/>(translate 는 제한 없음)"]
+      QR["조사 큐<br/>research_client.queue<br/>워커 80 · 초안당 3<br/>(translate 는 초안당 10 · 전역 30)"]
       QF["마무리 큐<br/>finisher_client.queue<br/>워커 3"]
       FIN["Finisher 루프<br/>60초마다 DB 훑기"]
     end
@@ -109,7 +111,9 @@ flowchart LR
     VEC["backend/.vectorstore/<br/>LlamaIndex 색인"]
     LOGS["backend/.timing.jsonl<br/>.usage.json / .usage.research.json"]
     OLLAMA["Ollama :11434<br/>bge-m3 임베딩"]
-    EXT["extract_proc<br/>trafilatura 프로세스 풀 ×3"]
+    EXT["extract_proc<br/>trafilatura 프로세스 풀 ×8"]
+    DASH["관리자 대시보드 :8001<br/>NSSM mochang-dashboard<br/>읽기 전용 (§25-4)"]
+    WD["워치독<br/>작업 스케줄러 5분<br/>.data/alerts.log"]
   end
 
   subgraph GPU["GPU 서버 (k8s, SSH 터널)"]
@@ -133,7 +137,11 @@ flowchart LR
   VEC --> OLLAMA
   QR --> DDG & NAVER & OPEN & PAGES
   MAIN --> LOGS
+  DASH -.읽기.-> SQL1 & LOGS & MAIN
+  WD -.읽기.-> MAIN & LOGS
 ```
+
+> nginx 는 이 저장소가 아니라 bustartup.kr 프로젝트 소유다(수정 금지). 대시보드·워치독은 **별도 프로세스**라 API 를 건드리지 않는다.
 
 ### 2-2. 논리 관점 (모듈 의존)
 
@@ -241,7 +249,7 @@ mochang-bot/
 │   │   ├── opendata.py           정형 공공 API 어댑터 5종 + OpenDataSources (키워드 트리거)
 │   │   ├── breaker.py            소스 서킷브레이커 (연속 3회 실패 → 300초 휴식)
 │   │   ├── vectorstore.py        LlamaIndex VectorStore (upsert_pages / query / is_sufficient), OfflineEmbedding
-│   │   ├── extract_proc.py       trafilatura 를 spawn 프로세스 풀(3)에서 실행, 크래시 격리
+│   │   ├── extract_proc.py       trafilatura 를 spawn 프로세스 풀(운영 8, `research.extract_pool_size`)에서 실행, 크래시 격리
 │   │   └── vane_setup.py         Vane 컨테이너에 제공자·모델 등록 스크립트
 │   ├── prompts/                  프롬프트 전부 (코드에 한국어 프롬프트 없음)
 │   │   ├── system.md · process.md · sections.md(frontmatter 머리말) · outline.md · polish.md
@@ -261,11 +269,12 @@ mochang-bot/
 │       ├── main.jsx              createRoot → <App/>
 │       ├── App.jsx               화면 전부 (4단계) · 상태 · 파이프라인 · 저장/복원 · 번역 · 공유
 │       ├── api.js                fetch 래퍼, 작업 큐 제출/폴링, 테스트 모드 헤더, 엔드포인트 함수
-│       ├── i18n.jsx              LANGS · DICT(ko/en/zh/ja ≈190키) · makeT · LangContext
-│       └── index.css             @import "tailwindcss"
+│       ├── i18n.jsx              LANGS · DICT(ko/en/zh/ja ≈200키) · makeT · LangContext
+│       └── index.css             @import "tailwindcss" + `.modoo-link` 컴포넌트 CSS (바로가기 버튼 사선, §25-3)
 │
-├── tests/                        21개 파일, 모델·네트워크 0 (conftest 가 DB·계측 격리, 후처리 기본 OFF)
-├── scripts/                      운영·점검 스크립트 (§20)
+├── tests/                        23개 파일 466건, 모델·네트워크 0 (conftest 가 DB·계측 격리, 후처리 기본 OFF)
+├── scripts/                      운영·점검 스크립트 (§20). `svc/` 는 서비스 등록용 런처 bat + ps1
+│   └── svc/  mochang-dashboard.bat (cp949+CRLF — cmd 가 배치를 OEM 으로 읽는다) · add-dashboard-service.ps1 (BOM 필요)
 ├── docs/                         설계·품질·부하 문서, measurements/, prompt_backups/, tools/
 └── k8s/                          vllm-qwen(-b)-deployment.yaml · vane-deployment.yaml · backup/vllm-llama
 ```
@@ -348,8 +357,9 @@ finisher = Finisher(storage, finisher_client, settings, generate_fn=generate.gen
 
 ### 5-2. `lifespan` (앱 시작/종료)
 
-시작: `client.queue.start()` → `research_client.queue.start()` → `storage.init()` (스레드; 실패하면 `storage.enabled=False` 로 저장만 끔) → `finisher.start()` (storage 가 켜져 있을 때만).
-종료: `finisher.stop()` → 큐 3개 stop → `storage.close()` → `extract_proc.shutdown()`.
+시작: `client.queue.start()` → `research_client.queue.start()` → `storage.init()` (스레드; 실패하면 `storage.enabled=False` 로 저장만 끔) → `finisher.start()` (storage 가 켜져 있을 때만)
+→ **벡터DB 예열**: `asyncio.create_task(open_vector_store(research_cfg))`. 125MB 스토어를 여는 데 실측 32~65초가 걸리는데 스레드에서 미리 열어 첫 사용자가 그 비용을 안 치르게 한다(§24-4-1 ②). 테스트는 `MOCHANG_SKIP_VECTORSTORE_WARMUP` 으로 건너뛴다.
+종료: 예열 태스크 cancel → `finisher.stop()` → 큐 3개 stop → `storage.close()` → `extract_proc.shutdown()`.
 
 ### 5-3. 미들웨어·예외 처리
 
@@ -369,11 +379,12 @@ finisher = Finisher(storage, finisher_client, settings, generate_fn=generate.gen
 |---|---|
 | `_client_key(request)` | 클라이언트 IP. 접속 피어가 `trusted_proxies`(127.0.0.1)일 때만 XFF 를 믿고, 그중 **마지막** 항목(nginx 가 `$proxy_add_x_forwarded_for` 로 덧붙인 실제 IP)을 쓴다. 클라이언트가 앞에 붙인 가짜 XFF 는 무시. 프록시를 거치지 않으면 피어 IP |
 | `_job_owner(form, ip)` | 동시 작업 제한의 단위: 형식 맞는 `draft_id` 가 있으면 `d:<draft_id>`, 없으면 `ip:<ip>`. 강의실(같은 공인 IP 40명)이 서로 막지 않게 초안 단위 |
-| `_check_intake_rate(ip)` | IP 당 시간당 인테이크 수(`max_intakes_per_ip_hour`, 80) — 초안 id 를 무한히 만들어 초안 단위 제한을 우회하는 봇 차단. 메모리 deque |
+| `_check_intake_rate(ip)` | IP 당 시간당 인테이크 수(`max_intakes_per_ip_hour`, **160**) — 초안 id 를 무한히 만들어 초안 단위 제한을 우회하는 봇 차단. 메모리 deque. ⚠️ `q.submit` **앞**에서 카운터에 append 하므로 그 뒤 429 로 거절돼도 한 칸을 먹는다(§25-7) |
 | `_require_sync()` | 동기 엔드포인트 게이트. `sync_endpoints: false`(운영)면 404. 환경변수 `MOCHANG_SYNC_ENDPOINTS=1` 로 개발·테스트에서만 연다 |
 | `_authorize(draft_id, key, request)` | 초안 접근 확인: `storage.check_access`(열쇠 일치 또는 열쇠 없는 옛 행 + 같은 IP) 실패 → 404. 통과하면 `owner_key` 로 열쇠를 돌려준다(옛 행은 이때 생성) |
 | `_llm_reachable()` | 모델 서버 `GET {base_url}/models` 2초 타임아웃, 30초 캐시 → `/health.llm_reachable` |
 | `_is_test(request)` | 헤더 `X-Mochang-Test` 가 `""/0/false/no` 가 아니면 True → 서비스 DB 를 건너뛰고 백업 DB 에 `is_test=1` |
+| `_client_id(request)` | 헤더 `X-Mochang-Client`(브라우저 익명 id). `storage._ID_RE` 형식이 아니면 None — 인증 값이 아니라 집계용이라 거부하지 않고 조용히 버린다. `submit_job` 이 `form["client_id"]` 로 넣는다 (§25-5) |
 | `_persisted(kind, form, coro, owner, test)` | 코루틴 결과를 받아 `storage.record(...)` 후 그대로 반환. 저장됐으면 결과 dict 에 `draft_key`(초안 접근 열쇠)를 붙인다. 저장 실패는 storage 가 삼키되 `error_count` 로 센다 |
 | `_with_idea_research(form)` | `run_idea_research` 를 돌려 `form["references"]` 에 facts 주입. 실패해도 `{facts:[], error}` 로 계속 |
 | `_intake_full(form, owner, test)` | 아이디어 공통 조사 → `record("idea_research")` → `run_intake(research_client, …)` → `record("intake")` → 응답에 `research: {facts, queries, backend, cached, error?}` 첨부 |
@@ -411,7 +422,7 @@ TranslateRequest       lang (en|zh|ja), texts[list[str]], model
 | `POST /extend` | (동기) **운영 404** | 이어쓰기 + 저장 | `{question_id, style, text(합친 전체), added, length, limit, model, refined}` |
 | `POST /verify` | (동기) **운영 404** | 필수 요소 판정 | `{question_id, items[{requirement,present,evidence}], missing[], unsupported_claims[], format_issues[], overall, score, model, parse_ok}` |
 | `POST /translate` | (동기) **운영 404** | 읽기 번역 | `{lang, translations[len(texts)], model}` |
-| `POST /jobs/{kind}` | 종류별 | 비동기 제출. `kind ∈ generate·extend·intake·intake_regenerate·research·verify·translate`. 상한: 초안당 3(`max_jobs_per_client`) · IP 천장 300(`max_jobs_per_ip`) · 인테이크 IP당 시간 80 · 번역 초안당 10 + 전역 30. 초과 시 429 + `Retry-After: 10`. 저장된 결과에 `draft_key` 첨부 | `{job_id, kind, position, queue}` |
+| `POST /jobs/{kind}` | 종류별 | 비동기 제출. `kind ∈ generate·extend·intake·intake_regenerate·research·verify·translate`. 상한: 초안당 3(`max_jobs_per_client`) · IP 천장 **500**(`max_jobs_per_ip`) · 인테이크 IP당 시간 **160** · 번역 초안당 10 + 전역 30. 초과 시 429 + `Retry-After: 10`. 저장된 결과에 `draft_key` 첨부 | `{job_id, kind, position, queue}` |
 | `GET /jobs/{job_id}` | — | 폴링 | `{job_id, kind, status(queued/running/done/error), position, attempts, queued_seconds, elapsed_seconds, result, error}` |
 | `GET /jobs` | — | 큐 상태 | 본문 큐 stats + `your_active` + `research{…, your_active}` |
 | `GET /drafts/{draft_id}?key=` | — | 저장된 초안 한 벌 (재접속 복원). **열쇠(`draft_key`) 필요** — 틀리면 404(존재 여부도 숨김). 열쇠 없는 옛 초안은 같은 IP 만 | drafts 행(share_token·owner_token 제외) + `answers[]` + `generations[…]` + `finisher{enabled,in_progress}` + `draft_key` |
@@ -428,7 +439,7 @@ TranslateRequest       lang (en|zh|ja), texts[list[str]], model
 "intake_regenerate": (IntakeRegenerateRequest, lambda f: _intake_regenerate_full(f))
 "research":          (ResearchRequest,         lambda f: run_research(research_client, researcher, f, f["question_id"], research_cfg))
 "verify":            (VerifyRequest,           lambda f: verify.verify_text(client, form_without_text, f["question_id"], f["text"]))
-"translate":         (TranslateRequest,        lambda f: translate.translate_texts(research_client, f["texts"], f["lang"], f.get("model")))
+"translate":         (TranslateRequest,        lambda f: translate.translate_texts(research_client, f["texts"], f["lang"], f.get("model"), extra=TRANSLATE_EXTRA))
 _RESEARCH_KINDS = {"intake", "intake_regenerate", "research", "translate"}   # 조사 큐
 # 번역의 IP 제한 예외(_UNLIMITED_KINDS)는 2026-09-04 에 없앴다 → 초안당 TRANSLATE_MAX_PER_CLIENT(10) + 전역 TRANSLATE_GLOBAL_LIMIT(30),
 # vLLM priority 는 TRANSLATE_EXTRA = {"priority": 50} 로 요청마다 덧붙인다 (조사 0 < 번역 50 < 본문 100 < 마무리 200)
@@ -846,24 +857,28 @@ Vane 컨테이너의 `/api/providers` 로 OpenRouter 제공자·모델을 등록
 - **서비스 DB**(`storage.url`)에는 실제 사용자 입력만, **백업 DB**(`storage.backup_url`)에는 전부. 쓰기 메서드(`upsert_draft`, `add_generation`, `add_research`, `share_token`)가 백업에 미러링한다. `record(test=True)` 면 서비스 DB 를 건너뛰고 백업에만 `is_test=1`.
 - 사용자 고지 없이 저장한다(2026-09-02 사용자 결정).
 
-### 9-2. 테이블 (SCHEMA_VERSION 5)
+### 9-2. 테이블 (SCHEMA_VERSION 6)
 
 ```
 drafts        draft_id PK(64) · idea · track · is_business · current_item · team · capability · answers(JSON) ·
-              owner(IP) · model · request_count · is_test(bool, v3) · share_token(64, index, v4) · owner_token(64, v5 — 초안 접근 열쇠) · created_at · updated_at(index)
+              owner(IP) · model · request_count · is_test(bool, v3) · share_token(64, index, v4) · owner_token(64, v5 — 초안 접근 열쇠) ·
+              client_id(64, index, v6 — 브라우저 익명 id, §25-5) · created_at · updated_at(index)
 generations   id PK · draft_id(index) · question_id · kind(generate|extend) · style · text · chars · model · meta(JSON) · created_at(index)
 research      id PK · draft_id(index) · question_id(q2… | "idea") · cache_key · queries(JSON) · pages(JSON [{url,title}]) ·
               facts(JSON) · facts_count · backend · cached · created_at(index)
 schema_meta   key PK · value        (version)
 ```
 
-`init()` 은 `metadata.create_all` 후 SQLite 라면 `PRAGMA table_info(drafts)` 로 `is_test`·`share_token`·`owner_token` 열이 없으면 `ALTER TABLE` 로 붙인다(구 DB 이행). 기존 행의 `owner_token` 은 NULL 로 남고, 주인(같은 IP)의 다음 요청에서 채워진다. SQLite 는 `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`. 상대 경로는 프로젝트 루트 기준으로 절대화.
+`init()` 은 `metadata.create_all` 후 SQLite 라면 `PRAGMA table_info(drafts)` 로 `is_test`·`share_token`·`owner_token`·`client_id` 열이 없으면 `ALTER TABLE` 로 붙인다(구 DB 이행, `client_id` 는 인덱스도). 기존 행의 `owner_token` 은 NULL 로 남고, 주인(같은 IP)의 다음 요청에서 채워진다. SQLite 는 `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=5000`. 상대 경로는 프로젝트 루트 기준으로 절대화.
 
 ### 9-3. 키 규칙
 
 `draft_id_for(form)`: 프론트가 보낸 `draft_id` 가 `^[A-Za-z0-9_-]{8,64}$` 이면 그대로, 아니면 **None(저장하지 않음)**. 예전의 `"h"+sha1(track|idea)` 대체는 아이디어 문장으로 키를 계산할 수 있는 구멍이라 2026-09-04 에 없앴다. 공유 토큰·접근 열쇠는 `new_token()` = `secrets.token_urlsafe(18)`(24자), 형식 `^[A-Za-z0-9_-]{16,64}$`.
 
 **접근 규칙 (`_access_ok(row, key, owner)`)**: `owner is None`(내부 호출 — 마무리 작업자 등) → 통과 / 행에 열쇠가 있으면 `key == owner_token` 이어야 함 / 열쇠 없는 옛 행은 요청 IP 가 저장된 `owner` 와 같을 때만(그때 열쇠를 채운다). 갱신 거부 시 그 요청의 생성문·조사도 남기지 않는다.
+거부는 예외가 아니라 `None` 반환이라 `error_count` 에 안 잡힌다 — 그래서 2026-09-07 에 `timing.log("storage_refused", kind, draft_id, has_key)` 를 붙였다(§25-2).
+
+**`client_id` 규칙**: `form["client_id"]` 가 형식에 맞으면 INSERT 때 넣고, UPDATE 는 **행의 값이 NULL 일 때만** 채운다 — 처음 만든 브라우저를 그 초안의 주인으로 보고 덮어쓰지 않는다.
 
 ### 9-4. 메서드
 
@@ -874,7 +889,7 @@ schema_meta   key PK · value        (version)
 | `check_access(draft_id, key, ip)` / `owner_key(draft_id)` | GET /drafts·share 용 접근 확인 / 열쇠 조회(옛 행은 생성·백업 미러) |
 | `add_generation(draft_id, kind, form, result)` | `result.text` 가 있을 때만. `meta` = 결과에서 text/question_id/style/model 을 뺀 나머지(polished·refined·auto 등) |
 | `add_research(draft_id, qid, result)` | `facts` 가 list 이고 `error` 가 없을 때만. 빈 목록도 남김 |
-| `record(kind, form, result, owner, test)` → `{draft_id, draft_key}` / None | `form.idea` 없으면 스킵 → upsert(거부면 None) → kind 에 따라 generation/research. 예외는 삼키되 `error_count`·`last_error` 를 올리고 `timing.log("storage_error")` |
+| `record(kind, form, result, owner, test)` → `{draft_id, draft_key}` / None | `form.idea` 없으면 스킵 → upsert(거부면 `timing.log("storage_refused")` 후 None) → kind 에 따라 generation/research. 예외는 삼키되 `error_count`·`last_error` 를 올리고 `timing.log("storage_error")` |
 | `delete_drafts(ids=None)` | **`is_test=1` 행만** (generations·research 함께). 실사용 행은 어떤 인자로도 지우지 않음 |
 | `get_draft(id)` | drafts + generations(오래된 순), `share_token`·`owner_token` 제외, answers/meta JSON 복원, 시각 ISO |
 | `share_token(id)` | 없으면 생성 후 `WHERE share_token IS NULL` 조건으로 저장(동시 요청은 먼저 것 유지), 백업에 미러 |
@@ -915,10 +930,25 @@ schema_meta   key PK · value        (version)
 |---|---|
 | `log(event, **fields)` | `backend/.timing.jsonl`(환경변수 `MOCHANG_TIMING_LOG`) 에 한 줄 JSON. 20MB 넘으면 `.1` 로 밀기. 실패는 무시 |
 | `count(source, n)` / `flush_counts(**fields)` | 소스별 외부 호출 카운터(naver·ddgs·vane·kosis·ecos·kstartup·sangkwon·kci·fetch·vectorstore…) → 조사 1회 끝날 때 `event=sources` 한 줄로 |
-| `job_done(job)` | `JobQueue.on_done` 콜백: `event=job, kind, status, attempts, queued_s, run_s, total_s, error` |
+| `job_done(job)` | `JobQueue.on_done` 콜백: `event=job, kind, status, **owner**, attempts, queued_s, run_s, total_s, error`. `owner`(=`d:<draft_id>`)는 2026-09-07 추가 — 대시보드가 "지금 몇 개 초안이 작업 중인가" 를 IP 가 아니라 초안 단위로 세려고 |
 | `Timer` | `with Timer() as t: … t.ms` |
 
-이벤트 종류: `http`, `job`, `sources`, `auto_finish`. 읽기: `scripts/timing_report.py`, `docs/tools/api_usage.py`.
+이벤트 종류 (2026-09-07 현재):
+
+| 이벤트 | 남기는 곳 | 뜻 |
+|---|---|---|
+| `http` | `_record_timing` 미들웨어 | 요청 하나. 500ms 미만의 `GET /jobs/{id}` 폴링은 생략 |
+| `job` | `JobQueue.on_done` | 큐 작업 하나 (대기·실행·owner) |
+| `sources` | `rag/pipeline` | 조사 1회의 소스별 외부 호출 수와 대기·실행 ms |
+| `limit` | `submit_job` | 동시 상한 429. `scope ∈ owner/ip/kind` — 어느 상한이 걸렸는지 |
+| `auto_finish` | `finisher` | 마무리 작업자가 채운 문항 |
+| `vectorstore_open` / `vectorstore_degraded` | `rag/pipeline` · `vectorstore` | 벡터DB 열기 소요 / Ollama 무응답으로 건너뜀 |
+| `db_snapshot` | `scripts/db_snapshot.py` | 일일 스냅샷 (크기·원격 복사 성공 여부) |
+| `storage_error` | `storage.record` | 저장 중 **예외** |
+| `storage_refused` | `storage._record_sync` | 저장이 **권한 검사로 거부됨** (2026-09-07 추가, §25-2) |
+| `translate_empty` | `pipeline/translate.py` | 번역이 빈 채로 `done` 된 항목 수 (2026-09-07 추가, §25-2) |
+
+읽기: `scripts/timing_report.py`, `scripts/watchdog.py`, `scripts/admin_dashboard.py`, `docs/tools/api_usage.py`.
 
 ---
 
@@ -1016,8 +1046,8 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `daily_request_limit` | 50 (OpenRouter 아니면 무시) | `UsageCounter` | 무료 티어 하루 한도 |
 | `max_workers` | **80** | 본문 큐 | GPU 2장 포화점(40×2) |
 | `max_jobs_per_client` | 3 | 두 큐 | **초안(draft_id) 당** 동시 작업 (없으면 IP) |
-| `max_jobs_per_ip` | 300 | `submit_job` | IP 천장 — 초안 id 남발 우회 방지 (강의실 40명 × 6 이 들어가게) |
-| `max_intakes_per_ip_hour` | 80 | `_check_intake_rate` | IP 당 시간당 인테이크 수 |
+| `max_jobs_per_ip` | **500** | `submit_job` | IP 천장 — 초안 id 남발 우회 방지. 큐마다 따로 센다. 외국인은 1인 7건(조사 3 + 번역 4)이라 40명 + 한국인 20명이면 340 → 300 을 정상 사용만으로 넘겨서 올렸다 (2026-09-07) |
+| `max_intakes_per_ip_hour` | **160** | `_check_intake_rate` | IP 당 시간당 인테이크 수. 80 은 "40명 × 1회" 전제였는데 아이디어를 크게 고치면 새 draft_id 라 다시 세어 40명이 평균 2회면 닿는다 (2026-09-07) |
 | `trusted_proxies` | `["127.0.0.1", "::1"]` | `_client_key` | 이 피어에서 온 요청만 XFF 마지막 항목을 IP 로 |
 | `sync_endpoints` | false | `_require_sync` | 동기 엔드포인트 개방 여부 (환경변수 `MOCHANG_SYNC_ENDPOINTS` 가 우선) |
 | `translate.max_jobs_per_client/global_limit/priority` | 10 / 30 / 50 | `submit_job`, `TRANSLATE_EXTRA` | 번역 상한·vLLM 우선순위 |
@@ -1053,6 +1083,7 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `toPayload(form)` | camelCase → snake_case: `track, idea, is_business, current_item, team, capability, model?, answers?, draft_id?, draft_key?` |
 | `newDraftId()` | `crypto.randomUUID()` 또는 `d{time36}-{rand}` |
 | `testMode()` | 주소 `?test=1` → `sessionStorage["modoo-writer-test-mode"]="1"`, `?test=0` 으로 끔. 켜져 있으면 모든 요청에 `X-Mochang-Test: 1` |
+| `clientId()` / `adoptClientId(v)` | 브라우저 익명 id (`localStorage["modoo-client-v1"]`, 없으면 발급). `request()` 가 모든 요청에 `X-Mochang-Client` 로 싣는다. `adoptClientId` 는 공유 링크로 들어온 초안의 id 를 물려받아 폰→PC 이어하기를 한 사람으로 세게 한다 (§25-5) |
 | `request(path, options)` | fetch → `!ok` 면 `Error(detail)` + `err.status` |
 | `submitJob(kind, body)` / `jobStatus(id)` | `POST /jobs/{kind}` / `GET /jobs/{id}` |
 | `runJob(kind, body, {onSubmit, onTick, interval=2500})` | 제출이 429 면 5초 간격 최대 12회 재시도(`onTick({busy:true})`) → `onSubmit(job_id)` → `followJob` |
@@ -1063,7 +1094,7 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `generate(form, qid, styleId, references, opts)` / `extend(form, qid, styleId, current, references, opts)` | `runJob` |
 | `getDraft(id, key)` / `shareDraft(id, key)` / `getShared(token)` | 복원·공유 — `?key=<draftKey>` 를 붙인다 |
 | `health()` / `models()` | 헤더 표시 |
-| `translate(texts, lang, opts)` | `runJob("translate")` |
+| `translate(texts, lang, draftId, opts)` | `runJob("translate")`. `draftId` 를 실어야 동시 제한이 **초안 단위**로 걸린다 — 빠지면 `_job_owner` 가 IP 폴백을 타 강의실 전원이 한 통에 묶인다(2026-09-05 회귀, §25-1) |
 
 ### 14-2. `i18n.jsx`
 
@@ -1077,10 +1108,12 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `STYLES` | `logic` 만 | story·plain 은 백엔드에만 |
 | `QUESTIONS` | 9개 (`q7_1` 은 `onlyBusiness`) | `finisher.DEFAULT_QUESTIONS` 와 순서 동일 |
 | `Q10_PRIVATE_TEXT` | "아이디어 보호를 위해 심사 기간 동안은 공개하지 않겠습니다." | Q10 비공개 고정 문장 |
-| `PARALLEL` / `RESEARCH_PARALLEL` / `TRANSLATE_PARALLEL` | 3 / 3 / 3 | 브라우저 쪽 동시 요청 (백엔드 IP 제한 3 과 맞춤) |
+| `PARALLEL` / `RESEARCH_PARALLEL` / `TRANSLATE_PARALLEL` | 3 / 3 / 3 | 브라우저 쪽 동시 요청 (백엔드 초안당 제한 3 과 맞춤). 학생 1명이 동시에 띄우는 번역은 본문 3 + 카드 1 = **최대 4** |
+| `MODOO_URL` | `https://www.modoo.or.kr/` | 모두의 창업 공식 접수처. 헤더와 제출 화면의 바로가기 버튼 (§25-3) |
 | `IDEA_MIN` | 10자 | 시작 조건 |
 | `SAVE_KEY` | `modoo-writer-state-v1` (localStorage) | `{step, form, texts, status(loading 제외), picked, intake, answers, cardIdx, modelUsed, researchState(pages 제외), researchKey, cardI18n, trans}` |
-| `JOBS_KEY` | `modoo-writer-jobs-v1` (sessionStorage) | `{"qid|styleId": job_id}` 진행 중 작업 (새로고침 이어받기) |
+| `JOBS_KEY` | `modoo-writer-jobs-v1` (sessionStorage) | `{"qid|styleId": job_id}` 진행 중 작업 (새로고침 이어받기). ⚠️ **문항 생성만** 담는다 — 인테이크는 안 담겨서, 2분짜리 인테이크 도중 새로고침하면 그 작업이 버려진다(§25-7) |
+| `CLIENT_KEY` | `modoo-client-v1` (localStorage) | 브라우저 익명 id. 인증 값이 아니라 집계용이라 지워져도 동작에 영향 없음 |
 | `DRAFT_SAME_THRESHOLD` | 0.5 | 아이디어 2-gram 겹침(공통 ÷ 짧은 쪽) — 이 미만이면 새 `draftId` |
 | `KCI_NOTICE` | "KCI(한국학술지인용색인) 데이터 활용" | 푸터 상시 표기 + 근거 패널 배지 (이용 준수 사항) |
 
@@ -1089,7 +1122,8 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | 상태 | 형태 | 용도 |
 |---|---|---|
 | `step` | 0~3 | 화면 단계 |
-| `form` | `{track, idea, isBusiness(false 고정), currentItem, team, capability, field, q10Public, styles:["logic"], model, draftId, draftIdea, shareToken, draftKey}` | 입력. `withDraft()` 가 아이디어가 확 바뀌면 새 draftId·토큰·열쇠 초기화. `draftKey` 는 서버 응답의 `draft_key` 를 `adoptDraftKey()` 로 받아 보관(인테이크·생성·복원·공유 응답) |
+| `form` | `{track, idea, isBusiness(false 고정), currentItem, team, capability, field, q10Public, styles:["logic"], model, draftId, draftIdea, shareToken, draftKey}` | 입력. `withDraft()` 가 아이디어가 확 바뀌면 새 draftId·토큰·열쇠 초기화 |
+| `draftRef` (useRef) | `{id, key}` | **나가는 요청이 쓰는 초안 신원.** `setForm` 은 다음 렌더에야 반영되는데 인테이크 직후 같은 틱에 나가는 요청이 있어(→`prefetchResearch`) 옛 값이 실려 나갔다. 신원이 바뀌는 다섯 지점(초기값·`startIntake`·`adoptDraftKey`·`withDraft`(`applyDraft`)·공유 복원)에서 **동기로** 갱신하고 `formForApi()`·`getDraft`·`shareDraft` 가 이 ref 를 먼저 본다 (§25-2) |
 | `texts[qid][styleId]` / `status[qid][styleId]` / `errors` / `picked[qid]` / `modelUsed[qid][styleId]` | 문항별 본문·상태(loading/done/error)·오류·선택 스타일·실제 모델 | 초안 화면 |
 | `intake` | `/intake` 응답 | 카드 단계 |
 | `answers[slot]` | `{answer: string[]|null, unknown: bool}` | 카드 답 (모두 다중 선택, number 카드는 `"보기 (N명)"`) |
@@ -1108,7 +1142,7 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 
 | 함수 | 동작 |
 |---|---|
-| `startIntake()` | `form.draftIdea = idea` → `api.intake` → 카드 없으면 `generateAll()`, 있으면 step 1 + `prefetchResearch()`. 실패해도 `generateAll()` |
+| `startIntake()` | ① **열쇠가 없으면** `GET /drafts/{id}` 로 서버에 먼저 물어본다 — 열쇠 도입(09-04) 전에 만든 내 초안이면(같은 IP) 열쇠를 받아 그대로 이어 쓰고, 404 면 **새 `draftId`** 로 간다. 열쇠 없는 id 를 그대로 재사용하면 다른 흐름이 먼저 선점했을 때 이후 저장이 전부 조용히 거부된다(§25-2) ② `draftRef` 동기 갱신 → `api.intake` → 카드 없으면 `generateAll()`, 있으면 step 1 + `prefetchResearch()`. 실패해도 `generateAll()` |
 | `prefetchResearch()` | 활성 문항 전부 `ensureResearch` 를 동시 3개로 (카드에 답하는 동안 서버가 놀지 않게) |
 | `ensureResearch(qid)` | `dropStaleResearch()` → 이미 있으면 재사용 → 진행 중이면 그 Promise → `api.research` → `researchRef/researchState` 저장. 실패는 ref 에 남기지 않음(다음에 재시도) |
 | `runPipeline(questions, pairs)` | 조사 3개 병렬로 돌리며 끝난 문항을 `ready` 에 넣고, 작성기 3개가 `ready` 에서 꺼내 `generateOne`. `pairs` 가 있으면 그 (문항,스타일)만 |
@@ -1121,7 +1155,7 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `buildAnswers()` | 카드가 있는 슬롯 중 답/unknown 이 있는 것만 `[{slot,label,answer,unknown}]`. 카드 없고 복원 answers 있으면 그것 |
 | `applyServerTexts(row)` / `syncFromServer()` | `/drafts/{id}` 의 `generations` 최신본으로 **빈 문항만** 채움(학생이 고친 글은 덮지 않음, 비공개 Q10 제외). finisher 가 켜져 있고 남은 게 있으면 15초 후 재확인(최대 20분) |
 | 복원 effect (`?share=` / `?draft=`) | 저장본과 다른 초안이면 `getShared/getDraft` 로 화면을 세움: form·answers·texts 복원, step 2 |
-| `makeShareLink()` | `api.shareDraft` → `form.shareToken` → 즉시 복사 시도. 이후 `?share=<token>` 링크 표시 |
+| `makeShareLink()` | `api.shareDraft` → `form.shareToken` → 즉시 복사 시도. 이후 `?share=<token>` 링크 표시. **테스트 모드(`?test=1`)에서는 404 가 정상** — 그 초안은 서비스 DB 에 없고 `share_draft` 는 서비스 DB 를 본다. 그 경우 빨강 대신 노랑으로 "정상 동작입니다" 를 띄운다 |
 | 이어받기 effect (마운트) | `jobsRef` 에 남은 job 을 `followJob` 으로 이어받고 끝나면 `generateMissing()` |
 | 새 배포 자동 적용 effect | 운영 빌드에서 1분마다(및 탭 복귀 시) `index.html` 을 받아 번들 이름이 바뀌었으면, 생성·인테이크가 안 도는 때 `location.reload()` |
 | 카드 번역 effect | 외국어 화면이고 intake 가 있으면 ① 보고 있는 카드 문구 먼저 ② 그 언어 나머지 ③ 다른 외국어 2개 미리. 결과는 **요청 당시 언어** 지도에 합침. 빈 결과는 `cardFailedRef` 로 세션 안 재시도 금지, "번역 다시 시도" 버튼 |
@@ -1136,7 +1170,7 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `RegenerateBar({slot, state, onNote, onRun, compact})` | 메모 입력 + "다른 보기 보기 (n)" |
 | `ResearchPanel({state, warm})` | 문항 위 접이식 근거 목록(사실·발행처·연도·use_for·원문 링크, KCI 배지), 첫 조사 안내 |
 | `JobProgress({info})` | "대기열에 넣는 중 / 이어받는 중 / 앞에 N건 / 다음 차례 / 작성 중…" |
-| `ModooWriter` (default) | 헤더(언어 버튼·테스트 모드 배지·단계 탭·모델·무료 사용량 배지·연결 상태) → step 0 입력 / 1 카드 / 2 초안(문항 카드: 스타일 탭, 근거 패널, textarea, 게이지, 이어쓰기·새로 생성·복사·정보 보태기, 번역 상자) / 3 제출용 정리(전체 복사, 외국어면 "한국어 제출" 빨간 안내, 문항별 복사) → 푸터(KCI 표기) |
+| `ModooWriter` (default) | 헤더(언어 버튼·테스트 모드 배지·제목·**모두의 창업 바로가기 버튼**·단계 탭·모델·무료 사용량 배지·연결 상태) → step 0 입력 / 1 카드 / 2 초안(문항 카드: 스타일 탭, 근거 패널, textarea, 게이지, 이어쓰기·새로 생성·복사·정보 보태기, 번역 상자) / 3 제출용 정리(**전체 복사 + "모두의 창업에 지원하러 가기" 초록 버튼**, 외국어면 "한국어 제출" 빨간 안내, 문항별 복사) → 푸터(KCI 표기) |
 
 ---
 
@@ -1198,7 +1232,7 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 ```
 브라우저 1명:  조사 ≤3 (RESEARCH_PARALLEL) + 생성 ≤3 (PARALLEL) + 번역 ≤3 (제한 없음)
      │
-     ▼  초안당 동시 3건 (큐별) + IP 천장 300 + 인테이크 IP당 시간 80 + 번역 초안당 10·전역 30 — 초과 시 429, 프론트가 5초 후 재시도(최대 12회)
+     ▼  초안당 동시 3건 (큐별) + IP 천장 500 + 인테이크 IP당 시간 160 + 번역 초안당 10·전역 30 — 초과 시 429, 프론트가 5초 후 재시도(최대 12회, 지터 없음)
 ┌──────────────────────────────┐   ┌──────────────────────────────┐   ┌────────────────────┐
 │ 조사 큐 (research_client)     │   │ 본문 큐 (client)               │   │ 마무리 큐 (finisher) │
 │ 워커 80, priority 0 (번역 50)  │   │ 워커 80, priority 100          │   │ 워커 3, priority 200 │
@@ -1214,11 +1248,13 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 ```
 
 - **왜 큐를 나눴나**: 인테이크·조사는 웹 검색·페이지 수집으로 수십 초 네트워크를 기다리며 슬롯을 점유한다. 한 큐면 생성이 굶거나(40명 실측: 카드 생성 대기 최대 3분 47초) 반대로 조사가 뒤에 선다.
-- **왜 제한 단위가 초안인가**: IP 단위였을 때 강의실(같은 공인 IP 40명)이 서로를 막았다. 초안(draft_id) 단위로 바꾸고, 초안 id 남발은 IP 천장(300)과 인테이크 시간당 상한(80)으로 막는다. 같은 IP 부하 테스트(`live_load_test.py` 가 XFF 를 바꿔도 이제 nginx 뒤에선 한 IP 로 보인다)로 확인할 것.
+- **왜 제한 단위가 초안인가**: IP 단위였을 때 강의실(같은 공인 IP 40명)이 서로를 막았다. 초안(draft_id) 단위로 바꾸고, 초안 id 남발은 IP 천장(500)과 인테이크 시간당 상한(160)으로 막는다. 5차 부하 테스트가 곧 "같은 공인 IP 40명" 시나리오였고 429 **0건**으로 통과했다.
+- **IP 천장은 큐마다 따로 센다**(`JobQueue.active_ip`). 조사 큐가 먼저 찬다 — 외국인 1명이 조사 3 + 번역 4 = 7 건이라 40명이면 280, 한국인 20명(조사 3)을 더하면 340. 300 이던 값을 500 으로 올린 이유다(2026-09-07).
 - **번역**: 예전엔 IP 제한 예외(무제한)였다. 카드·본문 번역이 조사 3 + 생성 3 슬롯에 막히지 않게 초안당 10 으로 넉넉히 두되, 서버 전체 30 으로 남용을 막는다. vLLM 우선순위는 50(조사보다 뒤, 생성보다 앞).
 - **XFF 위조**: nginx 가 실제 IP 를 XFF 맨 뒤에 덧붙이므로 백엔드는 신뢰 프록시에서 온 요청의 **마지막** 항목만 쓴다. nginx 설정은 건드리지 않았다.
 - **429 백오프**: `RateLimited` 만 큐 워커가 재시도(2·4·8초 + 지터, 최대 3회). `TransientError` 는 `LLMClient` 가 모델 목록을 돌며 3회. 그 외 오류는 즉시 실패.
-- **부하 실측** (`docs/LOAD_TEST_2026-09-03.md`): 40명 동시 전체 흐름 20분 18초 완료, 인테이크 40/40, 문항 생성 320/320, 첫 초안 도착 p50 10분 27초. 다음 목표: 복제본 2개 상태에서 5차 재측정.
+- **부하 실측** (`docs/LOAD_TEST_2026-09-03.md`): 4차 40명 20분 59초 → **5차 18분 28초**(2026-09-05). 조사 경로 전역 세마포어(모델 60·추출 8)가 조사의 vLLM 독점을 막아 **문항 생성 큐 대기가 157초 → 0.0초**로 사라졌다. 인테이크 p50 은 404s → 469s 로 늘었지만 학생이 체감하는 첫 초안 도착이 10:27 → 8:58 로 빨라져 이 교환은 이득. 서버 최고 KV 22%, 429 0건. **값은 전부 그대로 둔다.**
+- **번역 부하**(`scripts/translate_load_test.py`, 15명 × 11회 = 165건): 전부 성공, 처리량 51.9건/분, 한 명당 p50 129.6초. 단 **최대 재시도 10회 / 상한 12회** — 60초 재시도 창의 50초를 이미 썼다. 15명이 사실상 한계선이고 그 위는 미측정(§25-7).
 
 ---
 
@@ -1232,10 +1268,14 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `backend/.data/mochang-backup.sqlite` | `Storage(backup)` | 백업 DB (테스트 포함 전부) — 같은 PC 라 장애 대비 백업은 아니다 | 영구 |
 | `backend/.data/snapshots/mochang-YYYY-MM-DD.sqlite.gz` | `scripts/db_snapshot.py` | 서비스 DB 스냅샷(sqlite backup API, 무중단) ≈340 KB. 매일 04:30 예약 작업이 GPU 서버 `~/mochang-backup` 으로 복사 → **오프사이트 백업** | 로컬 7일 보관 |
 | `backend/.usage.json` / `.usage.research.json` | `UsageCounter` | UTC 날짜별 요청 수·모델별 | 날짜 바뀌면 리셋 |
-| `backend/.timing.jsonl` (+`.1`) | `timing.log` | http/job/sources/auto_finish 이벤트 | 20MB 롤링 |
+| `backend/.timing.jsonl` (+`.1`) | `timing.log` | §11 의 이벤트 전부 | 20MB 롤링 |
+| `backend/.data/alerts.log` | `scripts/watchdog.py` | 이상이 생겼을 때만 한 줄 (정상이면 안 남는다) + 복구 줄 | 수동 |
+| `backend/.data/watchdog-state.json` | `scripts/watchdog.py` | 직전 판정·연속 실패 횟수·알림 여부 (같은 이상을 반복해 남기지 않으려고) | 덮어씀 |
+| `C:\logs\mochang-dashboard.log` / `.err.log` | NSSM | 대시보드 서비스 표준출력 | 10MB 로테이션 |
 | `scripts/.foreign_e2e_result.json` | `foreign_e2e.py` | E2E 결과 | — |
 | 브라우저 localStorage `modoo-writer-state-v1` | App.jsx | 초안·카드·답·조사·번역 저장본 | 사용자가 "처음부터" 누르면 삭제 |
-| 브라우저 sessionStorage `modoo-writer-jobs-v1`, `modoo-writer-test-mode` | App.jsx / api.js | 진행 중 job id, 테스트 모드 | 탭 닫으면 소멸 |
+| 브라우저 sessionStorage `modoo-writer-jobs-v1`, `modoo-writer-test-mode` | App.jsx / api.js | 진행 중 job id(문항 생성만), 테스트 모드 | 탭 닫으면 소멸 |
+| 브라우저 localStorage `modoo-client-v1` | api.js | 브라우저 익명 id (집계용) | 영구 |
 | 브라우저 localStorage `modoo-writer-lang-v1` | i18n.jsx | 화면 언어 | 영구 |
 
 프로세스 메모리에만 있는 것: `JobQueue._jobs`(최근 500건), `Breaker` 상태, `outline._locks`, `EcosKeyStats._cache`, `SangKwonStats._upjong`, `_vector_store` 핸들, `Finisher.attempts/in_progress`.
@@ -1253,7 +1293,21 @@ https://www.bustartup.kr:50001/            nginx (Desktop\nginx\conf\nginx.conf 
                         └── NSSM 서비스 mochang-api = uvicorn backend.main:app --port 8000
                               └── http://localhost:30801/v1  (ssh -N -L 30801:localhost:30801 gpu)
                                     └── k8s Service vllm-qwen (NodePort 30801) → 파드 vllm-qwen(GPU2) · vllm-qwen-b(GPU1)
+
+http://127.0.0.1:8001/                     NSSM 서비스 mochang-dashboard = scripts/admin_dashboard.py (읽기 전용, 이 PC 에서만)
+작업 스케줄러 mochang-watchdog             5분마다 pythonw scripts/watchdog.py --notify  (로그온한 사용자 화면에 팝업)
+작업 스케줄러 mochang-db-snapshot          매일 04:30 오프사이트 백업
 ```
+
+**항상 떠 있어야 하는 것** (2026-09-07 기준):
+
+| 이름 | 방식 | 창 필요 | 재부팅 후 |
+|---|---|---|---|
+| `mochang-api` (8000) | NSSM 서비스 | ✗ | 자동 |
+| `mochang-dashboard` (8001) | NSSM 서비스 | ✗ | 자동 |
+| `mochang-watchdog` | 작업 스케줄러 5분 (`/IT` — 로그온 세션에서 실행해야 팝업이 보인다) | ✗ | 로그온 후 자동 |
+| `mochang-db-snapshot` | 작업 스케줄러 매일 04:30 | ✗ | 로그온 후 자동 |
+| **SSH 터널 (30801)** | **콘솔 프로세스** | **○** | **수동** ← 유일하게 남은 것 |
 
 - 프론트를 고치면 **`cd frontend; npx vite build`** 를 다시 해야 반영된다. `npx vite build --outDir dist-check` 는 문법 검증용(gitignore). **`dist` 빌드는 즉시 공개 배포**이므로 승인 뒤에만.
 - 백엔드(코드·프롬프트·config)를 고치면 **`nssm restart mochang-api`** (관리자 PowerShell, 큐가 빌 때). 재시작 때 `storage.init()` 이 스키마 이행(ALTER TABLE)을 수행한다.
@@ -1263,7 +1317,9 @@ https://www.bustartup.kr:50001/            nginx (Desktop\nginx\conf\nginx.conf 
   대상이 `/opt` 가 아니라 GPU 서버 **홈**인 이유: `/opt` 는 root 권한이 필요한데 공유 GPU 서버에 시스템 변경을 남기지 않으려고. SSH 는 ssh-agent 없이 키 파일로 붙으므로 무인 실행에서도 동작한다(실행 검증 완료).
   **원격 권한·보관(2026-09-04)**: 스냅샷에는 학생들의 아이디어·경력이 그대로 들어 있고 GPU 서버는 공유다 → 복사 뒤 디렉터리 `700`·파일 `600` 으로 조인다(기본은 775/644 였다). 원격 보관은 `--remote-keep-days`(기본 30일, 로컬 7일보다 길게 — 오프사이트 사본이 본체다)로 `find -name 'mochang-*.sqlite.gz' -mtime +30 -delete`. 0 이면 정리하지 않는다(무한 누적 주의). 정리·권한 단계가 실패해도 사본이 도착했으면 백업은 성공으로 본다.
 - **8000 포트**: `127.0.0.1:8000` 전용 바인딩 확인(2026-09-04) — nginx 를 우회한 직접 접속 경로가 없다.
-- **SSH 터널 서비스화(권장, 미적용)**: `nssm install mochang-tunnel ssh "-N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 30801:localhost:30801 gpu"` 로 터널을 NSSM 서비스로 두면 끊겨도 재시작된다. `/health.llm_reachable` 이 False 면 터널 또는 vLLM 이 죽은 것.
+- **SSH 터널 서비스화(권장, 미적용)**: `nssm install mochang-tunnel ssh "-N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 30801:localhost:30801 gpu"` 로 터널을 NSSM 서비스로 두면 끊겨도 재시작된다. `/health.llm_reachable` 이 False 면 터널 또는 vLLM 이 죽은 것이고, **그동안 생성·번역이 전부 실패한다** — 워치독이 최우선으로 보는 항목이 이것이다.
+- **배포 안전 창**: `scripts/deploy_window.py` 로 두 큐가 비고 최근 요청이 없는 순간을 잡는다. 진행 중 작업은 메모리에만 있어(`JobQueue._jobs`) 재시작하면 사라지고, 프론트 `followJob` 은 404 를 받는 즉시 `JobExpiredError` 를 던진다 — 생성·번역은 다시 누르면 되지만 **인테이크(44~470초)를 맞으면 학생이 처음부터** 해야 한다.
+- **알림 수단**: `msg.exe` 는 이 PC 에서 `Access is denied` 로 **조용히 실패한다**(실측). 워치독은 권한이 필요 없는 `WScript.Shell Popup`(60초 자동 닫힘)을 먼저 쓰고 msg.exe 는 대비책으로 둔다. 상시 감시를 화면 밖으로 보내려면 웹훅이 맞다 — Discord·Telegram·Slack 모두 이 서버에서 200 으로 도달 확인(2026-09-07).
 - **서비스 제어 권한**: 이 계정은 `mochang-api` 를 stop/start 할 수 없다(`nssm start` → `OpenService(): 액세스가 거부되었습니다`). 재시작은 항상 사용자의 **관리자 PowerShell** 에서.
 
 ### 18-2. GPU 서버 (k8s)
@@ -1313,15 +1369,18 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | `test_shorten.py` / `test_auto_extend.py` | 짧은 문항 압축 / 긴 문항 자동 이어쓰기 |
 | `test_polish.py` / `test_postprocess.py` / `test_refine_hook.py` | 후처리 세 층 |
 | `test_verify.py` | evidence 원문 대조로 present 뒤집기 |
-| `test_translate.py` | 평문/목록/청크/깨진 JSON/언어 코드/`/translate`·`/jobs/translate` 같은 IP 6건 동시 수락 |
+| `test_translate.py` | 평문/목록/청크/깨진 JSON/언어 코드/`/translate`·`/jobs/translate` 같은 IP 6건 동시 수락 · **빈 번역 계측**(`translate_empty` 는 빈 항목이 있을 때만) |
 | `test_research.py` / `test_pipeline.py` / `test_opendata.py` / `test_vectorstore.py` / `test_extract_proc.py` | 검색 추상화·폴백·캐시 / 조사 파이프라인(지어낸 quote 탈락) / 정형 API 파싱 / 벡터DB / 프로세스 격리 |
 | `test_jobs.py` / `test_load.py` | 큐 동시 실행 제한·백오프·순번·IP 제한(429) / 동기·`/jobs` 경로 부하 |
-| `test_storage.py` | upsert·generations·research·is_test 격리·삭제 규칙·공유 토큰·스키마 이행 |
+| `test_storage.py` | upsert·generations·research·is_test 격리·삭제 규칙·공유 토큰·스키마 이행 · **저장 거부 계측**(`storage_refused`) |
+| `test_client_id.py` | 브라우저 익명 id: 처음 값 유지(덮어쓰지 않음)·옛 행 채움·형식 밖 무시·헤더→저장→공유 응답 상속 |
 | `test_finisher.py` | 마무리 작업자 대상 선정·시도 제한·저장 |
 | `test_timing.py` | 계측 격리·소스 카운터·브레이커 |
 | `test_hardening.py` | 2026-09-04 보강: 접근 열쇠·XFF 마지막 항목·초안 단위 상한·IP 천장·인테이크 시간당·번역 상한·동기 404·/health·신선도·Ollama 다운·오프라인 임베딩 격리·q7_1·db_snapshot·**full_stack**(운영 스위치 전부 ON 으로 8문항 한 바퀴, 마커 `full_stack`) |
 
-실행: `.venv\Scripts\python -m pytest -q` → **456 passed** (2026-09-04 오후). 커밋 전 필수.
+실행: `.venv\Scripts\python -m pytest -q` → **466 passed** (2026-09-07 밤). 커밋 전 필수.
+
+> 단위 테스트가 못 잡는 것: **요청 안의 쓰기 순서**와 **실제 데이터 크기**(§24-4-1), 그리고 **React 상태 타이밍**(§25-2 — 세 건 다 실서비스에서만 드러났다). 배포마다 `?test=1` 로 한 바퀴 도는 스모크를 절차로 삼는다.
 
 ---
 
@@ -1334,11 +1393,16 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | `scripts/db_copy_to_backup.py --yes` | 서비스 DB → 백업 DB 최초 복사 (sqlite3 backup API) | 없음 |
 | `scripts/db_snapshot.py [--remote host:/dir --keep-days 7 --dir …]` | 서비스 DB 스냅샷 `.sqlite.gz` + scp 오프사이트 복사 + 보관 정리. 작업 스케줄러 매일 등록용 | scp 만 |
 | `scripts/db_views.sql` | `v_progress`·`v_outputs`·`v_research` 뷰 | — |
-| `scripts/timing_report.py [--last 분 | --tail]` | `.timing.jsonl` 단계별 대기·실행 요약 ("[마무리 작업자]" 절 포함) | 없음 |
+| `scripts/timing_report.py [--last 분 | --tail]` | `.timing.jsonl` 단계별 대기·실행 요약 ("[마무리 작업자]"·"[동시 상한 429]" 절 포함) | 없음 |
+| `scripts/watchdog.py [--watch --notify --retries 3]` | **서버 감시** — `/health`·`/jobs`·timing 을 읽어 터널 끊김·저장 오류·큐 적체·429 급증·빈 번역·저장 거부를 판정. 이상일 때만 `alerts.log` + 화면 팝업. 종료 코드 0/1/2. 한 번의 검사 안에서 `--retries` 회 재확인해 순간 실패로는 안 알린다 | 없음 (GET 2회) |
+| `scripts/deploy_window.py [--quiet-sec 90 --notify]` | **배포 안전 창 대기** — 두 큐가 비고 + 최근 요청이 없을 때까지 지켜보다 알린다. 재시작은 하지 않고 명령만 찍는다. GET 은 세지 않는다(감시 도구 자신 때문에 영원히 조용해지지 않는 문제) | 없음 |
+| `scripts/admin_dashboard.py [--host --port --password]` | **관리자 대시보드** (§25-4). 포트 8001, 기본 127.0.0.1. 외부 노출은 `--password` 없으면 거부 | 없음 |
+| `scripts/svc/add-dashboard-service.ps1 [-Uninstall]` | 대시보드를 NSSM 서비스로 + 워치독을 작업 스케줄러로 등록 (관리자 PowerShell) | 없음 |
 | `scripts/switch_model.py [qwen|llama]` | config.yaml 갈아끼우기 | 없음 |
 | `scripts/load_test.py [--n 50 --jobs --same-ip]` | 인메모리 ASGI 부하, 가짜 모델 | 없음 |
 | `scripts/live_load_test.py --users 40 --json …` | 실서비스에 프론트와 같은 전체 흐름 N명 동시 (헤더 X-Mochang-Test) | **실호출 대량** — 승인 후 |
 | `scripts/foreign_e2e.py [--base …]` | 영어 입력 E2E (인테이크→카드 번역→조사→생성→영·중·일 번역) | 실호출 ≈45회 |
+| `scripts/translate_load_test.py --users 15` | 번역 전용 부하 (1명당 카드 1 + 본문 8(동시 3) + 다른 언어 미리 2 = 11회). ⚠️ `CARD_STRINGS` 가 **25문구(1청크)** 인데 실제 카드는 약 80문구(2청크) — 다음 회차에 고쳐야 실제 부하가 된다 | 실호출 대량 |
 | `scripts/gpu_probe.py --levels …` | vLLM 직접 동시성 단계 측정 (`/metrics`) | 실호출 |
 | `scripts/query_dump.py` | 문항별 검색어 덤프·중복도 | 모델만 |
 | `scripts/naver_check.py` / `scripts/opendata_check.py` | 키·규격 점검 (소스당 1건) | 외부 API 소량 |
@@ -1389,8 +1453,14 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | 09-04 | 공유 링크 별도 토큰(`share_token`), 번역 상자 스크롤, 카드 번역 순서(보는 카드 먼저·다른 언어 미리) | `storage.py`, `main.py`, App.jsx |
 | 09-04 오후 | **보강 묶음**: 초안 접근 열쇠(`owner_token`, 스키마 5, sha1 폴백 제거) · 동기 엔드포인트 운영 404 · XFF 는 신뢰 프록시의 마지막 항목 · 동시 제한 단위 IP→초안 + IP 천장 + 인테이크 시간당 · 번역 초안당 10/전역 30/priority 50 · 조사 경로 전역 세마포어(모델 60·추출 8, 풀 8) + 대기 계측 · 벡터DB Ollama 헬스체크·오프라인 임베딩 테스트 전용·`embed_model` 메타·persist 직렬화·신선도 90일 · 저장 오류 카운터(`/health.storage`) · `/health.llm_reachable` · `db_snapshot.py` 오프사이트 백업 · q7_1 미배분 명시 · style 기본 logic · full_stack 테스트 | `main.py`, `storage.py`, `jobs.py`, `client.py`, `translate.py`, `rag/pipeline.py`, `rag/vectorstore.py`, `rag/extract_proc.py`, `rag/allocate.py`, api.js, App.jsx, `scripts/db_snapshot.py`, `tests/test_hardening.py` |
 
+| 09-05 | 5차 부하(같은 IP 40명): 조사 전역 세마포어로 **생성 대기 157초 → 0초**, 값 전부 확정. 번역 요청에 `draft_id` 를 싣도록(IP 폴백 회귀 수정) | `config.yaml`, api.js, `main.py` |
+| 09-07 오전 | **저장 유실 계측**: `translate_empty`·`storage_refused`. 공유 IP 강의실이 정상 사용만으로 걸리던 상한 완화(IP 천장 300→500, 인테이크 80→160). 감시·배포창 스크립트 | `translate.py`, `storage.py`, `config.yaml`, `scripts/watchdog.py`, `scripts/deploy_window.py` |
+| 09-07 낮 | **저장 유실 3건 수정** — 열쇠 없는 `draft_id` 재사용 금지(서버에 먼저 확인), 나가는 요청의 초안 신원을 `draftRef` 하나로 통일. 조사 저장이 초안당 10.1건 → 2건대로 떨어져 있던 원인 (§25-2) | App.jsx |
+| 09-07 낮 | 모두의 창업 공식 사이트 바로가기 버튼 (헤더 + 제출 화면), 4개 언어 | App.jsx, i18n.jsx, index.css |
+| 09-07 저녁 | **관리자 대시보드**(8001, 읽기 전용) + 워치독·대시보드를 서비스/작업으로. **브라우저 익명 id**(`client_id`, 스키마 6)로 사람 수 근사 | `scripts/admin_dashboard.py`, `scripts/svc/`, `storage.py`, `main.py`, api.js |
+
 **현재 UI 에서 숨긴 것(백엔드는 살아 있음)**: 로컬 트랙, story/plain 스타일, 사업자 선택(Q7-1), 모델 드롭다운(모델 1개), `/verify` 결과 표시.
-**미구현/다음 후보**: `/verify` UI, 로컬 문서 `/ingest`, 벡터DB 조회 단계 확대, 아이디어 최소 의미 검사, 40명 5차 부하 재측정, 입력 번역(외국어 품질이 나쁠 때).
+**미구현/다음 후보**: `/verify` UI, 로컬 문서 `/ingest`, 벡터DB 조회 단계 확대, 아이디어 최소 의미 검사, 입력 번역(외국어 품질이 나쁠 때). 운영 쪽 잔여는 §25-7.
 
 ---
 
@@ -1410,14 +1480,18 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | **refine** | 모델 호출 없는 순수 함수 후처리 ①~⑩ + 신호(needs_compress/extend) |
 | **짜임(structure)** | Q1·Q10 의 문장 구조 지시. 요청마다 회전 |
 | **마무리 작업자(finisher)** | 나간 학생의 빈 문항을 낮은 우선순위로 채우는 백그라운드 루프 |
-| **draft_id / share_token** | 신청서 한 벌의 DB 키(프론트 UUID) / 공유 링크용 별도 난수 토큰 |
+| **draft_id / share_token / owner_token** | 신청서 한 벌의 DB 키(프론트 UUID) / 공유 링크용 별도 난수 토큰 / 초안 접근 열쇠(`draft_key`) |
+| **client_id** | 브라우저 익명 id. localStorage 난수를 `X-Mochang-Client` 로 실어 초안 행에 남긴다. 사람 수의 **근사치**이지 정확한 값이 아니다 (§25-5) |
+| **draftRef** | 프론트에서 나가는 요청이 쓰는 초안 신원(id+열쇠)을 담은 ref. `setState` 가 다음 렌더에야 반영되는 문제를 피하려고 동기로 들고 다닌다 |
 | **테스트 모드** | `?test=1` 또는 헤더 `X-Mochang-Test` — 서비스 DB 를 건너뛰고 백업에 `is_test=1` |
 | **본문 큐 / 조사 큐** | `client.queue`(생성·이어쓰기·검증) / `research_client.queue`(인테이크·조사·번역) |
 | **priority** | vLLM 스케줄링 우선순위. 조사 0 < 본문 100 < 마무리 200 (낮을수록 먼저) |
 | **Vane** | 구 Perplexica. SearXNG 기반 검색 컨테이너. 현재 꺼짐 |
 | **ddgs** | DuckDuckGo 비공식 검색 라이브러리. 최후 폴백 |
 | **KCI** | 한국학술지인용색인. 메타데이터만 사용, 벡터DB 색인 금지, 화면 상시 표기 |
-| **NSSM** | Windows 서비스 래퍼. `mochang-api` 로 uvicorn 을 서비스화 |
+| **NSSM** | Windows 서비스 래퍼. `mochang-api`(8000)·`mochang-dashboard`(8001)를 서비스화 |
+| **워치독 / 대시보드** | `scripts/watchdog.py`(5분마다 상태 판정, 이상일 때만 기록·팝업) / `scripts/admin_dashboard.py`(8001, 읽기 전용 관리 화면) |
+| **storage_refused / translate_empty** | 저장이 권한 검사로 거부된 건 / 번역이 빈 채로 `done` 된 항목. 둘 다 예외가 아니라 조용히 지나가던 것을 2026-09-07 에 계측으로 드러냈다 |
 
 ---
 
@@ -1538,7 +1612,109 @@ python -m backend.test_generate q2 --call             # 실제 생성
 
 **스냅샷 암호화(다음 작업 후보)**: GPU 서버는 로그인 계정이 `user` 하나뿐인 공용 서버라, 700/600 권한은 **다른 계정**은 막지만 같은 계정으로 접속하는 사람은 막지 못한다. 사용자 확인으로 "관련자만 쓰는 서버" 라 당장은 문제없다(2026-09-04). 더 조이려면 `db_snapshot.py --encrypt` 로 gpg 대칭키 암호화를 붙이고 복호화 절차를 문서화하면 된다.
 
-**부하 테스트에서 볼 것** (이번 변경의 실질 검증):
+**부하 테스트에서 볼 것** (이번 변경의 실질 검증 — 아래는 09-04 시점의 계획이고, **결과는 §25-1 에 있다**. 5차에서 429 0건·생성 대기 0초로 값이 확정됐고 `max_jobs_per_ip` 는 그 뒤 09-07 에 500 으로 올랐다):
 1. **429 를 scope 별로** — `timing_report.py` 의 "[동시 상한 429]" 절(`owner`/`ip`/`kind`). 정상이면 **0건**. `ip` 가 뜨면 `max_jobs_per_ip`(300)를, `kind` 가 뜨면 `translate.global_limit`(30)을 올린다. 한국어 40명은 40×6=240 이라 여유가 있지만 외국어 화면은 번역이 초안당 10 까지라 이론상 더 오른다 — 전역 30 이 먼저 끊어 ≈270 에서 멈추므로 여유가 30밖에 없다.
 2. **"[조사 경로 평균]"** — `llm_wait_ms`(세마포어 60이 병목인지), `extract_wait_ms`(풀 8이 병목인지) vs `*_run_ms`. 대기가 실행보다 크게 길면 그 값을 올린다.
 3. **본문 생성 대기**가 조사 피크에 밀리는지 — "[작업 큐] generate" 의 대기 p50/p95 를 4차(157s/—)와 비교.
+
+---
+
+## 25. 2026-09-05~09-07 — 부하 재측정 · 저장 유실 3건 · 관리 도구
+
+§24 는 2026-09-04 보강까지다. 이 절은 그 뒤 사흘의 변경을 모은다. 값·파일 위치는 본문 각 절에 이미 반영했고, 여기서는 **왜 그렇게 됐는지**를 남긴다.
+
+### 25-1. 5차 부하 테스트와 번역 회귀 (09-05)
+
+`docs/LOAD_TEST_2026-09-03.md` "5차" 절이 원본. 40명 동시(같은 공인 IP 시나리오):
+
+| | 4차 | **5차** |
+|---|---|---|
+| 전원 완료 | 20:59 | **18:28** |
+| 첫 초안 도착 p50 | 10:27 | **8:58** |
+| 문항 생성 큐 **대기** p50 | **157초** | **0.0초** |
+| 인테이크 p50 | 404s | 469s |
+| 서버 최고 KV | 37% | **22%** |
+| 429 | (계측 없음) | **0건** |
+
+조사 경로 전역 세마포어(모델 60·추출 8)가 조사의 vLLM 독점을 막아 생성 대기가 사라졌다. 인테이크는 느려졌지만 학생이 체감하는 첫 초안이 빨라졌으므로 이득 — **값은 전부 그대로 둔다.**
+
+**번역 회귀 하나**: `api.translate` 가 `draft_id` 를 안 실어 `_job_owner` 가 IP 폴백을 탔고, nginx 뒤에서 **강의실 외국인 전원이 한 통(초안당 10)에 묶였다.** 09-04 이전에는 번역이 제한 예외였으므로 그 개편이 만든 회귀다. 15명 실측에서 실패 43건이 전부 이 원인이었고, `draft_id` 를 싣도록 고친 뒤 **165/165 성공**. 회귀 테스트 `test_translate_limit_is_per_draft_not_per_ip`.
+
+### 25-2. 저장이 조용히 거부되던 세 가지 (09-07) — 뿌리가 같다
+
+셋 다 **React `setState` 가 다음 렌더에야 반영되는데 인테이크 직후 같은 틱에 요청이 나가는** 구조에서 나왔다. 서버는 정상이었고 화면도 정상으로 보였다.
+
+| # | 증상 | 원인 | 규모 |
+|---|---|---|---|
+| ① | **조사 자료가 저장되지 않음** | `startIntake` 가 열쇠를 받은 직후 같은 틱에 `prefetchResearch()` 를 부르는데, 그 요청들이 아직 열쇠가 없는 옛 `form` 을 읽어 서버에서 전부 거부 | 초안당 조사 저장 **09-04 평균 10.1건 → 09-05 2.2 / 09-06 1.6 / 09-07 2.2**. 36개 초안 기준 기대 324건 중 71건만 저장 = **약 253건 유실** |
+| ② | **한 세션이 초안 두 개로 갈림** | ①을 고치는 과정에서 넣은 "열쇠 없으면 새 `draft_id`" 가, `sent`·`setForm` 에만 새 id 를 넣고 클로저의 `form` 은 옛 id 인 채로 남겨 인테이크는 새 id 로·조사는 옛 id 로 저장됐다 | 실서비스 테스트에서 즉시 재현 (`208051c9` 생성3·조사1 / `f46c7bd0` 생성0·조사6) |
+| ③ | **열쇠를 영영 못 받음** | 요청은 ref 신원으로 나가는데 `adoptDraftKey(r, form.draftId)` 는 옛 id 로 비교해 `setForm` 가드가 어긋났다. ①②의 나머지 반쪽 | 리뷰 지적으로 `grep` 훑다 발견 |
+
+**수정**: `draftRef` 하나가 나가는 요청의 초안 신원(id+열쇠)을 갖고, 신원이 바뀌는 다섯 지점에서 **동기로** 갱신한다(§14-4). 그리고 새 id 로 갈아타기 전에 `GET /drafts/{id}` 로 서버에 먼저 물어본다 — 열쇠 도입 전 초안 26건이 갈라지지 않게.
+
+**권한 검사는 그대로 뒀다.** `draft_id` 는 `/drafts/{id}` 로 노출되는 값이라 "열쇠 없어도 저장"·"같은 IP 면 통과" 로 풀면 옆 화면만 봐도 남의 초안에 쓸 수 있다.
+
+**검증**(수정 후 `?test=1` 한 바퀴): 초안 **1개**, 생성 8, **조사 9**, `storage_refused` 0건, 서비스 DB 그대로. 조사가 2건대 → 9건으로 돌아온 것이 ①의 진단이 맞았다는 확증이다.
+
+**학생 1명분 실제 유실**: 09-07 11:29~11:31 의 생성 8건이 서비스·백업 어느 DB 에도 없다. 생성문은 `JobQueue._jobs` 메모리에만 있고 job_id 를 모르므로 **서버에서 복구 불가**. 다만 `saveState` 가 `texts` 를 localStorage 에 넣으므로 같은 브라우저로 다시 들어가면 화면에는 보인다(서버로 다시 올리는 경로는 없다).
+
+**이용 규모 대조**(nginx 로그 279 IP × DB): 사이트를 연 네트워크 279개 중 인테이크를 낸 것은 59개, 그중 DB 에 없는 것은 3개뿐이었고 추적해 보니 운영자 1 · NAT 로 IP 가 바뀐 1(저장돼 있음) · 실제 미저장 1 이었다. 즉 **신청자 수와의 차이는 유실이 아니라 "안 쓰고 지원"** 이다(첫 화면 이탈 약 79%).
+
+### 25-3. 모두의 창업 바로가기 버튼
+
+이 도구는 초안만 만들고 접수는 `modoo.or.kr` 에서 한다 — 처음 온 사람이 그걸 알아야 해서 두 곳에 뒀다.
+
+- **헤더**: 제목·부제 바로 아래 왼쪽. 오른쪽에 파란 사선 블록(`clip-path: polygon(0 0, 100% 0, 100% 100%, 44% 100%)` — **위가 넓고 아래가 좁다**, 로고 삼각형과 같은 방향) 안에 ↗ SVG. 치수·색은 `src/index.css` 의 `.modoo-link` (높이 54px/모바일 46, 사선 폭 76/62, `#1a73ff`). 사선이라 상자 중앙은 왼쪽으로 치우쳐 보이므로 `padding-left` 로 **보이는 파란 면의 가운데**에 맞췄다.
+- **제출 화면**: "전체 복사" 옆 초록 버튼. 복사 → 새 탭에서 접수가 실제 흐름이라 두 버튼을 나란히 두고 색을 나눴다.
+- 4개 언어 라벨. `target="_blank" rel="noopener noreferrer"`.
+
+### 25-4. 관리·감시 도구 3종
+
+전부 **별도 프로세스**라 API 를 건드리지 않고, 죽어도 서비스에 영향이 없다.
+
+| 도구 | 읽는 곳 | 하는 일 |
+|---|---|---|
+| `admin_dashboard.py` (8001) | nginx `access.log` 꼬리 · `.timing.jsonl` 꼬리 · `mochang.sqlite` (`mode=ro`) · `GET /health`·`/jobs` | 지금 작업 중인 초안·사람, 오늘 처리량·429·오류·빈 번역·저장 거부, 누적·7일 추이·시간대별, 최근 초안/이벤트. **학생 아이디어 본문은 안 띄운다** |
+| `watchdog.py` | 위와 같음 (GET 2회) | 5분마다 판정. 심각(API 무응답·터널 끊김·저장소 꺼짐) / 경고(저장 실패·큐 적체·429 급증·작업 오류·빈 번역). 이상일 때만 `alerts.log` + 팝업 |
+| `deploy_window.py` | `/jobs` · `.timing.jsonl` | 두 큐가 비고 최근 요청이 없을 때까지 대기 후 알림. 재시작은 하지 않는다 |
+
+**사람 수를 IP 로 세지 않는 이유**: 교내는 공인 IP 하나라 강의실 전체가 1명이 된다. 그래서 대시보드는 **초안 수(상한)** 와 **네트워크 수(하한)** 를 나란히 보여주고, `client_id` 가 있으면 그 사이의 근사치를 하나 더 얹는다. `job` 로그의 `owner` 가 있으면 "작업 중" 은 초안 단위로 세되 **테스트 모드 초안은 뺀다**(서비스 DB 에 있는 것만).
+
+**등록**: `scripts/svc/add-dashboard-service.ps1`(관리자). 대시보드는 NSSM 서비스, 워치독은 **작업 스케줄러** — 서비스는 바탕화면이 없어 팝업을 못 띄우기 때문이다. 무기한 반복은 `Register-ScheduledTask` 가 PowerShell 5.1 에서 XML 범위 초과로 거부하므로 `schtasks /SC MINUTE /MO 5 /IT` 를 쓴다.
+
+### 25-5. 브라우저 익명 id (`client_id`)
+
+"몇 명이 썼나" 를 재려고 넣었다. 프론트가 localStorage 난수를 모든 요청에 `X-Mochang-Client` 로 싣고, 서버가 초안 행에 남긴다(처음 값만).
+**공유 링크로 다른 기기에서 열면 그 초안의 id 를 물려받는다**(`api.adoptClientId`) — 링크를 들고 옮긴 건 본인이라는 신호라, 폰→PC 이어하기가 한 사람으로 계산된다.
+
+**정확한 값이 아니다.** 어긋나는 경우를 알고 써야 한다:
+
+| 상황 | 결과 |
+|---|---|
+| 개인 노트북·폰을 공유 링크 없이 따로 씀 / 시크릿 창 / 데이터 삭제 | 과다 (여러 명) |
+| **강의실 공용 PC 를 여러 학생이 같은 브라우저로** | 과소 (1명) |
+| 공유 링크를 친구에게 줌 | 과소 |
+| 이 기능 배포 전 초안 | "미상" — 그 브라우저가 다시 와야 채워짐 |
+
+본질은 **브라우저 프로필 수**다. 정확히 세려면 로그인뿐인데 그건 서비스 성격이 바뀌는 결정이라 통계 때문에 갈 방향이 아니다.
+
+### 25-6. 배포 순서 (09-07 기준)
+
+§24-4 의 "프론트 먼저" 는 열쇠 도입 때의 규칙이고, 그 뒤 배포에서는 **경우에 따라 다르다**:
+
+- **스키마 이행이 있으면 백엔드 먼저** — `storage.init()` 이 `ALTER TABLE` 을 돌린다. 프론트를 먼저 올리면 새 헤더를 옛 서버가 무시할 뿐이라 무해하다.
+- **프론트만 바뀌면 무중단** — nginx 가 `frontend/dist` 를 정적 서빙하고 `/api/` 만 8000 으로 프록시한다. **API 프로세스는 정적 파일에 관여하지 않는다.** 번들도 단일 파일(동적 `import()` 0개)이라 이미 페이지를 연 학생은 로드된 JS 로 계속 돌아간다.
+- 백엔드 재시작이 섞이면 `deploy_window.py` 로 창을 잡고, 끝나고 `/health` 의 `ok`·`llm_reachable` 을 둘 다 확인한다.
+
+### 25-7. 남은 것
+
+| 항목 | 내용 |
+|---|---|
+| **인테이크 이어받기** | `JOBS_KEY` 가 문항 생성만 담아, 2분짜리 인테이크 도중 새로고침하면 그 작업이 버려지고 학생은 다시 누른다. 25-2 사고의 근본 원인이다. 지금 조치로 **데이터는 안 잃지만** GPU 2분을 그대로 버린다 |
+| **`_check_intake_rate` 순서** | `q.submit` 앞에서 카운터를 올려, 429 로 거절된 인테이크도 시간당 한도를 먹는다. 프론트가 12회 재시도하므로 1건이 최대 12칸. `submit_job` 은 가장 뜨거운 경로라 분리해서 고친다 |
+| **번역 부하 재측정** | `translate_load_test.py` 의 카드가 25문구(1청크)인데 실제는 약 80문구(2청크) — 15명 측정조차 실제의 절반이었다. 고쳐서 15명 재측정 → 40명 |
+| **번역 전용 큐 + vLLM 전역 세마포어** | 40명 시나리오 대비. **둘은 다른 문제를 푼다** — 전용 큐는 번역이 조사·인테이크를 밀어내는 것(공유 FIFO)을, 세마포어는 번역이 생성을 밀어내는 것(priority 50 < 100)을 막는다. 상한 30 은 *작업* 수라 카드 번역이 2청크로 갈라지면 실제 vLLM 호출은 60까지 간다 |
+| **재시도 지터** | 프론트 429 재시도가 5초 고정이라 맞은 요청들이 같은 순간에 다시 몰린다(서버 큐 재시도에는 이미 지터가 있다). 부하 회차에 함께 |
+| **설정 핫리로드** | 상한값은 모듈 임포트 시점 상수라 바꾸려면 재시작해야 한다. 전용 큐 작업과 같은 배포에 넣으면 이후 튜닝이 무중단이 된다 |
+| **SSH 터널 서비스화** | 유일하게 콘솔 프로세스로 남아 있다. 죽으면 생성·번역이 전부 실패한다 |
+| **첫 화면 이탈 79%** | 사이트를 연 279 네트워크 중 인테이크까지 간 것은 59개. 유실이 아니라 UX 문제라 별도로 볼 항목 |
