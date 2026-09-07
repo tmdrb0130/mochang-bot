@@ -680,11 +680,21 @@ export default function ModooWriter() {
   async function startIntake() {
     setIntakeBusy(true);
     setIntakePos(null);
+    // 열쇠(draftKey)가 없다 = 이 draft_id 로 서버 저장에 성공한 적이 한 번도 없다 (2026-09-07).
+    // 그 상태에서 같은 id 를 다시 쓰면 위험하다: 새로고침으로 끊긴 인테이크나 다른 탭이 먼저 끝나면서 그 id 를
+    // 선점하고 열쇠를 받아 가면, 열쇠 없는 이 흐름의 조사·생성문이 서버에서 **전부 조용히 거부된다**
+    // (backend/storage.py _access_ok — 화면에는 정상으로 보이는데 저장만 안 된다).
+    // 2026-09-07 11:29~11:31 에 실제로 한 학생의 생성 8건이 이렇게 사라졌다.
+    // → 열쇠가 없으면 새 id 로 시작한다. 학생이 한 번 더 누른 것이니 초안이 둘이 되는 게 사실에도 맞고,
+    //   남의 초안에 접근할 길은 열리지 않는다(각자 자기 열쇠를 받는다).
+    const draftId = form.draftKey ? form.draftId : api.newDraftId();
+    const fresh = draftId !== form.draftId;
+    const sent = { ...form, draftId, draftIdea: form.idea, ...(fresh ? { shareToken: "", draftKey: "" } : {}) };
     // 지금 제출하는 아이디어가 이 초안의 기준이 된다 — 이후 편집은 이 글과 비교해 같은 초안인지 가른다
-    setForm((f) => ({ ...f, draftIdea: f.idea }));
+    setForm((f) => ({ ...f, draftId, draftIdea: f.idea, ...(fresh ? { shareToken: "", draftKey: "" } : {}) }));
     try {
-      const r = await api.intake(form, { onTick: (snap) => setIntakePos(snap.status === "queued" ? snap.position : null) });
-      adoptDraftKey(r, form.draftId);
+      const r = await api.intake(sent, { onTick: (snap) => setIntakePos(snap.status === "queued" ? snap.position : null) });
+      adoptDraftKey(r, draftId);
       setIntake(r);
       setAnswers({});
       setCardIdx(0);

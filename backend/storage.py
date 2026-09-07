@@ -398,6 +398,16 @@ class Storage:
             return None
         info = self.upsert(form, owner, test)
         if not info:
+            # 저장 거부 (2026-09-07). 버그가 아니라 권한 검사 결과다 — 예외가 아니라서 error_count 에 안 잡히고
+            # /health 에도 안 보였다. 같은 draft_id 를 다른 흐름(새로고침으로 끊긴 인테이크·두 번째 탭)이 먼저
+            # 선점해 열쇠를 받아 가면, 뒤따르는 흐름의 조사·생성문이 **전부 조용히 버려진다**.
+            # 실제로 2026-09-07 11:29~11:31 에 한 학생의 생성 8건이 이렇게 사라졌다. 그 횟수를 보려고 남긴다.
+            try:
+                from . import timing
+                timing.log("storage_refused", kind=kind, draft_id=draft_id_for(form) or "",
+                           has_key=bool(str(form.get("draft_key") or "").strip()))
+            except Exception:
+                pass
             return None                                      # draft_id 형식 밖 또는 열쇠 불일치 — 생성문도 남기지 않는다
         did = info["draft_id"]
         if kind in _TEXT_KINDS and isinstance(result, dict):

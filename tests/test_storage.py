@@ -317,3 +317,33 @@ async def test_share_endpoints_roundtrip(tmp_path):
             assert "finisher" in body and "share_token" not in body and "owner_token" not in body
             assert (await c.get("/shared/" + "z" * 24)).status_code == 404
             assert (await c.get("/shared/bad")).status_code == 404
+
+
+# ── 저장 거부 계측 (2026-09-07) — 열쇠 불일치로 조용히 버려지는 것을 볼 수 있어야 한다 ──
+
+def test_refused_save_is_logged(tmp_path, monkeypatch):
+    """같은 draft_id 를 먼저 선점한 흐름이 있으면 뒤따르는 저장이 거부된다. 그 사실이 로그에 남아야 한다."""
+    from backend import storage as S
+    from backend import timing
+
+    rows = []
+    monkeypatch.setattr(timing, "log", lambda event, **f: rows.append((event, f)))
+    st = S.Storage(url="sqlite:///" + (tmp_path / "t.sqlite").as_posix())
+    st.init()
+    did = "11455cd6-576b-4358-bb03-442dbc497705"
+    form = {"draft_id": did, "idea": "아이디어", "track": "tech"}
+
+    first = st.upsert(dict(form), "1.2.3.4")                  # 탭 A: 행 생성 + 열쇠 발급
+    assert first and first["draft_key"]
+    rows.clear()
+
+    # 탭 B: 같은 id, 열쇠 없음 → 거부되고 그 사실이 남는다
+    assert st._record_sync("generate", dict(form), {"question_id": "q2", "text": "본문"}, "1.2.3.4") is None
+    assert rows == [("storage_refused", {"kind": "generate", "draft_id": did, "has_key": False})]
+
+    # 열쇠를 실으면 정상 저장 — 거부 로그는 더 안 남는다
+    rows.clear()
+    ok = st._record_sync("generate", {**form, "draft_key": first["draft_key"]},
+                         {"question_id": "q2", "text": "본문"}, "1.2.3.4")
+    assert ok and rows == []
+
