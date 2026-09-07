@@ -35,7 +35,7 @@ const DICT = {
     // 헤더
     "app.title": "모두의 창업 신청서 작성 도우미",
     "app.subtitle": "아이디어 한 문단이면 됩니다. 문항별 초안을 받아서 다듬고, 붙여넣기만 하세요.",
-    "hdr.modoo": "모두의 창업 신청 사이트",
+    "hdr.modoo": "모두의 창업 바로가기",
     "hdr.modoo.tip": "실제 지원을 접수하는 공식 사이트입니다. 새 탭에서 열립니다 (www.modoo.or.kr)",
     "fn.modoo": "모두의 창업에 지원하러 가기",
     "fn.modoo.tip": "새 탭에서 열립니다. 복사한 초안을 신청서 문항에 붙여넣으세요 (www.modoo.or.kr)",
@@ -213,7 +213,7 @@ const DICT = {
   en: {
     "app.title": "Everyone's Startup Application Writing Assistant",
     "app.subtitle": "One paragraph about your idea is enough. Get a draft for each question, polish it, and paste it in.",
-    "hdr.modoo": "Modoo Startup application site",
+    "hdr.modoo": "Go to Modoo Startup",
     "hdr.modoo.tip": "The official site where applications are actually submitted. Opens in a new tab (www.modoo.or.kr)",
     "fn.modoo": "Go apply on Modoo Startup",
     "fn.modoo.tip": "Opens in a new tab. Paste your copied draft into the application form (www.modoo.or.kr)",
@@ -381,7 +381,7 @@ const DICT = {
   zh: {
     "app.title": "全民创业申请书撰写助手",
     "app.subtitle": "只需一段创意描述。获取每道题的草稿，修改后粘贴即可。",
-    "hdr.modoo": "全民创业申请官网",
+    "hdr.modoo": "前往全民创业官网",
     "hdr.modoo.tip": "实际提交申请的官方网站。在新标签页打开 (www.modoo.or.kr)",
     "fn.modoo": "前往全民创业提交申请",
     "fn.modoo.tip": "在新标签页打开。请将复制的草稿粘贴到申请表 (www.modoo.or.kr)",
@@ -549,7 +549,7 @@ const DICT = {
   ja: {
     "app.title": "みんなの創業 申請書作成アシスタント",
     "app.subtitle": "アイデアを一段落書くだけ。設問ごとの下書きを受け取って整え、貼り付けるだけです。",
-    "hdr.modoo": "みんなの創業 申請サイト",
+    "hdr.modoo": "みんなの創業へ",
     "hdr.modoo.tip": "実際に応募を受け付ける公式サイトです。新しいタブで開きます (www.modoo.or.kr)",
     "fn.modoo": "みんなの創業に応募しに行く",
     "fn.modoo.tip": "新しいタブで開きます。コピーした下書きを申請フォームに貼り付けてください (www.modoo.or.kr)",

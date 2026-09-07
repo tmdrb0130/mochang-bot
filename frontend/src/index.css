@@ -1,1 +1,74 @@
 @import "tailwindcss";
+
+/* ── 모두의 창업 바로가기 버튼 (2026-09-07, 사용자 제공 디자인) ──
+   Tailwind 유틸만으로는 clip-path 사선과 반응형 크기를 같이 다루기가 지저분해서 컴포넌트 클래스로 둔다.
+   파란 사선은 **위가 넓고 아래가 좁다** — 모두의 창업 로고 삼각형과 같은 방향. */
+.modoo-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 54px;
+  padding: 0 86px 0 20px;
+  background: #fff;
+  border: 1.5px solid #cfe0ff;
+  border-radius: 10px;
+  overflow: hidden;
+  text-decoration: none;
+  color: #111827;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.modoo-link:hover,
+.modoo-link:focus-visible {
+  border-color: #1a73ff;
+  box-shadow: 0 0 0 4px rgba(26, 115, 255, 0.12);
+  outline: none;
+}
+
+.modoo-link .wedge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 76px;
+  background: #1a73ff;
+  clip-path: polygon(0 0, 100% 0, 100% 100%, 44% 100%);
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 10px 14px 0 0;
+  box-sizing: border-box;
+}
+
+.modoo-link .wedge svg {
+  width: 16px;
+  height: 16px;
+  color: #fff;
+  transition: transform 0.15s;
+}
+
+.modoo-link:hover .wedge svg {
+  transform: translate(2px, -2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modoo-link,
+  .modoo-link .wedge svg {
+    transition: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .modoo-link {
+    height: 46px;
+    font-size: 14px;
+    padding: 0 70px 0 16px;
+  }
+  .modoo-link .wedge {
+    width: 62px;
+    padding: 8px 12px 0 0;
+  }
+}

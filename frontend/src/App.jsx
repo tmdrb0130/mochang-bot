@@ -1094,9 +1094,15 @@ export default function ModooWriter() {
             <p className="text-sm text-slate-500 mt-1">{t("app.subtitle")}</p>
             {/* 모두의 창업 공식 사이트 (2026-09-07). 제목 바로 아래 왼쪽 — 처음 온 사람이 "여기가 접수처는 아니구나" 를
                 알아야 해서 눈에 띄는 자리에 둔다. 서버 상태와 무관하게 늘 보인다(우리 API 가 죽어도 공고는 봐야 한다). */}
-            <a href={MODOO_URL} target="_blank" rel="noopener noreferrer" title={t("hdr.modoo.tip")}
-               className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-indigo-500 bg-white text-indigo-700 text-sm font-semibold hover:bg-indigo-50 hover:border-indigo-600">
-              {t("hdr.modoo")}<span aria-hidden="true">↗</span>
+            <a href={MODOO_URL} target="_blank" rel="noopener noreferrer"
+               className="modoo-link mt-3" title={t("hdr.modoo.tip")} aria-label={t("hdr.modoo.tip")}>
+              {t("hdr.modoo")}
+              {/* 파란 사선: 위가 넓고 아래가 좁다. 모양·치수는 src/index.css 의 .modoo-link */}
+              <span className="wedge" aria-hidden="true">
+                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 12 12 4M6 4h6v6" />
+                </svg>
+              </span>
             </a>
           </div>
           <nav className="flex gap-1 text-sm">
