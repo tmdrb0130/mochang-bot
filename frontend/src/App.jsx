@@ -364,9 +364,17 @@ export default function ModooWriter() {
     draftKey: "",                // 초안 접근 열쇠 — 첫 저장 응답(draft_key)에서 받아 보관, 모든 요청·복원에 실어 보낸다 (2026-09-04)
   });
   // 서버 응답에 실려 온 접근 열쇠를 이 초안의 것으로 보관한다. 응답이 늦게 도착해 이미 다른 초안으로 바뀐 경우는 무시.
+  //
+  // ref 에도 **동기로** 넣는다 (2026-09-07). setForm 은 다음 렌더에야 반영되는데, 인테이크가 끝나자마자
+  // 같은 틱에 나가는 요청이 있다(startIntake → prefetchResearch). 그 요청들은 아직 열쇠가 없는 옛 form 을 읽어
+  // 서버에서 전부 거부됐다 — 열쇠 도입(09-05) 뒤 초안당 조사 저장이 평균 10.1건 → 2건대로 떨어진 원인이다.
+  // id 를 같이 들고 다녀서, 그새 다른 초안으로 바뀌었으면(withDraft) 옛 열쇠를 쓰지 않는다.
+  const draftKeyRef = useRef({ id: form.draftId, key: form.draftKey || "" });
+  const keyFor = (id) => (draftKeyRef.current.id === id ? draftKeyRef.current.key : "");
   const adoptDraftKey = (res, draftId) => {
     const key = res?.draft_key;
     if (!key) return;
+    draftKeyRef.current = { id: draftId, key };
     setForm((f) => (f.draftId === draftId && f.draftKey !== key ? { ...f, draftKey: key } : f));
   };
   const [texts, setTexts] = useState(saved?.texts ?? {});   // texts[qid][styleId] = string
@@ -511,7 +519,7 @@ export default function ModooWriter() {
   const textsRef = useRef(texts);
   useEffect(() => { textsRef.current = texts; }, [texts]);
 
-  const formForApi = () => ({ ...form, answers: buildAnswers() });
+  const formForApi = () => ({ ...form, draftKey: keyFor(form.draftId) || form.draftKey, answers: buildAnswers() });
   const answeredCount = Object.values(answers).filter((a) => a && (a.unknown || a.answer)).length;
   // 문항에 연결된 카드. 모델이 question_ids 를 비워 보냈으면 모든 문항에 보여준다.
   const cardsForQuestion = (qid) => (intake?.cards || []).filter((c) => !c.question_ids?.length || c.question_ids.includes(qid));
@@ -698,6 +706,7 @@ export default function ModooWriter() {
       } catch { /* 404 — 첫 인테이크이거나, 다른 흐름이 이미 이 id 를 가져갔다 */ }
     }
     if (!draftKey) draftId = api.newDraftId();
+    draftKeyRef.current = { id: draftId, key: draftKey };   // 바로 뒤 prefetchResearch 가 이 값을 읽는다
     const fresh = draftId !== form.draftId;
     const sent = { ...form, draftId, draftKey, draftIdea: form.idea, ...(fresh ? { shareToken: "" } : {}) };
     // 지금 제출하는 아이디어가 이 초안의 기준이 된다 — 이후 편집은 이 글과 비교해 같은 초안인지 가른다
@@ -798,7 +807,7 @@ export default function ModooWriter() {
   async function syncFromServer() {
     if (!form.draftId) return false;
     try {
-      const row = await api.getDraft(form.draftId, form.draftKey);
+      const row = await api.getDraft(form.draftId, keyFor(form.draftId) || form.draftKey);
       adoptDraftKey(row, form.draftId);
       const left = applyServerTexts(row);
       const active = !!row.finisher?.enabled && left > 0;
@@ -867,7 +876,7 @@ export default function ModooWriter() {
     if (!form.draftId || shareBusy) return;
     setShareBusy(true); setShareError("");
     try {
-      const r = await api.shareDraft(form.draftId, form.draftKey);
+      const r = await api.shareDraft(form.draftId, keyFor(form.draftId) || form.draftKey);
       const token = r.share || "";
       if (!token) throw new Error("empty");
       setForm((f) => (f.draftId === form.draftId ? { ...f, shareToken: token } : f));
