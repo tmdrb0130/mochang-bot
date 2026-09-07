@@ -47,7 +47,7 @@ if ($Uninstall) {
     & $nssm remove $SVC confirm | Out-Null
     Ok "서비스 제거"
     Step "$TASK 제거"
-    Unregister-ScheduledTask -TaskName $TASK -Confirm:$false -ErrorAction SilentlyContinue
+    schtasks /Delete /F /TN $TASK 2>$null | Out-Null
     Ok "작업 제거 — 이제 둘 다 수동으로 켜야 합니다 (scripts\admin_dashboard.py / scripts\watchdog.py --watch)"
     exit 0
 }
@@ -107,13 +107,13 @@ if ($st -eq 'Running') { Ok "$SVC $st" } else { Bad "$SVC $st — $LOG_DIR\$SVC.
 
 # ---------------------------------------------------------------- 3. 워치독 작업
 Step "$TASK 작업 스케줄러 등록 (5분마다, 팝업은 로그온한 사용자 화면에)"
-Unregister-ScheduledTask -TaskName $TASK -Confirm:$false -ErrorAction SilentlyContinue
-$a = New-ScheduledTaskAction -Execute $PYW -Argument 'scripts\watchdog.py --notify' -WorkingDirectory $APPDIR
-$t = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
-$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 3) -MultipleInstances IgnoreNew
-$pr = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $TASK -Action $a -Trigger $t -Settings $s -Principal $pr -Description "모창봇 서버 감시 (5분). 기록: $APPDIR\backend\.data\alerts.log" | Out-Null
-if (Get-ScheduledTask -TaskName $TASK -ErrorAction SilentlyContinue) { Ok "$TASK 등록 (1분 뒤 첫 검사)" } else { Bad "$TASK 등록 실패" }
+# Register-ScheduledTask 의 -RepetitionDuration 은 PowerShell 5.1 에서 "무기한" 을 표현할 수 없다
+# ([TimeSpan]::MaxValue 는 XML 범위 초과로 거부됨 — 2026-09-07 실제로 그랬다). schtasks 의 /SC MINUTE 는 무기한이 기본이다.
+# /IT = 로그온한 사용자의 화면에서 실행(팝업이 보인다). 경로에 공백이 없어 따옴표가 필요 없다.
+schtasks /Delete /F /TN $TASK 2>$null | Out-Null
+$tr = "$PYW $APPDIR\scripts\watchdog.py --notify"
+schtasks /Create /F /TN $TASK /SC MINUTE /MO 5 /IT /RL LIMITED /TR $tr | Out-Null
+if (schtasks /Query /TN $TASK 2>$null) { Ok "$TASK 등록 (5분마다, 첫 검사는 다음 5분 경계)" } else { Bad "$TASK 등록 실패" }
 
 # ---------------------------------------------------------------- 4. 검증
 Step "검증"
