@@ -687,11 +687,21 @@ export default function ModooWriter() {
     // 2026-09-07 11:29~11:31 에 실제로 한 학생의 생성 8건이 이렇게 사라졌다.
     // → 열쇠가 없으면 새 id 로 시작한다. 학생이 한 번 더 누른 것이니 초안이 둘이 되는 게 사실에도 맞고,
     //   남의 초안에 접근할 길은 열리지 않는다(각자 자기 열쇠를 받는다).
-    const draftId = form.draftKey ? form.draftId : api.newDraftId();
+    // 다만 곧바로 새 id 를 매기면 열쇠 도입(2026-09-04) 전에 만든 **내** 초안까지 갈라진다 — 그때 만들어진 26건이 남아 있다.
+    // → 서버에 한 번 물어본다. GET /drafts/{id} 는 열쇠 없는 옛 행이면 같은 IP 에만 열어 주고 그 자리에서 열쇠를 발급한다.
+    //   내 것이면 열쇠를 받아 그대로 이어 쓰고, 404(아직 없음·남이 선점함)면 새 id 로 시작한다. 모델 호출 없는 GET 한 번이다.
+    let draftId = form.draftId;
+    let draftKey = form.draftKey;
+    if (draftId && !draftKey) {
+      try {
+        draftKey = (await api.getDraft(draftId, "")).draft_key || "";
+      } catch { /* 404 — 첫 인테이크이거나, 다른 흐름이 이미 이 id 를 가져갔다 */ }
+    }
+    if (!draftKey) draftId = api.newDraftId();
     const fresh = draftId !== form.draftId;
-    const sent = { ...form, draftId, draftIdea: form.idea, ...(fresh ? { shareToken: "", draftKey: "" } : {}) };
+    const sent = { ...form, draftId, draftKey, draftIdea: form.idea, ...(fresh ? { shareToken: "" } : {}) };
     // 지금 제출하는 아이디어가 이 초안의 기준이 된다 — 이후 편집은 이 글과 비교해 같은 초안인지 가른다
-    setForm((f) => ({ ...f, draftId, draftIdea: f.idea, ...(fresh ? { shareToken: "", draftKey: "" } : {}) }));
+    setForm((f) => ({ ...f, draftId, draftKey, draftIdea: f.idea, ...(fresh ? { shareToken: "" } : {}) }));
     try {
       const r = await api.intake(sent, { onTick: (snap) => setIntakePos(snap.status === "queued" ? snap.position : null) });
       adoptDraftKey(r, draftId);
