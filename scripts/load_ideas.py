@@ -24,7 +24,7 @@ KR_IDEAS: list[tuple[str, str, str]] = [
     ("감각 안정 키트", "소음이나 조명 변화에 예민한 학생이 교실을 벗어나는 일이 잦은데, 진정에 쓰는 도구가 교사 개인 물건이라 학교마다 제각각이다. 학생별로 어떤 자극에 무엇이 효과 있었는지 기록하고 키트를 구성해 주는 서비스.", "특수교육과 3학년, 감각통합 관련 봉사 2년"),
     ("체육 목표 쪼개기", "특수체육 수업에서 '줄넘기 한 번 넘기' 같은 목표를 학생마다 몇 단계로 쪼개야 하는데 교사 경험에 의존한다. 학생 수준을 입력하면 단계별 연습 과제와 성공 기준을 제안해 주는 도구를 만들고 싶다.", "특수체육교육과 3학년, 장애인 생활체육 보조 1년"),
     ("휠체어 접근 지도", "전동휠체어를 쓰는 지인과 다니면서 경사로가 있다고 표시된 곳도 실제로는 문턱이 있어 못 들어가는 경우가 많았다. 이용자들이 직접 사진으로 확인해 쌓는 접근성 지도를 만들려 한다.", "재활복지학과 2학년, 장애인 활동지원사 자격 준비"),
-    ("복약·식사 알림", "특수학급에서 학생별 복약 시간과 식사 시 주의사항(잘게 자르기, 점도 조절 등)을 교사와 실무사가 각각 메모해 놓쳐 위험한 상황이 생긴다. 학생 카드 하나에 모아 시간이 되면 알려 주는 앱.", "특수교육과 4학년, 특수학급 보조 실습"),
+    ("체험학습 사전 답사", "특수학교 체험학습을 가기 전에 화장실 폭이나 경사로 같은 걸 교사가 직접 가서 확인해야 하는데 시간이 없어 그냥 가서 낭패를 본다. 다녀온 학교들이 남긴 현장 정보를 모아 미리 볼 수 있게 하는 서비스.", "특수교육과 4학년, 현장체험 인솔 보조 2회"),
     ("운동 안전 범위", "특수체육 참여자마다 무리 없는 운동 범위가 다른데, 기존 운동기구는 그걸 알려주지 않아 다치는 일이 있다. 기구에 붙이는 센서로 각도와 반복 수를 재고 안전 범위를 넘으면 신호를 주는 장치를 만들고 싶다.", "특수체육교육과 4학년, 헬스 트레이너 자격증"),
     ("재난 대피 훈련", "재난 대피 훈련은 일반 학생 기준으로 짜여 있어 이동이 느리거나 소리에 예민한 학생은 그대로 따라가기 어렵다. 학교 도면과 학생 특성을 넣으면 반별 대피 순서를 만들어 주는 도구.", "특수교육과 3학년, 학교 안전 담당 봉사"),
     ("자립생활 체크", "졸업을 앞둔 학생이 혼자 버스를 타거나 물건을 사는 연습을 하는데 어디까지 되는지 기록이 남지 않는다. 항목별로 도움 정도를 체크해 학기별 변화를 보여 주는 앱.", "특수교육과 4학년, 전환교육 세미나 참여"),
@@ -38,7 +38,7 @@ KR_IDEAS: list[tuple[str, str, str]] = [
 
     # ── 캠퍼스·대학생 (14) ──
     ("공강 공간 찾기", "공강 시간에 학교에서 쉴 곳을 찾다가 빈 강의실을 헤매는 일이 많다. 시간표상 비어 있는 강의실과 라운지 혼잡도를 알려 주는 서비스를 만들려 한다.", "컴퓨터공학과 3학년, 웹 개발 동아리 2년"),
-    ("셔틀 도착 예측", "학교 셔틀버스가 교통 상황에 따라 들쭉날쭉해서 정류장에서 20분씩 기다리는 날이 있다. 실제 운행 기록으로 도착 시간을 예측해 알려 주는 앱.", "정보통신공학과 3학년, 파이썬 데이터 분석 학습"),
+    ("통학 카풀 매칭", "같은 방향에서 오는 학생이 많은데 서로 몰라서 각자 차를 몰고 오거나 택시를 탄다. 수업 시간표와 출발지를 넣으면 요일별로 같이 탈 사람을 묶어 주는 서비스.", "정보통신공학과 3학년, 파이썬 데이터 분석 학습"),
     ("주차면 안내", "통학하는 학생과 교직원이 몰리는 시간에 주차 자리를 못 찾아 갓길에 세우는 일이 반복된다. 층별 빈 주차면을 센서로 세어 진입 전에 알려 주는 시스템.", "전자공학과 4학년, 임베디드 프로젝트 경험"),
     ("공모전 팀 찾기", "공모전에 나가고 싶어도 필요한 역량을 가진 팀원을 주변에서 찾기 어려워 포기하는 경우가 많다. 관심 분야와 가능한 역할로 팀원을 연결해 주는 캠퍼스 서비스.", "경영학과 3학년, 교내 창업동아리 회장"),
     ("과제 일정 정리", "수업마다 공지 방식이 달라 과제와 시험 일정을 놓치는 일이 잦다. 강의계획서와 공지를 읽어 한 곳에 일정으로 모아 주는 도구를 만들고 싶다.", "소프트웨어학과 2학년, 안드로이드 앱 2개 제작"),
@@ -53,10 +53,10 @@ KR_IDEAS: list[tuple[str, str, str]] = [
     ("자취 공동구매", "자취생은 쌀이나 세제처럼 대용량이 싼 물건을 혼자 사기 부담스럽다. 같은 건물·같은 동네 사람끼리 나눠 사는 공동구매 서비스.", "식품영양학과 3학년, 자취 4년"),
 
     # ── 생활·소비 서비스 (16) ──
-    ("빵 재고 알림", "저녁에 빵집에 가면 먹고 싶던 빵이 늘 없다. 동네 빵집이 남은 품목을 두 번만 눌러 올리고 손님이 확인해 찾아가는 서비스를 만들고 싶다.", "식품영양학과 3학년, 베이커리 아르바이트 2년"),
+    ("재활용 가구 나눔", "이사철마다 멀쩡한 가구가 버려지는데 필요한 사람은 어디에 있는지 모른다. 버리기 전에 사진을 올리면 같은 동네에서 가져갈 사람을 연결하고 운반까지 잡아 주는 서비스.", "환경공학과 3학년, 재사용 캠페인 기획 1년"),
     ("배달 온도 보장", "배달 음식이 식어서 오는 일이 잦은데 항의해도 확인할 방법이 없다. 포장 용기에 온도 표시를 붙여 도착 시점 온도를 남기는 배달 서비스.", "산업디자인학과 3학년, 포장 디자인 수업 이수"),
     ("분리배출 도우미", "품목마다 분리배출 방법이 다르고 지역마다 기준도 달라 매번 검색한다. 사진을 찍으면 품목을 알아보고 그 지역 기준을 알려 주는 앱.", "환경공학과 3학년, 이미지 분류 프로젝트 2건"),
-    ("우산 대여 반납", "갑자기 비가 오면 편의점에서 우산을 또 사고 집에 우산이 쌓인다. 건물 출입구에서 빌리고 다른 제휴 장소에 반납하는 우산 공유 서비스.", "도시공학과 3학년, 지역 상권 조사 경험"),
+    ("폐의약품 수거", "안 먹고 남은 약을 그냥 버리면 안 된다는 건 아는데 어디에 가져다 놔야 하는지 몰라 서랍에 쌓아 둔다. 가까운 수거함 위치와 받아 주는 약의 종류를 알려 주고 알림을 보내 주는 서비스.", "약학과 2학년, 보건소 봉사 1년"),
     ("구독 정리", "여러 콘텐츠 구독료가 자동으로 빠져나가 얼마를 쓰는지 모른다. 결제 내역을 읽어 구독을 모아 보여 주고 안 보는 것을 알려 주는 서비스.", "경영학과 4학년, 핀테크 인턴 3개월"),
     ("영양제 추천", "운동을 시작하고 영양제를 찾아봤는데 정보가 광고뿐이라 뭘 먹어야 할지 모르겠다. 체형과 운동 목표를 넣으면 성분 기준으로 조합을 제안해 주는 서비스.", "생명과학과 3학년, 헬스 3년"),
     ("성분표 확인", "알레르기가 있는 가족이 있어 마트에서 성분표를 매번 확인하는데 글씨가 작고 오래 걸린다. 사진을 찍으면 미리 등록한 성분이 있는지 바로 알려 주는 앱.", "식품공학과 3학년, 식품기사 준비"),
@@ -95,7 +95,7 @@ FR_IDEAS: list[tuple[str, str, str]] = [
     ("visa-jobs", "Part-time job postings are Korean-only and employers worry about visa rules, so foreign students end up in unsafe work. I want to list only jobs legal for D-2 and D-4 holders with a weekly working-hours checker.", "TOPIK level 4, two years of restaurant work in Korea, admin of a 1,500-member student group."),
     ("recycle-cam", "People want to recycle properly but do not know which bin an item goes into, and rules change by city. I want a camera app that names the item, shows the local rule, and gives a weekly score for each dormitory floor.", "Computer science undergraduate, built two small image classifiers for class."),
     ("study-buddy", "Language exchange at our university is arranged on paper forms and most pairs stop after one meeting. I want an app that matches by level and schedule, suggests a topic for each meeting, and tracks sessions.", "Exchange student, tutored Korean-English conversation for three semesters."),
-    ("food-waste", "Restaurants waste food and time because they cannot predict how many customers will come. I want a simple tool that reads past sales and weather and suggests how much to prepare each morning.", "Worked at a bakery cafe and a cosmetics shop, studying business administration."),
+    ("tax-refund", "Year-end tax settlement is done entirely in Korean and most international students either skip it or ask a friend to guess for them. I want a guide that walks through each field in my language and shows which deductions apply to a student visa.", "Accounting major, helped 20 classmates with their settlement forms last winter."),
     ("dorm-fix", "When something breaks in the dormitory, foreign students do not know how to report it in Korean and wait for weeks. I want a photo-based repair request that writes the Korean report and shows progress.", "Lived in three dormitories, volunteered as a floor representative for a year."),
     ("clinic-guide", "Going to a hospital in Korea is stressful because I cannot explain symptoms and do not know which department to visit. I want an app that turns my symptoms into a Korean sentence and suggests the right department nearby.", "Nursing student, interpreted for classmates at a health center for a year."),
     ("bank-steps", "Opening a bank account or changing a phone plan needs documents that nobody explains in my language. I want a checklist app that shows each step, the papers needed, and what to say at the counter.", "Business administration student, helped 30 new students settle in."),
