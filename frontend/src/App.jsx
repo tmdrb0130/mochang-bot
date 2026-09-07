@@ -1103,6 +1103,12 @@ export default function ModooWriter() {
             /* 공개 서비스라 일반 사용자가 본다 — 실행 명령 대신 사람 말로. 주소·원인은 title 에만 남겨 개발자가 확인한다. */
             <span className="text-red-600" title={`${api.API_BASE} 연결 실패: ${server.error || ""}`}>{t("hdr.down")}</span>
           )}
+          {/* 모두의 창업 공식 사이트 (2026-09-07). 서버 상태와 무관하게 늘 보인다 — 우리 API 가 죽어도 학생은 원문 공고를 봐야 한다.
+              ml-auto 로 이 줄 오른쪽 끝에 붙는다. 무료 한도 배지(OpenRouter 를 쓸 때만 뜬다)가 있으면 그 뒤에 나란히 선다. */}
+          <a href="https://www.modoo.or.kr/" target="_blank" rel="noopener noreferrer" title={t("hdr.modoo.tip")}
+             className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300">
+            {t("hdr.modoo")}<span aria-hidden="true">↗</span>
+          </a>
         </div>
       </header>
 
