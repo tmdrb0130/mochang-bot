@@ -131,12 +131,17 @@ async def test_job_generate_is_saved_and_readable(monkeypatch):
             assert len(row["generations"]) == 1
             assert row["generations"][0]["question_id"] == "q1" and row["generations"][0]["text"] == snap["result"]["text"]
 
-            # 동기 /generate(테스트에서만 열림) 도 같은 초안에 쌓인다 — 열쇠를 실어 보낼 때만. 열쇠 없는 요청은 갱신도 저장도 안 된다.
+            # 동기 /generate(테스트에서만 열림) 도 같은 초안에 쌓인다.
             r2 = await c.post("/generate", json={**body, "draft_key": key}, headers={"X-Forwarded-For": "203.0.113.9"})
             assert r2.status_code == 200 and r2.json()["draft_key"] == key
-            r3 = await c.post("/generate", json=body, headers={"X-Forwarded-For": "203.0.113.9"})     # 열쇠 없음 → 결과는 나가지만 저장 안 됨
+            # 열쇠를 **틀리게** 보내면 결과는 나가지만 저장은 안 된다 (남의 초안 덮어쓰기 방지).
+            r3 = await c.post("/generate", json={**body, "draft_key": "wrong-key-000000000"}, headers={"X-Forwarded-For": "203.0.113.9"})
             assert r3.status_code == 200 and "draft_key" not in r3.json()
-            assert len((await c.get(f"/drafts/{did}?key={key}")).json()["generations"]) == 2
+            # 열쇠가 **아예 없는** 요청은 2026-09-08 부터 '첫 쓰기 유예'(같은 IP + 갓 만들어진 행)로 통과하고 열쇠를 받는다 —
+            # 인테이크가 실패해 열쇠를 못 받은 학생의 조사·생성이 통째로 사라지던 것을 막는다(60명 부하에서 10명이 그랬다).
+            r4 = await c.post("/generate", json=body, headers={"X-Forwarded-For": "203.0.113.9"})
+            assert r4.status_code == 200 and r4.json()["draft_key"] == key
+            assert len((await c.get(f"/drafts/{did}?key={key}")).json()["generations"]) == 3
 
 
 # ── 서비스용 / 백업용 두 DB (2026-09-03) ──
@@ -337,13 +342,65 @@ def test_refused_save_is_logged(tmp_path, monkeypatch):
     assert first and first["draft_key"]
     rows.clear()
 
-    # 탭 B: 같은 id, 열쇠 없음 → 거부되고 그 사실이 남는다
-    assert st._record_sync("generate", dict(form), {"question_id": "q2", "text": "본문"}, "1.2.3.4") is None
-    assert rows == [("storage_refused", {"kind": "generate", "draft_id": did, "has_key": False})]
+    # 탭 B: 같은 id 에 **틀린 열쇠** → 거부되고 그 사실이 남는다.
+    # (열쇠가 아예 없는 경우는 2026-09-08 부터 '첫 쓰기 유예' 로 통과한다 — 아래 유예 테스트 참고)
+    assert st._record_sync("generate", {**form, "draft_key": "wrong-key-value-000"},
+                           {"question_id": "q2", "text": "본문"}, "1.2.3.4") is None
+    assert rows == [("storage_refused", {"kind": "generate", "draft_id": did, "has_key": True})]
 
     # 열쇠를 실으면 정상 저장 — 거부 로그는 더 안 남는다
     rows.clear()
     ok = st._record_sync("generate", {**form, "draft_key": first["draft_key"]},
                          {"question_id": "q2", "text": "본문"}, "1.2.3.4")
     assert ok and rows == []
+
+
+# ── 첫 쓰기 무리 유예 (2026-09-08, 60명 부하에서 조용한 유실 10건이 나온 뒤) ──
+
+def _store(tmp_path):
+    from backend import storage as S
+    st = S.Storage(url="sqlite:///" + (tmp_path / "grace.sqlite").as_posix())
+    st.init()
+    return st
+
+
+@pytest.mark.asyncio
+async def test_concurrent_first_writes_without_key_all_survive(tmp_path):
+    """열쇠를 못 받은 채 동시에 나간 첫 요청들이 전부 저장된다 — 예전엔 하나만 남고 나머지가 조용히 사라졌다.
+
+    (asyncio.run 을 쓰면 루프가 닫혀 같은 파일의 뒤 async 테스트가 'Event loop is closed' 로 깨진다 — async 테스트로 둔다.)"""
+    import asyncio, uuid
+    st = _store(tmp_path)
+    did = str(uuid.uuid4())
+    form = {"draft_id": did, "idea": "동시 첫 쓰기", "track": "tech"}
+    outs = await asyncio.gather(*(st.record("research", dict(form), {"facts": []}, "1.2.3.4") for _ in range(3)))
+    assert all(o and o.get("draft_key") for o in outs)          # 셋 다 저장되고 셋 다 열쇠를 받는다
+    assert len({o["draft_key"] for o in outs}) == 1             # 열쇠는 하나로 같다
+
+
+def test_grace_does_not_open_the_draft_to_others(tmp_path):
+    """유예는 **같은 IP + 열쇠 없음 + 갓 만들어진 행** 일 때만이다."""
+    import uuid
+    from backend import storage as S
+    st = _store(tmp_path)
+    did = str(uuid.uuid4())
+    form = {"draft_id": did, "idea": "아이디어", "track": "tech"}
+    first = st.upsert(dict(form), "1.2.3.4")
+    assert first and first["draft_key"]
+
+    assert st.upsert(dict(form), "9.9.9.9") is None                                  # 다른 IP 는 통과 못 한다
+    assert st.upsert({**form, "draft_key": "wrong-key-value-000"}, "1.2.3.4") is None  # 틀린 열쇠도 거부
+    assert st.upsert(dict(form), "1.2.3.4") is not None                              # 같은 IP + 열쇠 없음 = 유예
+
+
+def test_grace_expires(tmp_path, monkeypatch):
+    """창이 지나면 열쇠 없는 요청은 다시 거부된다 — draft_id 를 나중에 알게 된 사람은 못 쓴다."""
+    import uuid
+    from backend import storage as S
+    st = _store(tmp_path)
+    did = str(uuid.uuid4())
+    form = {"draft_id": did, "idea": "아이디어", "track": "tech"}
+    assert st.upsert(dict(form), "1.2.3.4")
+    monkeypatch.setattr(S, "FIRST_WRITE_GRACE_SECONDS", -1)      # 창을 지나간 것으로
+    assert st.upsert(dict(form), "1.2.3.4") is None
 

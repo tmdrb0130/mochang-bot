@@ -384,11 +384,18 @@ async def test_intake_returns_key_and_following_requests_are_saved(monkeypatch):
             row = (await c.get(f"/drafts/{did}?key={key}")).json()
             assert len(row["generations"]) == 1 and row["generations"][0]["question_id"] == "q1"
 
-            # 열쇠 없이 보내면 결과는 나가지만 저장되지 않는다
-            snap3 = await run("generate", {**body, "question_id": "q2", "style": "logic"})
+            # 열쇠를 **틀리게** 보내면 결과는 나가지만 저장되지 않는다 (남의 초안 덮어쓰기 방지)
+            snap3 = await run("generate", {**body, "draft_key": "wrong-key-000000000", "question_id": "q2", "style": "logic"})
             assert snap3["status"] == "done" and "draft_key" not in snap3["result"]
             row2 = (await c.get(f"/drafts/{did}?key={key}")).json()
-            assert len(row2["generations"]) == 1, "열쇠 없는 요청이 저장돼 버렸다"
+            assert len(row2["generations"]) == 1, "틀린 열쇠 요청이 저장돼 버렸다"
+
+            # 열쇠가 **아예 없는** 요청은 '첫 쓰기 유예'(같은 IP + 갓 만들어진 행)로 통과하고 열쇠를 받는다 (2026-09-08).
+            # 인테이크가 타임아웃으로 실패해 열쇠를 못 받은 학생의 조사·생성이 통째로 사라지던 것을 막는다.
+            snap4 = await run("generate", {**body, "question_id": "q3_1", "style": "logic"})
+            assert snap4["status"] == "done" and snap4["result"]["draft_key"] == key
+            row3 = (await c.get(f"/drafts/{did}?key={key}")).json()
+            assert len(row3["generations"]) == 2, "유예가 안 먹어 학생 글이 사라졌다"
 
 
 @pytest.mark.asyncio

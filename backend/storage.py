@@ -55,6 +55,16 @@ SCHEMA_VERSION = 6      # 2: research 테이블 (2026-09-03). 3: drafts.is_test 
 # 예전엔 sha1(track|idea) 로 대체했는데, 그러면 아이디어 문장을 아는 사람이 키를 계산해 남의 초안을 읽을 수 있었다.
 # 프론트는 항상 UUID 를 보내므로 폴백이 쓰이는 경우는 API 직접 호출뿐이다.
 _ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+# 열쇠 발급 직후의 '첫 쓰기 무리' 유예 (2026-09-08, 60명 부하에서 발견).
+# 한 초안의 첫 요청 여러 건이 **동시에** 나가면(프론트는 조사·생성을 3건씩 병렬로 낸다) 그중 하나만 INSERT 하며
+# 열쇠를 받고, 나머지는 아직 열쇠가 없어 "열쇠 불일치" 로 거부됐다 — 화면에는 글이 뜨는데 DB 에만 없다.
+# 특히 인테이크가 타임아웃으로 실패하면 클라이언트가 열쇠를 못 받은 채 8문항 파이프라인을 시작해 크게 터진다
+# (60명 회차: 인테이크 실패 10명 = 조용한 유실 10명, storage_refused 53건이 전부 has_key=False).
+# → 행이 막 만들어졌고(이 창 안) 요청 IP 가 그 행의 owner 와 같으면, 열쇠 **없는** 요청을 통과시키고 열쇠를 돌려준다.
+#   열쇠를 **틀리게** 보낸 요청은 그대로 거부한다(남의 초안 덮어쓰기 방지는 유지).
+#   창을 짧게 두는 이유: draft_id 는 /drafts/{id} URL 로 드러나므로, 나중에 그 값을 알게 된 사람은 못 쓰게.
+FIRST_WRITE_GRACE_SECONDS = 120
 # 공유 링크 토큰 형식 (secrets.token_urlsafe(18) = 24자). DB 키(draft_id)와 별개라 링크에 키가 드러나지 않는다.
 SHARE_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 # 초안 접근 열쇠(owner_token) 형식 — 같은 방식으로 만든다. 초안이 처음 저장될 때 생겨 응답(draft_key)으로 나가고,
@@ -288,7 +298,7 @@ class Storage:
 
     @staticmethod
     def _access_ok(row, key: str | None, owner: str | None) -> bool:
-        """행의 열쇠·주인과 요청의 열쇠·IP 를 대조한다."""
+        """행의 열쇠·주인과 요청의 열쇠·IP 를 대조한다. (grace 판정은 _first_write_grace 가 따로 본다)"""
         if owner is None:
             return True                      # 내부 호출(마무리 작업자의 조사 저장 등) — 요청에서 온 것이 아니다. main 은 항상 IP 를 넘긴다
         stored = row["owner_token"] if row is not None else None
@@ -296,6 +306,24 @@ class Storage:
             return bool(key) and key == stored
         # 열쇠가 없는 옛 행 — 같은 IP 면 주인으로 본다 (과도기).
         return (not row["owner"]) or row["owner"] == owner
+
+    @staticmethod
+    def _first_write_grace(row, key: str | None, owner: str | None, now: datetime) -> bool:
+        """열쇠를 아직 못 받은 '첫 쓰기 무리' 인가 (FIRST_WRITE_GRACE_SECONDS 주석 참고).
+
+        통과 조건 셋을 **모두** 만족해야 한다:
+          ① 요청에 열쇠가 아예 없다 (틀린 열쇠를 보낸 요청은 남의 초안일 수 있으므로 그대로 거부)
+          ② 요청 IP 가 그 행의 owner 와 같다
+          ③ 행이 만들어진 지 FIRST_WRITE_GRACE_SECONDS 안이다
+        """
+        if key or owner is None or row is None:
+            return False
+        if not row["owner"] or row["owner"] != owner:
+            return False
+        created = row["created_at"]
+        if not isinstance(created, datetime):
+            return False
+        return 0 <= (now - created).total_seconds() <= FIRST_WRITE_GRACE_SECONDS
 
     def _upsert_draft(self, form: dict, owner: str | None = None, test: bool = False,
                       new_tok: str | None = None) -> dict | None:
@@ -320,13 +348,23 @@ class Storage:
             values["owner"] = owner[:64]
 
         def try_update(conn) -> dict | None:
-            row = conn.execute(select(drafts.c.owner_token, drafts.c.owner, drafts.c.client_id)
+            row = conn.execute(select(drafts.c.owner_token, drafts.c.owner, drafts.c.client_id, drafts.c.created_at)
                                .where(drafts.c.draft_id == did)).mappings().first()
             if row is None:
                 return None                                   # 없음 → 호출자가 insert
             if not self._access_ok(row, key, owner):
-                log.info("초안 갱신 거부 (열쇠 불일치) %s", did[:8])
-                return {"draft_id": did, "draft_key": None, "accepted": False}
+                if self._first_write_grace(row, key, owner, now):
+                    # 같은 사람이 열쇠를 받기 전에 함께 낸 요청이다 — 통과시키고 열쇠를 돌려준다.
+                    # 얼마나 자주 도는지 봐야 창(120초)이 적절한지 판단할 수 있다.
+                    try:
+                        from . import timing
+                        timing.log("storage_grace", draft_id=did, owner=owner,
+                                   age_s=round((now - row["created_at"]).total_seconds(), 1))
+                    except Exception:
+                        pass
+                else:
+                    log.info("초안 갱신 거부 (열쇠 불일치) %s", did[:8])
+                    return {"draft_id": did, "draft_key": None, "accepted": False}
             token = row["owner_token"] or new_tok             # 옛 행이면 이번에 열쇠를 채운다
             extra = {"client_id": cid} if (cid and not row["client_id"]) else {}   # 처음 값만 채우고 덮어쓰지 않는다
             upd = (drafts.update().where(drafts.c.draft_id == did)
