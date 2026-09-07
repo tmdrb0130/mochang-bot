@@ -15,11 +15,21 @@
 
 상태가 바뀔 때만 남긴다(정상→이상, 이상→정상). 이상이 계속되면 --repeat 분마다 다시 남긴다 —
 5분마다 같은 줄이 쌓여 로그를 못 읽게 되는 것을 막는다.
+
+**순간적인 실패로는 알리지 않는다** (2026-09-07): HTTP 가 실패하면 한 번의 검사 안에서 --retries 회
+(기본 3, 3초 간격) 다시 본다. 다음 주기를 기다리지 않으므로 진짜 장애를 늦게 알아채지도 않는다.
+--fail-streak 로 "연속 N회 이상일 때만" 을 추가로 걸 수 있다(기본 1 = 재확인만으로 충분).
+
+읽는 요청은 GET /health 와 GET /jobs **두 개뿐**이고, 둘 다 작업을 만들지 않으므로
+max_jobs_per_ip · max_intakes_per_ip_hour 카운터에 **잡히지 않는다** (그 값들은 POST /jobs/{kind} 에서만 센다).
+--notify 는 msg.exe 로 **화면에 메시지 창**을 띄운다 — 작업 스케줄러로 돌릴 때는 반드시
+"사용자가 로그온했을 때만 실행" 으로 등록해야 보인다(SYSTEM 으로 돌면 아무도 못 본다).
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -45,15 +55,24 @@ TIMING_TAIL_BYTES = 2 * 1024 * 1024      # 로그가 7MB 를 넘으므로 꼬리
 CRIT, WARN, OK = "심각", "경고", "정상"
 
 
-def _get(url: str, timeout: float) -> tuple[int, dict | None, str]:
-    """(상태코드, 본문, 오류). 예외를 밖으로 내보내지 않는다 — 감시가 죽으면 안 된다."""
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
-            return r.status, json.loads(r.read().decode("utf-8")), ""
-    except urllib.error.HTTPError as e:
-        return e.code, None, f"HTTP {e.code}"
-    except Exception as e:
-        return 0, None, f"{type(e).__name__}: {str(e)[:120]}"
+def _get(url: str, timeout: float, retries: int = 1, gap: float = 3.0) -> tuple[int, dict | None, str]:
+    """(상태코드, 본문, 오류). 예외를 밖으로 내보내지 않는다 — 감시가 죽으면 안 된다.
+
+    retries > 1 이면 실패했을 때 gap 초 뒤 다시 본다 (2026-09-07). 한 번의 순간적인 실패
+    (재시작 직후, 일시적인 연결 끊김)로 알림을 울리지 않기 위한 것 — 간격을 기다리지 않으므로
+    진짜 장애를 늦게 알아채지도 않는다."""
+    last = ""
+    for i in range(max(1, retries)):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                return r.status, json.loads(r.read().decode("utf-8")), ""
+        except urllib.error.HTTPError as e:
+            last = f"HTTP {e.code}"
+        except Exception as e:
+            last = f"{type(e).__name__}: {str(e)[:120]}"
+        if i + 1 < max(1, retries):
+            time.sleep(gap)
+    return 0, None, last + (f" (재확인 {retries}회 모두 실패)" if retries > 1 else "")
 
 
 def _recent(minutes: int) -> list[dict]:
@@ -93,7 +112,7 @@ def check(base: str, args) -> dict:
     level = OK
     info: dict = {}
 
-    code, health, err = _get(base.rstrip("/") + "/health", args.timeout)
+    code, health, err = _get(base.rstrip("/") + "/health", args.timeout, args.retries, args.retry_gap)
     if code != 200 or not health:
         return {"level": CRIT, "problems": [f"API 무응답 ({err or code})"], "info": {}}
 
@@ -115,7 +134,7 @@ def check(base: str, args) -> dict:
         level = _worse(level, WARN)
 
     # 두 큐 — /health 는 생성 큐만 준다. 조사 큐(인테이크·조사·번역)는 /jobs 에만 있다.
-    code2, jobs, _ = _get(base.rstrip("/") + "/jobs", args.timeout)
+    code2, jobs, _ = _get(base.rstrip("/") + "/jobs", args.timeout, args.retries, args.retry_gap)
     queues: dict = {}
     if code2 == 200 and jobs:
         queues["생성"] = {"running": jobs.get("running"), "queued": jobs.get("queued")}
@@ -164,10 +183,11 @@ def _state() -> dict:
         return {}
 
 
-def _save(level: str, problems: list[str]) -> None:
+def _save(level: str, problems: list[str], streak: int, alerted: bool) -> None:
     try:
         DATA.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(json.dumps({"level": level, "problems": problems, "at": time.time()},
+        STATE.write_text(json.dumps({"level": level, "problems": problems, "at": time.time(),
+                                     "streak": streak, "alerted": alerted},
                                     ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
@@ -182,8 +202,22 @@ def _alert(line: str) -> None:
         pass
 
 
-def _notify(text: str) -> None:
-    """콘솔 세션에 메시지 창. 없는 환경이면 조용히 넘어간다."""
+def _notify(title: str, text: str) -> None:
+    """화면에 알림 창 (2026-09-07). 자동으로 닫힌다.
+
+    msg.exe 는 이 PC 에서 "Access is denied" 로 **조용히 실패한다** — 실측으로 확인했다.
+    그래서 권한이 필요 없는 WScript.Shell Popup 을 먼저 쓰고, 안 되면 msg.exe 를 시도한다.
+    본문은 환경변수로 넘긴다 — 한국어·따옴표가 PowerShell 명령줄에서 깨지지 않게.
+    작업 스케줄러로 돌릴 때는 "사용자가 로그온했을 때만 실행" 이어야 창이 보인다(SYSTEM 은 못 본다)."""
+    env = {**os.environ, "MOCHANG_ALERT_TEXT": text[:1000], "MOCHANG_ALERT_TITLE": title[:80]}
+    ps = ("$w = New-Object -ComObject Wscript.Shell; "
+          "$null = $w.Popup($env:MOCHANG_ALERT_TEXT, 60, $env:MOCHANG_ALERT_TITLE, 48)")
+    try:
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps], timeout=90, env=env,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
+    except Exception:
+        pass
     try:
         subprocess.run(["msg", "*", "/TIME:60", text[:255]], timeout=10,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -196,19 +230,26 @@ def run_once(base: str, args) -> int:
     level, problems = res["level"], res["problems"]
     now = datetime.now().isoformat(timespec="seconds")
     body = "; ".join(problems) if problems else "이상 없음"
-    summary = f"[{now}] {level} {body} | {json.dumps(res['info'], ensure_ascii=False)}"
+    prev = _state()
+    streak = (int(prev.get("streak") or 0) + 1) if level != OK else 0
+    tail = f" | 연속 {streak}회" if streak else ""
+    summary = f"[{now}] {level} {body}{tail} | {json.dumps(res['info'], ensure_ascii=False)}"
     print(summary)
 
-    prev = _state()
-    changed = prev.get("level") != level or prev.get("problems") != problems
+    changed = prev.get("problems") != problems
     stale = (time.time() - float(prev.get("at") or 0)) > args.repeat * 60
-    if level != OK and (changed or stale):
+    alerted = bool(prev.get("alerted"))
+    if level != OK and streak >= args.fail_streak and (not alerted or changed or stale):
         _alert(summary)
         if args.notify:
-            _notify(f"모창봇 {level}: {body[:200]}")
-    elif level == OK and prev.get("level") not in (None, OK):
-        _alert(f"[{now}] 복구됨 — 이전: {prev.get('level')} {prev.get('problems')}")
-    _save(level, problems)
+            _notify(f"모창봇 {level}", body[:800])
+        alerted = True
+    elif level == OK and alerted:
+        _alert(f"[{now}] 복구됨 — 직전: {prev.get('level')} {prev.get('problems')}")
+        if args.notify:
+            _notify("모창봇", "복구됐습니다 — 이상이 사라졌습니다.")
+        alerted = False
+    _save(level, problems, streak, alerted)
     return {OK: 0, WARN: 1, CRIT: 2}[level]
 
 
@@ -222,6 +263,11 @@ def main() -> int:
     ap.add_argument("--limit-warn", type=int, default=30, help="429 경고 임계 (기본 30)")
     ap.add_argument("--error-warn", type=int, default=3, help="작업 오류 경고 임계 (기본 3)")
     ap.add_argument("--repeat", type=int, default=30, help="같은 이상을 다시 남기기까지의 분 (기본 30)")
+    ap.add_argument("--retries", type=int, default=3, help="HTTP 실패 시 한 번의 검사 안에서 다시 볼 횟수 (기본 3)")
+    ap.add_argument("--retry-gap", type=float, default=3.0, help="--retries 사이 간격(초, 기본 3)")
+    ap.add_argument("--fail-streak", type=int, default=1,
+                    help="연속 몇 번 이상이어야 알릴지 (기본 1 — --retries 가 이미 순간 실패를 걸러낸다). "
+                         "스케줄러 간격이 짧을 때만 올린다")
     ap.add_argument("--timeout", type=float, default=20.0, help="HTTP 타임아웃(초)")
     ap.add_argument("--notify", action="store_true", help="이상하면 msg.exe 로 화면 알림")
     args = ap.parse_args()

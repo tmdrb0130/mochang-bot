@@ -46,9 +46,36 @@
 
 테스트 461건 통과. 서비스 무영향 확인(PID 21456 유지).
 
+## 배포 전 점검 (사용자 지적 7건 — 코드로 확인)
+
+| 항목 | 결과 |
+|---|---|
+| 완료된 job 결과가 영속되나 | **일부만.** `_TEXT_KINDS=(generate, extend)` → generations, `_RESEARCH_KINDS=(research, idea_research)` → research, intake → drafts. **translate 는 어디에도 안 남는다** — 끝났어도 학생이 2.5초 폴링으로 받아가기 전이면 재시작으로 사라진다 |
+| 그래서 "큐 비었음" 만으로 충분한가 | **아니다.** `deploy_window.py` 에 **정적 조건**(`--quiet-sec`, 기본 90초)을 넣었다. 큐가 비어도 학생이 생각 중이면 다음 POST 가 502 를 맞고, POST 는 재시도가 없다 |
+| 429 거절이 `max_jobs_per_ip` 를 먹나 | **아니다.** Job 생성 전에 raise 하므로 `active_ip` 에 안 잡힌다 |
+| 429 거절이 `max_intakes_per_ip_hour` 를 먹나 | **먹는다 — 결함.** 아래 별도 항목 |
+| 재시작 검증에 llm_reachable 이 있나 | 있다 (`deploy_window.py` 가 찍는 명령에 포함) |
+| 워치독 "GET 2회" 의 뜻 | 엔드포인트 2개(`/health`, `/jobs`) 각 1회. **재확인 로직이 없었다** → `--retries`(기본 3, 3초 간격) 추가. 다음 주기를 기다리지 않으므로 장애를 늦게 알아채지도 않는다 |
+| 워치독 요청이 IP 카운터에 잡히나 | **안 잡힌다.** 둘 다 GET 이고 작업을 만들지 않는다. 상한은 `POST /jobs/{kind}` 에서만 센다 |
+| `--notify` 가 실제로 뜨나 | **안 떴다.** `msg.exe` 가 이 PC 에서 `Access is denied` 로 조용히 실패한다(실측). → 권한이 필요 없는 **WScript.Shell Popup**(60초 뒤 자동 닫힘)으로 바꾸고 msg.exe 는 대비책으로. 실제로 창이 뜨는 것까지 확인 |
+| config.yaml 을 매 요청 다시 읽나 | **아니다.** `main.py:31` 에서 1회. `generate.py` 의 lazy config 들도 `if _x is None` 캐시다. **지금 바꾼 값은 라이브에 반영 안 됐다** |
+| Windows 자동 재부팅 | `NoAutoRebootWithLoggedOnUsers=1` — 로그온 상태면 자동 재부팅 안 한다. 재부팅 대기 없음, 08-13부터 25일 가동. **로그오프 상태에서는 재부팅될 수 있고 그러면 터널이 죽는다** |
+
+### 발견한 결함 — 인테이크 시간당 카운터가 429 거절도 센다 (아직 안 고침)
+
+`main.py submit_job` 에서 `_check_intake_rate(ip)` 가 `q.submit()` **앞**에 있다. 통과하면 그 자리에서
+`_intake_times[ip]` 에 append 하는데, 그 뒤 `q.submit` 이 `TooManyJobs` 를 던지면 **이미 한 칸을 먹은 뒤**다.
+게다가 프론트는 429 를 12회까지 재시도하므로 **인테이크 1건이 최대 12칸**을 먹을 수 있다.
+
+지금 당장의 위험은 낮다 — intake 는 per_owner 가 초안 단위(3)이고 per_ip 는 500, per_kind 는 없어서 큐가 intake 를 429 하는 일이 드물다.
+다만 이번에 80 → 160 으로 올린 값이 재시도 폭주에서는 명목보다 적게 쓰인다는 뜻이다.
+
+고치는 법: 검사와 기록을 나눠 `q.submit()` 이 성공한 뒤에만 append 한다.
+**배포와 함께 하지 않는다** — `submit_job` 은 가장 뜨거운 경로라 무인 배포 직전에 손댈 자리가 아니다.
+
 ## 배포 대기 — 큐가 빈 순간에 한 번
 
-    .venv/Scripts/python scripts/deploy_window.py --notify     # 창이 열릴 때까지 대기
+    .venv/Scripts/python scripts/deploy_window.py --notify     # 두 큐 비었고 + 90초 조용해질 때까지 대기
     nssm restart mochang-api                                    # 관리자 창에서
     Invoke-RestMethod http://127.0.0.1:8000/health
 
@@ -67,7 +94,8 @@
 2. 워치독을 작업 스케줄러에 5분 간격 등록(사용자 관리자 창).
 3. **심야 부하 회차**: ① `CARD_STRINGS` 25 → 80문구 ② 프론트 재시도 지터+횟수(무중단 재빌드, 이 회차에 포함해야 측정 버전 = 출시 버전)
    ③ 15명 재측정(기준선 갱신) ④ 40명 ⑤ 결과 보고 전용 큐 + 세마포어 + **설정 핫리로드**(그 뒤 값 조정은 재시작 불필요).
-4. 터널 NSSM 서비스화 — 콘솔 프로세스라 RDP 로그오프에 죽는다.
+4. 터널 NSSM 서비스화 — 콘솔 프로세스라 RDP 로그오프에 죽는다. 로그오프 상태면 Windows 자동 재부팅도 막지 못한다.
+5. `_check_intake_rate` 를 `q.submit` 뒤로 (위 "발견한 결함"). 배포와 분리해서 따로.
 
 ---
 
