@@ -40,6 +40,9 @@ const QUESTIONS = [
 
 // 브라우저 쪽 동시 요청 수. 실제 LLM 동시성은 백엔드 config.yaml 의 concurrency 가 최종 제한한다.
 // 서버 워커가 30개로 올랐고 IP 당 동시 3건까지 허용되므로(백엔드 max_jobs_per_client) 3 까지는 429 없이 간다.
+// 모두의 창업 공식 사이트 — 실제 지원 접수처. 이 도구는 초안만 만들고 접수는 저기서 한다.
+const MODOO_URL = "https://www.modoo.or.kr/";
+
 const PARALLEL = 3;
 // 조사 동시 실행 수. 백엔드 조사 모델은 로컬 70B 라 무료 한도가 없어 생성보다 높여도 된다.
 const RESEARCH_PARALLEL = 3;
@@ -1045,6 +1048,12 @@ export default function ModooWriter() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight">{t("app.title")}</h1>
             <p className="text-sm text-slate-500 mt-1">{t("app.subtitle")}</p>
+            {/* 모두의 창업 공식 사이트 (2026-09-07). 제목 바로 아래 왼쪽 — 처음 온 사람이 "여기가 접수처는 아니구나" 를
+                알아야 해서 눈에 띄는 자리에 둔다. 서버 상태와 무관하게 늘 보인다(우리 API 가 죽어도 공고는 봐야 한다). */}
+            <a href={MODOO_URL} target="_blank" rel="noopener noreferrer" title={t("hdr.modoo.tip")}
+               className="mt-3 inline-flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-indigo-500 bg-white text-indigo-700 text-sm font-semibold hover:bg-indigo-50 hover:border-indigo-600">
+              {t("hdr.modoo")}<span aria-hidden="true">↗</span>
+            </a>
           </div>
           <nav className="flex gap-1 text-sm">
             {[0, 1, 2, 3].map((i) => {
@@ -1103,12 +1112,6 @@ export default function ModooWriter() {
             /* 공개 서비스라 일반 사용자가 본다 — 실행 명령 대신 사람 말로. 주소·원인은 title 에만 남겨 개발자가 확인한다. */
             <span className="text-red-600" title={`${api.API_BASE} 연결 실패: ${server.error || ""}`}>{t("hdr.down")}</span>
           )}
-          {/* 모두의 창업 공식 사이트 (2026-09-07). 서버 상태와 무관하게 늘 보인다 — 우리 API 가 죽어도 학생은 원문 공고를 봐야 한다.
-              ml-auto 로 이 줄 오른쪽 끝에 붙는다. 무료 한도 배지(OpenRouter 를 쓸 때만 뜬다)가 있으면 그 뒤에 나란히 선다. */}
-          <a href="https://www.modoo.or.kr/" target="_blank" rel="noopener noreferrer" title={t("hdr.modoo.tip")}
-             className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:border-indigo-300">
-            {t("hdr.modoo")}<span aria-hidden="true">↗</span>
-          </a>
         </div>
       </header>
 
@@ -1421,8 +1424,15 @@ export default function ModooWriter() {
                 <p className="text-sm text-slate-500">{t("fn.help")}</p>
               </div>
               {/* 전체 복사는 한국어 제출용이라 문항 제목도 한국어(q.title) 그대로 */}
-              <button onClick={() => copy("all", activeQuestions.map((q) => `[${q.label}] ${q.title}\n${texts[q.id]?.[picked[q.id]] || "(미작성)"}`).join("\n\n"))}
-                className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm">{copyLabel("all", t("copy.all"), t("copied.all"))}</button>
+              {/* 복사 → 새 탭에서 접수, 이 순서가 실제 흐름이라 두 버튼을 나란히 둔다 (2026-09-07). */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button onClick={() => copy("all", activeQuestions.map((q) => `[${q.label}] ${q.title}\n${texts[q.id]?.[picked[q.id]] || "(미작성)"}`).join("\n\n"))}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm">{copyLabel("all", t("copy.all"), t("copied.all"))}</button>
+                <a href={MODOO_URL} target="_blank" rel="noopener noreferrer" title={t("fn.modoo.tip")}
+                   className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">
+                  {t("fn.modoo")}<span aria-hidden="true">↗</span>
+                </a>
+              </div>
             </div>
 
             {/* 외국어 화면에만: 최종 제출은 한국어로 (2026-09-03 요청). 번역문 말고 한국어 원문을 붙여넣으라는 빨간 안내. */}
