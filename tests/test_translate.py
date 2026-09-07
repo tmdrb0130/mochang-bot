@@ -88,7 +88,8 @@ async def test_blank_translations_are_logged(monkeypatch):
     c = FakeClient(["죄송합니다, 번역할 수 없습니다"])          # 파싱 실패 → 재시도도 빈 응답 → 전부 빈 값
     out = await T.translate_texts(c, ["가", "나"], "en")
     assert out["translations"] == ["", ""]
-    assert rows == [("translate_empty", {"lang": "en", "mode": "batch", "requested": 2, "empty": 2})]
+    # 파싱 실패 계측(translate_parse_fail)도 같이 남으므로 이 이벤트만 골라 본다 (2026-09-07)
+    assert [f for e, f in rows if e == "translate_empty"] == [{"lang": "en", "mode": "batch", "requested": 2, "empty": 2}]
 
 
 @pytest.mark.asyncio
@@ -98,7 +99,7 @@ async def test_successful_translation_logs_nothing(monkeypatch):
     monkeypatch.setattr(T.timing, "log", lambda event, **f: rows.append((event, f)))
     c = FakeClient([json.dumps({"1": "A", "2": "B"})])
     out = await T.translate_texts(c, ["가", "나"], "en")
-    assert out["translations"] == ["A", "B"] and rows == []
+    assert out["translations"] == ["A", "B"] and rows == []          # 정상이면 어떤 계측도 안 남는다
 
 
 @pytest.mark.asyncio
@@ -207,3 +208,42 @@ async def test_list_mode_runs_chunks_concurrently(monkeypatch):
     c = SlowClient([json.dumps({"1": "a", "2": "b"}), json.dumps({"1": "c", "2": "d"}), json.dumps({"1": "e"})])
     out = await T.translate_texts(c, ["ㄱ", "ㄴ", "ㄷ", "ㄹ", "ㅁ"], "en")
     assert sorted(out["translations"]) == ["a", "b", "c", "d", "e"] and state["peak"] == 3
+
+
+# ── 청크가 통째로 죽을 때 반으로 쪼개 다시 (2026-09-07, 부하 테스트에서 40개가 한 번에 날아간 뒤) ──
+
+@pytest.mark.asyncio
+async def test_dead_chunk_is_split_and_retried(monkeypatch):
+    """첫 호출과 재시도가 다 깨져도, 반으로 쪼갠 뒤에는 살아난다."""
+    monkeypatch.setattr(T, "BATCH", 8)
+    items = [f"문장 {i}" for i in range(8)]
+    half = json.dumps({str(i + 1): f"half{i}" for i in range(4)})
+    # ① 첫 호출 깨짐 ② 재시도(8개) 깨짐 ③ 왼쪽 4개 성공 ④ 오른쪽 4개 성공
+    c = FakeClient(["깨진 응답", "또 깨진 응답", half, half])
+    out = await T.translate_texts(c, items, "en")
+    assert out["translations"] == [f"half{i % 4}" for i in range(8)]
+    assert len(c.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_split_does_not_run_when_most_items_are_fine(monkeypatch):
+    """절반 이하만 비면 쪼개지 않는다 — 정상 경로의 호출 수는 그대로."""
+    monkeypatch.setattr(T, "BATCH", 8)
+    good = json.dumps({str(i + 1): f"t{i}" for i in range(8)} | {"3": ""})
+    c = FakeClient([good, json.dumps({"1": "fixed"})])
+    out = await T.translate_texts(c, [f"문장 {i}" for i in range(8)], "en")
+    assert out["translations"][2] == "fixed"
+    assert len(c.calls) == 2                      # 첫 호출 + 빈 항목 재시도. 쪼개기 없음
+
+
+@pytest.mark.asyncio
+async def test_parse_failure_is_logged_with_shape(monkeypatch):
+    """왜 죽었는지 다음에 좁힐 수 있게 응답의 모양(길이·중괄호 닫힘)을 남긴다."""
+    monkeypatch.setattr(T, "BATCH", 8)
+    rows = []
+    monkeypatch.setattr(T.timing, "log", lambda event, **f: rows.append((event, f)))
+    c = FakeClient(["미안하지만 번역할 수 없습니다"] * 8)
+    await T.translate_texts(c, [f"문장 {i}" for i in range(8)], "zh")
+    fails = [f for e, f in rows if e == "translate_parse_fail"]
+    assert fails and fails[0]["closed"] is False and fails[0]["n"] == 8
+

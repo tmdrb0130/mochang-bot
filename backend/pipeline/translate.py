@@ -96,14 +96,43 @@ async def _plain(client: LLMClient, system: str, header: str, text: str, model: 
     return out, res.model
 
 
+def _closed(raw: str) -> bool:
+    """응답에 여는 중괄호와 닫는 중괄호가 모두 있는지 — 잘렸는지(max_tokens) 판별용."""
+    t = _FENCE.sub("", raw or "")
+    return t.find("{") != -1 and t.rfind("}") > t.find("{")
+
+
 async def _batch(client: LLMClient, system: str, header: str, items: list[str], model: str | None,
-                 extra: dict | None = None) -> tuple[list[str], str]:
+                 extra: dict | None = None, depth: int = 0) -> tuple[list[str], str]:
+    """목록 한 청크를 번역한다. 실패하면 ① 실패한 항목만 1회 더 → ② 그래도 절반 넘게 비면 **반으로 쪼개 다시**.
+
+    ②를 넣은 이유 (2026-09-07): 부하 테스트에서 중국어 카드 번역 60개 중 **40개가 통째로 빈 채로 done** 됐다
+    (`translate_empty` 계측의 첫 실전 검출). 청크 하나가 파싱에 실패하면 그 안의 40개가 다 날아가는 구조였다.
+    원인은 간헐적이라(같은 조건 재현에서는 40/40 성공) 원인을 못 박아도 **결과는 지키도록** 쪼개서 다시 묻는다.
+    쪼개기는 실패했을 때만 돌고 depth 2 까지라 정상 경로의 호출 수는 그대로다.
+    """
     res = await client.complete(system, f"{header}\n{_numbered(items)}", model=model, **_kw(extra))
     out = _parse_batch(res.text, len(items))
+    if items and all(not t.strip() for t in out):
+        # 청크가 통째로 죽었다 = 파싱 실패. 다음에 원인을 좁힐 수 있게 응답의 모양을 남긴다.
+        try:
+            from .. import timing
+            timing.log("translate_parse_fail", n=len(items), chars=len(res.text or ""),
+                       closed=_closed(res.text or ""), depth=depth, head=(res.text or "")[:120])
+        except Exception:
+            pass
     redo = [i for i, t in enumerate(out) if _bad(t)]
     if redo:                                          # 빈 항목·한글 잔류만 모아 1회 더
         res2 = await client.complete(system, f"{header}\n{_numbered([items[i] for i in redo])}", model=model, **_kw(extra))
         for i, t in zip(redo, _parse_batch(res2.text, len(redo))):
+            if not _bad(t) or (t.strip() and not out[i].strip()):
+                out[i] = t
+    still = [i for i, t in enumerate(out) if _bad(t)]
+    if depth < 2 and len(items) >= 8 and len(still) > len(items) // 2:
+        mid = len(items) // 2
+        left, _m = await _batch(client, system, header, items[:mid], model, extra, depth + 1)
+        right, _m = await _batch(client, system, header, items[mid:], model, extra, depth + 1)
+        for i, t in enumerate(left + right):
             if not _bad(t) or (t.strip() and not out[i].strip()):
                 out[i] = t
     return out, res.model
