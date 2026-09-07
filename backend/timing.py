@@ -68,6 +68,9 @@ def job_done(job) -> None:
     log("job",
         kind=job.kind,
         status=job.status,
+        # owner (2026-09-07): 초안 단위 식별자(d:<draft_id> 또는 ip:<ip>). 교내는 공인 IP 하나로 보여
+        # IP 로는 강의실 전체가 1명이 되므로, "지금 몇 명이 작업 중인가" 는 이 값으로 센다 (scripts/admin_dashboard.py).
+        owner=getattr(job, "owner", None),
         attempts=job.attempts,
         queued_s=round((started - created), 2) if started else None,
         run_s=round((finished - started), 2) if (started and finished) else None,
