@@ -346,7 +346,8 @@ def test_refused_save_is_logged(tmp_path, monkeypatch):
     # (열쇠가 아예 없는 경우는 2026-09-08 부터 '첫 쓰기 유예' 로 통과한다 — 아래 유예 테스트 참고)
     assert st._record_sync("generate", {**form, "draft_key": "wrong-key-value-000"},
                            {"question_id": "q2", "text": "본문"}, "1.2.3.4") is None
-    assert rows == [("storage_refused", {"kind": "generate", "draft_id": did, "has_key": True})]
+    # test=None: 부하 테스트가 낸 것이 아니라는 표시 (2026-09-08, 대시보드가 실사용 지표에서 테스트를 뺀다)
+    assert rows == [("storage_refused", {"kind": "generate", "draft_id": did, "has_key": True, "test": None})]
 
     # 열쇠를 실으면 정상 저장 — 거부 로그는 더 안 남는다
     rows.clear()

@@ -624,3 +624,41 @@ async def test_full_stack_generates_all_questions_with_production_switches(tmp_p
     assert len(results["q1"]["text"]) <= 100 and len(results["q10"]["text"]) <= 100
     assert results["q2"]["length"] >= 700                           # 긴 문항은 하한 근처까지 채워진다
     assert sum(1 for c in client.calls if "사업계획의 골자" in c) == 1   # 골자는 아이디어당 1회(캐시)
+
+
+# ── 부하 테스트 자국이 실사용 지표에 섞이지 않게 (2026-09-08) ──
+
+@pytest.mark.asyncio
+async def test_test_header_marks_the_job_record(monkeypatch):
+    """X-Mochang-Test 를 단 요청의 작업은 timing 기록에 test=True 로 남고, 안 단 요청은 test=None 이다.
+
+    대시보드·워치독이 이 값으로 "오늘 오류" 에서 부하 테스트를 뺀다. 표시가 없으면 밤사이 부하 테스트
+    실패가 실사용 장애처럼 보인다(실제로 2026-09-08 에 오류 51건·저장 거부 57건이 그렇게 보였다).
+    """
+    import httpx
+    from backend import main as M
+    from backend.llm.client import LLMResult
+
+    async def fake_complete(system, user, model, extra=None):
+        return LLMResult(text="Hello", model=model)
+
+    rows = []
+    monkeypatch.setattr(M.client, "_complete", fake_complete)
+    monkeypatch.setattr(M.research_client, "_complete", fake_complete)
+    monkeypatch.setattr(M.timing, "log", lambda event, **f: rows.append((event, f)))
+    body = {"question_id": "q1", "track": "tech", "idea": "표시 확인 아이디어", "draft_id": "draft-mark-000001"}
+    async with M.lifespan(M.app):
+        transport = httpx.ASGITransport(app=M.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test", timeout=30) as c:
+            for head in ({"X-Mochang-Test": "1"}, {}):
+                r = await c.post("/jobs/generate", json=body, headers=head)
+                assert r.status_code == 200
+                for _ in range(60):
+                    j = (await c.get(f"/jobs/{r.json()['job_id']}")).json()
+                    if j["status"] in ("done", "error"):
+                        break
+                    await asyncio.sleep(0.05)
+
+    marks = [f.get("test") for e, f in rows if e == "job"]
+    assert marks == [True, None]                      # 테스트 요청만 표시가 붙는다
+

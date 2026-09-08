@@ -125,7 +125,7 @@ def timing_stats(now: datetime) -> dict:
     today = now.strftime("%Y-%m-%d")
     jobs = collections.Counter(); jobs_err = collections.Counter()
     http = collections.Counter(); limit = collections.Counter()
-    empty_tr = 0; refused = 0; run_s = collections.defaultdict(list)
+    empty_tr = 0; refused = 0; n_test = 0; run_s = collections.defaultdict(list)
     hourly = collections.defaultdict(lambda: {"intake": 0, "generate": 0, "translate": 0, "research": 0})
     recent = []
     owners_recent: dict[str, datetime] = {}
@@ -138,6 +138,12 @@ def timing_stats(now: datetime) -> dict:
             continue
         ts = d.get("ts") or ""
         if not ts.startswith(today):
+            continue
+        # 부하 테스트(X-Mochang-Test)가 낸 것은 실사용 지표에서 뺀다 (2026-09-08).
+        # 이 표시가 없던 때, 밤사이 부하 테스트가 남긴 오류 51건·저장 거부 57건이 "오늘의 장애" 로 보였다.
+        # 표시는 2026-09-08 이후 재시작한 서버부터 찍힌다 — 그 전 줄은 표시가 없어 그대로 실사용으로 센다.
+        if d.get("test"):
+            n_test += 1
             continue
         ev = d.get("event")
         if ev == "job":
@@ -194,7 +200,7 @@ def timing_stats(now: datetime) -> dict:
         "owner_logging": bool(owners_recent),
         "jobs_done": dict(jobs), "jobs_error": dict(jobs_err),
         "post_status": dict(http), "limit_429": dict(limit), "limit_total": sum(limit.values()),
-        "translate_empty": empty_tr, "storage_refused": refused,
+        "translate_empty": empty_tr, "storage_refused": refused, "test_skipped": n_test,
         "p50_run_s": {k: p50(v) for k, v in run_s.items()},
         "hourly": [{"h": h, **hourly[h]} for h in sorted(hourly)],
         "recent": list(reversed(recent))[:30],
@@ -409,6 +415,7 @@ async function load() {
     ["모델 호출", L.usage_today ?? "?"], ["생성 p50", T.p50_run_s?.generate != null ? T.p50_run_s.generate + "초" : "—"],
     ["429", `<b class="${T.limit_total ? "text-amber-700" : ""}">${T.limit_total}</b>`], ["작업 오류", `<b class="${errs ? "text-red-600" : ""}">${errs}</b>`],
     ["빈 번역", `<b class="${T.translate_empty ? "text-amber-700" : ""}">${T.translate_empty}</b>`], ["저장 거부", `<b class="${T.storage_refused ? "text-red-600" : ""}">${T.storage_refused}</b>`],
+    ["부하 테스트(제외됨)", `<span class="text-slate-400">${T.test_skipped || 0}</span>`],
   ].map(([k,v]) => `<div class="text-slate-500">${k}</div><div class="text-right font-medium">${v}</div>`).join("");
   $("total").innerHTML = D.ok ? [
     ["<b>초안 수</b>", `<b>${D.drafts}</b>`], ["사람(브라우저 id) · 미상", D.people == null ? "배포 전" : `${D.people} · ${D.people_unknown}`], ["네트워크(IP) — 교내는 여럿이 하나", D.owners], ["생성문", D.generations], ["조사 자료", D.research],

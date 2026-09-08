@@ -359,7 +359,8 @@ class Storage:
                     try:
                         from . import timing
                         timing.log("storage_grace", draft_id=did, owner=owner,
-                                   age_s=round((now - row["created_at"]).total_seconds(), 1))
+                                   age_s=round((now - row["created_at"]).total_seconds(), 1),
+                                   test=(True if test else None))
                     except Exception:
                         pass
                 else:
@@ -456,7 +457,8 @@ class Storage:
             try:
                 from . import timing
                 timing.log("storage_refused", kind=kind, draft_id=draft_id_for(form) or "",
-                           has_key=bool(str(form.get("draft_key") or "").strip()))
+                           has_key=bool(str(form.get("draft_key") or "").strip()),
+                           test=(True if test else None))
             except Exception:
                 pass
             return None                                      # draft_id 형식 밖 또는 열쇠 불일치 — 생성문도 남기지 않는다

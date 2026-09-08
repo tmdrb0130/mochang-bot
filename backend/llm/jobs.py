@@ -58,6 +58,7 @@ class Job:
     status: str = "queued"          # queued | running | done | error
     owner: str | None = None        # 제출자 식별자(초안 id 또는 IP). 동시 작업 제한용 — 응답에는 내보내지 않는다
     ip: str | None = None           # 제출한 클라이언트 IP. IP 단위 천장(max_per_ip)용 — 응답에는 내보내지 않는다
+    test: bool = False              # 부하 테스트·E2E(헤더 X-Mochang-Test). 계측에만 쓴다 — 실행 방식은 실사용과 똑같다
     result: Any = None
     error: str | None = None
     attempts: int = 0
@@ -131,7 +132,8 @@ class JobQueue:
 
     # ── 제출 ──
     def submit(self, factory: Factory, kind: str = "llm", owner: str | None = None, *,
-               ip: str | None = None, max_per_owner: int | None = None, max_per_ip: int = 0, max_per_kind: int = 0) -> Job:
+               ip: str | None = None, max_per_owner: int | None = None, max_per_ip: int = 0, max_per_kind: int = 0,
+               test: bool = False) -> Job:
         """큐에 넣는다. 상한 검사 순서: owner(초안) → ip → kind. 0 이면 그 검사는 안 한다.
         max_per_owner 가 None 이면 큐 기본값(max_per_client). 어느 하나라도 넘으면 TooManyJobs(scope)."""
         if not self._workers:
@@ -149,7 +151,7 @@ class JobQueue:
             active = self.active_kind(kind)
             if active >= int(max_per_kind):
                 raise TooManyJobs(active, int(max_per_kind), "kind")
-        job = Job(id=uuid.uuid4().hex[:12], factory=factory, kind=kind, owner=owner, ip=ip,
+        job = Job(id=uuid.uuid4().hex[:12], factory=factory, kind=kind, owner=owner, ip=ip, test=bool(test),
                   future=asyncio.get_running_loop().create_future())
         self._jobs[job.id] = job
         self._trim_history()

@@ -147,7 +147,7 @@ def check(base: str, args) -> dict:
             problems.append(f"{name} 큐 적체 — 대기 {q['queued']}건 (임계 {args.queue_warn})")
             level = _worse(level, WARN)
 
-    rows = _recent(args.window)
+    rows = [d for d in _recent(args.window) if not d.get("test")]   # 부하 테스트가 낸 것은 경고 대상이 아니다 (2026-09-08)
     n429 = sum(1 for d in rows if d.get("event") == "limit")
     nerr = sum(1 for d in rows if d.get("event") == "job" and d.get("status") not in (None, "done"))
     empty = [d for d in rows if d.get("event") == "translate_empty"]
