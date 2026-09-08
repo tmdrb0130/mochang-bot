@@ -58,6 +58,7 @@ class ResearchConfig:
     max_pages_to_fetch: int = 0
     fetch_timeout: int = 15
     fetch_concurrency_global: int = 64   # 페이지 받기 동시 상한 (0 = 무제한). fetch_page 는 모듈 값 FETCH_GLOBAL 을 쓴다
+    fetch_concurrency_per_host: int = 8  # 한 호스트에 동시에 몇 장까지. 차단은 전역 수가 아니라 이 값에서 온다
     cache_ttl: int = 7 * 24 * 3600
     # ── 아이디어당 1회 조사 (RESEARCH_PLAN 2단계) ──
     # True 면 문항 조사가 아이디어 공통 조사 결과를 그대로 물려받고, 모자란 각도만 보완 검색한다.
@@ -96,6 +97,7 @@ class ResearchConfig:
             max_pages_to_fetch=int(rc.get("max_pages_to_fetch", 0)),
             fetch_timeout=int(rc.get("fetch_timeout", 15)),
             fetch_concurrency_global=int(rc.get("fetch_concurrency_global", 64)),
+            fetch_concurrency_per_host=int(rc.get("fetch_concurrency_per_host", 8)),
             share_idea_research=bool(rc.get("share_idea_research", True)),
             max_followup_queries=int(rc.get("max_followup_queries", 2)),
             max_followup_pages=int(rc.get("max_followup_pages", 3)),
@@ -122,6 +124,7 @@ class ResearchConfig:
 # asyncio.Semaphore 는 처음 쓰인 이벤트 루프에 묶인다 — 테스트처럼 루프가 바뀌면 "다른 루프" 오류가 나므로 루프마다 하나씩 둔다.
 EXTRACT_GLOBAL = 8          # apply_runtime_limits 가 config 값으로 덮는다. fetch_page 는 cfg 를 못 받아 모듈 값을 쓴다
 FETCH_GLOBAL = 64           # 페이지 받기(HTTP GET) 동시 상한. 같은 이유로 모듈 값 (2026-09-08)
+FETCH_PER_HOST = 8          # 한 호스트에 동시에 몇 장까지 (2026-09-08). 상대 서버가 막는 기준은 전역이 아니라 이쪽이다
 _sems: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict]" = weakref.WeakKeyDictionary()
 # 페이지 받기용 공유 클라이언트 (2026-09-08). httpx.AsyncClient 는 커넥션 풀을 들고 있고 루프에 묶이므로 루프마다 하나.
 _https: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, object]" = weakref.WeakKeyDictionary()
@@ -141,9 +144,10 @@ def _sem(name: str, n: int) -> asyncio.Semaphore | None:
 
 def apply_runtime_limits(cfg: "ResearchConfig") -> None:
     """config 의 전역 상한을 모듈·추출 프로세스 풀에 반영한다 (main 이 ResearchConfig.from_config 를 부를 때)."""
-    global EXTRACT_GLOBAL, FETCH_GLOBAL
+    global EXTRACT_GLOBAL, FETCH_GLOBAL, FETCH_PER_HOST
     EXTRACT_GLOBAL = int(cfg.extract_concurrency_global or 0)
     FETCH_GLOBAL = int(getattr(cfg, "fetch_concurrency_global", 0) or 0)
+    FETCH_PER_HOST = int(getattr(cfg, "fetch_concurrency_per_host", 0) or 0)
     extract_proc.configure(cfg.extract_pool_size)
 
 
@@ -264,12 +268,14 @@ def _http() -> "object":
     loop = asyncio.get_running_loop()
     c = _https.get(loop)
     if c is None or c.is_closed:
-        n = FETCH_GLOBAL or 100
+        # 풀 크기는 세마포어 상한 이상이어야 한다 — 작으면 세마포어를 통과한 요청이 풀에서 또 줄을 서고,
+        # 그 대기는 우리 계측(fetch_wait_ms)에 안 잡혀 "왜 느린지" 를 못 보게 된다.
+        n = max(FETCH_GLOBAL or 100, 16)
         c = httpx.AsyncClient(
             follow_redirects=True,
             headers={"User-Agent": "Mozilla/5.0 (modoo-writer research)"},
-            # 풀 대기(pool)는 시간 제한을 두지 않는다 — 세마포어가 이미 입구를 막고 있어 여기서 또 끊으면
-            # 페이지가 조용히 사라진다(빈 문자열 = 근거 없는 문항). 연결·읽기만 제한한다.
+            # 풀 대기(pool)에는 시간 제한을 두지 않는다. 위 관계 덕에 풀 대기는 사실상 0 이고,
+            # 여기서 끊으면 '기다림' 이 '실패' 로 둔갑한다. 연결·읽기만 제한한다.
             timeout=httpx.Timeout(15.0, pool=None),
             limits=httpx.Limits(max_connections=n, max_keepalive_connections=max(8, n // 2),
                                 keepalive_expiry=30.0))
@@ -288,30 +294,91 @@ async def aclose_http() -> None:
             pass
 
 
+class FetchFailed(Exception):
+    """페이지를 못 받았다 (2026-09-08).
+
+    전에는 어떤 실패든 빈 문자열로 돌려줬다. 그러면 호출자 눈에는 "받았는데 본문이 없는 페이지" 와
+    "아예 못 받은 페이지" 가 똑같이 보여서, 근거가 조용히 사라져도 아무 데도 안 남는다.
+    저장 쪽에서 겪은 '조용한 유실' 과 같은 함정이라 여기서는 실패를 실패로 올린다.
+    reason: connect(연결·DNS) / read(읽기 시간 초과) / status(4xx·5xx) / reset(끊김) / other
+    """
+
+    def __init__(self, url: str, reason: str, detail: str = ""):
+        super().__init__(f"{reason}: {url} {detail}".strip())
+        self.url, self.reason, self.detail = url, reason, detail
+
+
+def _fail_reason(e: Exception) -> str:
+    import httpx
+    if isinstance(e, (httpx.ConnectTimeout, httpx.ConnectError)):
+        return "connect"
+    if isinstance(e, (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout)):
+        return "read"
+    if isinstance(e, (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError)):
+        return "reset"
+    return "other"
+
+
+def _retryable(e: Exception) -> bool:
+    """keepalive 로 살려 둔 소켓을 상대가 먼저 닫았을 때 나는 오류 — 새 소켓으로 한 번만 다시 해 본다.
+
+    상대 서버의 idle timeout 이 우리 keepalive(30초)보다 짧으면(CDN·WAS 는 5~15초인 곳이 많다)
+    반쯤 죽은 소켓을 집을 수 있다. 시간 초과는 다시 해도 기다림만 두 배라 재시도하지 않는다.
+    """
+    import httpx
+    return isinstance(e, (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError, httpx.ConnectError))
+
+
 async def fetch_page(url: str, timeout: int = 15) -> str:
-    """HTML → 본문 텍스트 (trafilatura). 실패/비HTML 이면 빈 문자열."""
+    """HTML → 본문 텍스트 (trafilatura).
+
+    → 본문 문자열. 받았지만 쓸 것이 없으면(확장자 제외·비HTML) 빈 문자열.
+    **못 받았으면 FetchFailed 를 올린다** — 호출자가 실패를 실패로 알아야 한다.
+    """
     if not url or url.lower().split("?")[0].endswith(SKIP_EXT):
         return ""
     timing.count("fetch")          # 성공·실패 무관하게 '나간 요청' 을 센다
-    # 전역 상한 (2026-09-08): 조사 워커 80 × 페이지 6 = 동시 480 소켓까지 열릴 수 있었다. 추출(extract)에는
-    # 상한이 있었는데 그 앞단인 받기에는 없어서, 부하가 오면 여기부터 늘어졌다. 넉넉히 잡되(오늘 부하에서는
-    # 걸리지 않는 값) 병적인 폭주만 막는다 — 실제로 걸리는지는 fetch_wait_ms 로 본다.
-    sem = _sem("fetch", FETCH_GLOBAL)
+    # 상한 둘 (2026-09-08). 조사 워커 80 × 페이지 6 = 동시 480 소켓까지 열릴 수 있었다.
+    #   호스트별(FETCH_PER_HOST): 상대 서버가 막는 기준은 이쪽이다. 언론사 하나에 64장이 몰리면 전역 상한은 의미가 없다.
+    #   전역(FETCH_GLOBAL): 우리 쪽 소켓·이벤트 루프 보호.
+    # 호스트 → 전역 순으로 잡는다. 반대로 하면 전역 자리를 쥔 채 호스트를 기다려 다른 호스트까지 막는다.
+    # 어디서 막혔는지 보려고 대기를 두 축으로 나눠 센다.
+    host = domain(url) or "?"
+    hsem = _sem("fetch:" + host, FETCH_PER_HOST)      # 호스트 수만큼 세마포어가 생기지만 개당 수십 바이트다
+    gsem = _sem("fetch", FETCH_GLOBAL)
     tw = time.monotonic()
-    if sem is not None:
-        await sem.acquire()
-    t0 = time.monotonic()
-    timing.count("fetch_wait_ms", int((t0 - tw) * 1000))
+    if hsem is not None:
+        await hsem.acquire()
+    th = time.monotonic()
     try:
-        r = await _http().get(url, timeout=timeout)
-        if r.status_code >= 400 or "html" not in (r.headers.get("content-type") or "html"):
-            return ""
-        html = r.text
-    except Exception:
-        return ""
+        if gsem is not None:
+            await gsem.acquire()
+        t0 = time.monotonic()
+        timing.count("fetch_wait_host_ms", int((th - tw) * 1000))
+        timing.count("fetch_wait_ms", int((t0 - th) * 1000))
+        try:
+            for attempt in (0, 1):
+                try:
+                    r = await _http().get(url, timeout=timeout)
+                    break
+                except Exception as e:
+                    if attempt == 0 and _retryable(e):
+                        timing.count("fetch_retry")
+                        continue
+                    timing.count("fetch_fail_" + _fail_reason(e))
+                    raise FetchFailed(url, _fail_reason(e), str(e)[:80]) from e
+            if r.status_code >= 400:
+                timing.count("fetch_fail_status")
+                raise FetchFailed(url, "status", str(r.status_code))
+            if "html" not in (r.headers.get("content-type") or "html"):
+                return ""                     # 받긴 받았다 — 쓸 게 없을 뿐이라 실패가 아니다
+            html = r.text
+        finally:
+            if gsem is not None:
+                gsem.release()
     finally:
-        if sem is not None:
-            sem.release()
+        if hsem is not None:
+            hsem.release()
     timing.count("fetch_ms", int((time.monotonic() - t0) * 1000))
     # 추출은 별도 프로세스에서 (extract_proc) — lxml 이 C 레벨에서 죽어도 API 프로세스는 살아남는다.
     # 전역 상한(EXTRACT_GLOBAL): 조사 워커 80 이 한꺼번에 받아온 페이지가 풀(8)에 줄을 서는 시간을 대기로 따로 센다 (2026-09-04).
@@ -495,15 +562,33 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
     ranked = _cap_by_domain(rank_results(unique), cfg.max_pages_per_domain)
     ranked = ranked[: min(budget, want) if max_pages is not None else budget]
     # 정형 API 결과(no_fetch)는 받아올 페이지가 없다 — snippet 이 이미 사실 문장이라 그대로 본문으로 쓴다.
+    # return_exceptions: fetch 는 못 받으면 FetchFailed 를 올린다. 한 장이 실패해도 나머지는 살려야 하고,
+    # 무엇이 왜 실패했는지는 아래에서 남긴다 (2026-09-08).
     texts = await asyncio.gather(*(_no_fetch() if r.get("no_fetch") else fetch(r["url"], cfg.fetch_timeout)
-                                   for r in ranked))
+                                   for r in ranked), return_exceptions=True)
     pages = [reuse_page(h) for h in kept]        # 쌓아 둔 문서를 먼저 채우고 남는 자리만 웹에서
+    failed: list[dict] = []
     for r, t in zip(ranked, texts):
+        if isinstance(t, BaseException):
+            if not isinstance(t, FetchFailed):
+                raise t                          # 취소·프로그래밍 오류는 삼키지 않는다
+            failed.append({"url": t.url, "reason": t.reason})
+            t = ""
+        # 못 받은 페이지도 검색 스니펫은 남아 있다 — 검색엔진이 준 근거라 통째로 버리지 않고 쓰되,
+        # 본문이 아니라는 것(from_snippet)과 못 받았다는 것(fetch_failed)을 페이지에 적어 둔다.
+        # 인용 검증(_verify_quotes)이 어차피 이 짧은 스니펫 안에 있는 문장만 통과시킨다.
         body = t or r.get("snippet") or ""
         if len(body) >= MIN_BODY_CHARS:
-            pages.append({**r, "text": body, "from_snippet": not bool(t)})
+            row = {**r, "text": body, "from_snippet": not bool(t)}
+            if any(f["url"] == r["url"] for f in failed):
+                row["fetch_failed"] = True
+            pages.append(row)
         if len(pages) >= want:
             break
+    if failed:
+        # 근거가 몇 장 어떤 이유로 빠졌는지 남긴다 — 전에는 어디에도 안 남아 "왜 근거가 얇지" 를 못 쫓았다.
+        timing.log("fetch_failed", n=len(failed), of=len(ranked),
+                   reasons=sorted({f["reason"] for f in failed}), urls=[f["url"][:80] for f in failed[:3]])
     # 새로 받아온 것만 색인한다. KCI 계열은 영구 축적 금지(RESEARCH_PLAN 준수 사항 2항)라 여기서 뺀다.
     await index_pages([p for p in pages if indexable(p)], cfg)
     return unique, pages

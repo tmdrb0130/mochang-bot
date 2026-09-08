@@ -662,3 +662,16 @@ async def test_test_header_marks_the_job_record(monkeypatch):
     marks = [f.get("test") for e, f in rows if e == "job"]
     assert marks == [True, None]                      # 테스트 요청만 표시가 붙는다
 
+
+@pytest.mark.asyncio
+async def test_lifespan_closes_the_shared_fetch_client():
+    """종료 때 공유 HTTP 클라이언트가 닫힌다 — 안 닫으면 소켓이 남고 "Unclosed client" 경고가 뜬다."""
+    from backend import main as M
+    from backend.rag import pipeline as P
+
+    async with M.lifespan(M.app):
+        c = P._http()                      # 루프 안에서 만들어 캐시에 올린다
+        assert c.is_closed is False
+    assert c.is_closed is True             # lifespan 이 빠져나오며 닫았다
+    assert len(P._https) == 0              # 캐시에서도 빠졌다
+

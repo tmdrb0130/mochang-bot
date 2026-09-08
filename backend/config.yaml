@@ -207,6 +207,9 @@ research:
   # 64 는 "오늘 부하에서는 걸리지 않고 병적인 폭주만 막는" 값 — 실제로 걸리는지는 sources 이벤트의
   # fetch_wait_ms 로 본다. 0 이면 무제한(예전 동작).
   fetch_concurrency_global: 64
+  # 한 호스트에 동시에 몇 장까지 (2026-09-08). 상대 서버가 우리를 막는 기준은 전역 수가 아니라 이쪽이다 —
+  # 언론사 한 곳에 64장이 몰리면 전역 상한은 아무 의미가 없다. 대기는 fetch_wait_host_ms 로 따로 센다.
+  fetch_concurrency_per_host: 8
 
   cache_ttl_seconds: 604800      # 같은 검색어 결과 디스크 캐시 7일 (backend/.cache/research/)
   max_queries: 4                 # 아이디어+문항당 생성할 검색어 수 (3~5)

@@ -879,3 +879,156 @@ async def test_fetch_page_respects_global_limit(monkeypatch):
     assert "fetch_wait_ms" in timing._counts                # 기다린 시간이 남는다
     timing._counts.clear()
 
+
+# ── 실패를 실패로 전달 (2026-09-08, 리뷰 지적) ──
+
+def _fresh(monkeypatch, **mod):
+    """세마포어·클라이언트 캐시를 비우고 모듈 상한을 바꾼다."""
+    import weakref
+    monkeypatch.setattr(P, "_https", weakref.WeakKeyDictionary())
+    monkeypatch.setattr(P, "_sems", weakref.WeakKeyDictionary())
+    for k, v in mod.items():
+        monkeypatch.setattr(P, k, v)
+
+
+def _fake_client(monkeypatch, handler):
+    """_http() 가 돌려줄 가짜 클라이언트 — get() 만 흉내 낸다."""
+    class C:
+        is_closed = False
+
+        async def get(self, url, **k):
+            return await handler(url)
+
+    monkeypatch.setattr(P, "_http", lambda: C())
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_raises_on_failure_instead_of_empty_string(monkeypatch):
+    """예전엔 5xx·연결 실패가 전부 빈 문자열이었다 — '본문 없는 페이지' 와 구별이 안 됐다."""
+    import httpx
+    _fresh(monkeypatch, FETCH_GLOBAL=4, FETCH_PER_HOST=2)
+
+    async def h(url):
+        if "boom" in url:
+            raise httpx.ReadTimeout("timed out")
+        return httpx.Response(500, headers={"content-type": "text/html"}, text="서버 오류")
+
+    _fake_client(monkeypatch, h)
+    with pytest.raises(P.FetchFailed) as e1:
+        await P.fetch_page("https://ex.co.kr/boom")
+    assert e1.value.reason == "read"
+    with pytest.raises(P.FetchFailed) as e2:
+        await P.fetch_page("https://ex.co.kr/500")
+    assert e2.value.reason == "status" and e2.value.detail == "500"
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_returns_empty_when_there_is_nothing_to_read(monkeypatch):
+    """비HTML·제외 확장자는 실패가 아니다 — 받긴 받았고 쓸 것이 없을 뿐이라 빈 문자열."""
+    import httpx
+    _fresh(monkeypatch, FETCH_GLOBAL=4, FETCH_PER_HOST=2)
+    _fake_client(monkeypatch, lambda url: _aret(
+        httpx.Response(200, headers={"content-type": "application/pdf"}, text="%PDF")))
+    assert await P.fetch_page("https://ex.co.kr/x") == ""
+    assert await P.fetch_page("https://ex.co.kr/a.zip") == ""      # 확장자로 거른 것
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_retries_a_half_dead_keepalive_socket_once(monkeypatch):
+    """상대 idle timeout 이 우리 keepalive 보다 짧으면 죽은 소켓을 집는다 — 새 소켓으로 한 번만 다시."""
+    import httpx
+    _fresh(monkeypatch, FETCH_GLOBAL=4, FETCH_PER_HOST=2)
+    tries = {"n": 0}
+
+    async def h(url):
+        tries["n"] += 1
+        if tries["n"] == 1:
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        return httpx.Response(200, headers={"content-type": "text/html"}, text="<html>본문</html>")
+
+    _fake_client(monkeypatch, h)
+    monkeypatch.setattr(P.extract_proc, "extract", lambda html, **k: _aret("본문 텍스트"))
+    assert await P.fetch_page("https://ex.co.kr/a") == "본문 텍스트"
+    assert tries["n"] == 2                                   # 정확히 한 번만 더
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_does_not_retry_a_timeout(monkeypatch):
+    """시간 초과는 다시 해도 기다림만 두 배다."""
+    import httpx
+    _fresh(monkeypatch, FETCH_GLOBAL=4, FETCH_PER_HOST=2)
+    tries = {"n": 0}
+
+    async def h(url):
+        tries["n"] += 1
+        raise httpx.ReadTimeout("timed out")
+
+    _fake_client(monkeypatch, h)
+    with pytest.raises(P.FetchFailed):
+        await P.fetch_page("https://ex.co.kr/a")
+    assert tries["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_limits_per_host_not_just_globally(monkeypatch):
+    """차단은 전역 수가 아니라 호스트당 동시 연결에서 온다 — 한 호스트가 상한을 넘지 않으면서 다른 호스트는 안 막힌다."""
+    import httpx, collections
+    _fresh(monkeypatch, FETCH_GLOBAL=32, FETCH_PER_HOST=2)
+    live = collections.Counter()
+    peak = collections.Counter()
+
+    async def h(url):
+        d = P.domain(url)
+        live[d] += 1
+        peak[d] = max(peak[d], live[d])
+        await asyncio.sleep(0.02)
+        live[d] -= 1
+        return httpx.Response(200, headers={"content-type": "text/html"}, text="<html>본문</html>")
+
+    _fake_client(monkeypatch, h)
+    monkeypatch.setattr(P.extract_proc, "extract", lambda html, **k: _aret("본문"))
+    urls = [f"https://a.co.kr/{i}" for i in range(8)] + [f"https://b.co.kr/{i}" for i in range(8)]
+    await asyncio.gather(*(P.fetch_page(u) for u in urls))
+    assert peak["a.co.kr"] <= 2 and peak["b.co.kr"] <= 2      # 호스트마다 2장까지
+    assert peak["a.co.kr"] == 2 and peak["b.co.kr"] == 2      # 서로를 막지는 않는다 (전역 32 는 여유)
+
+
+@pytest.mark.asyncio
+async def test_collect_pages_records_failed_fetches_and_marks_the_page(tmp_path, monkeypatch):
+    """한 장이 실패해도 나머지는 살고, 몇 장이 왜 빠졌는지 로그에 남는다 — 전에는 아무 데도 안 남았다."""
+    results = [
+        R.make_result("살아있는 곳", "https://kostat.go.kr/ok", "스니펫 " * 20, "2026-01-01", "web"),
+        R.make_result("죽은 곳", "https://dead.example.com/x",
+                      "이 스니펫은 본문을 못 받아도 근거로 쓰일 만큼 깁니다. " * 3, "2026-01-01", "web"),
+    ]
+    researcher = R.Researcher(backends=[("fake", lambda q, n: _aret(results))], cache=R.DiskCache(tmp_path))
+
+    async def fetch(url, timeout=15):
+        if "dead" in url:
+            raise P.FetchFailed(url, "connect", "getaddrinfo failed")
+        return PAGE_TEXT
+
+    rows = []
+    monkeypatch.setattr(P.timing, "log", lambda event, **f: rows.append((event, f)))
+    _u, pages = await P.collect_pages(researcher, ["q1"], P.ResearchConfig(max_pages_to_extract=5), fetch=fetch)
+
+    ok = [p for p in pages if p["url"].endswith("/ok")][0]
+    dead = [p for p in pages if "dead" in p["url"]][0]
+    assert ok["text"] == PAGE_TEXT and not ok.get("fetch_failed")
+    assert dead["fetch_failed"] is True and dead["from_snippet"] is True   # 스니펫으로 살아남되 표시가 붙는다
+    fails = [f for e, f in rows if e == "fetch_failed"]
+    assert fails and fails[0]["n"] == 1 and fails[0]["reasons"] == ["connect"]
+
+
+@pytest.mark.asyncio
+async def test_collect_pages_does_not_swallow_cancellation(tmp_path):
+    """FetchFailed 가 아닌 예외(취소·프로그래밍 오류)는 그대로 올린다."""
+    results = [R.make_result("x", "https://ex.co.kr/a", "스니펫 " * 20, "2026-01-01", "web")]
+    researcher = R.Researcher(backends=[("fake", lambda q, n: _aret(results))], cache=R.DiskCache(tmp_path))
+
+    async def fetch(url, timeout=15):
+        raise ValueError("프로그래밍 오류")
+
+    with pytest.raises(ValueError):
+        await P.collect_pages(researcher, ["q1"], P.ResearchConfig(max_pages_to_extract=5), fetch=fetch)
+
