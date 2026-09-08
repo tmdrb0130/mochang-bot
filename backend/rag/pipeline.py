@@ -57,6 +57,7 @@ class ResearchConfig:
     # 0 이면 max_pages_to_extract 와 같다. fetch 실패가 잦으면 8 정도로 조금만 올린다.
     max_pages_to_fetch: int = 0
     fetch_timeout: int = 15
+    fetch_concurrency_global: int = 64   # 페이지 받기 동시 상한 (0 = 무제한). fetch_page 는 모듈 값 FETCH_GLOBAL 을 쓴다
     cache_ttl: int = 7 * 24 * 3600
     # ── 아이디어당 1회 조사 (RESEARCH_PLAN 2단계) ──
     # True 면 문항 조사가 아이디어 공통 조사 결과를 그대로 물려받고, 모자란 각도만 보완 검색한다.
@@ -94,6 +95,7 @@ class ResearchConfig:
             max_pages_to_extract=int(rc.get("max_pages_to_extract", 6)),
             max_pages_to_fetch=int(rc.get("max_pages_to_fetch", 0)),
             fetch_timeout=int(rc.get("fetch_timeout", 15)),
+            fetch_concurrency_global=int(rc.get("fetch_concurrency_global", 64)),
             share_idea_research=bool(rc.get("share_idea_research", True)),
             max_followup_queries=int(rc.get("max_followup_queries", 2)),
             max_followup_pages=int(rc.get("max_followup_pages", 3)),
@@ -119,7 +121,10 @@ class ResearchConfig:
 # ── 전역 세마포어 (2026-09-04) ──
 # asyncio.Semaphore 는 처음 쓰인 이벤트 루프에 묶인다 — 테스트처럼 루프가 바뀌면 "다른 루프" 오류가 나므로 루프마다 하나씩 둔다.
 EXTRACT_GLOBAL = 8          # apply_runtime_limits 가 config 값으로 덮는다. fetch_page 는 cfg 를 못 받아 모듈 값을 쓴다
+FETCH_GLOBAL = 64           # 페이지 받기(HTTP GET) 동시 상한. 같은 이유로 모듈 값 (2026-09-08)
 _sems: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict]" = weakref.WeakKeyDictionary()
+# 페이지 받기용 공유 클라이언트 (2026-09-08). httpx.AsyncClient 는 커넥션 풀을 들고 있고 루프에 묶이므로 루프마다 하나.
+_https: "weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, object]" = weakref.WeakKeyDictionary()
 
 
 def _sem(name: str, n: int) -> asyncio.Semaphore | None:
@@ -136,8 +141,9 @@ def _sem(name: str, n: int) -> asyncio.Semaphore | None:
 
 def apply_runtime_limits(cfg: "ResearchConfig") -> None:
     """config 의 전역 상한을 모듈·추출 프로세스 풀에 반영한다 (main 이 ResearchConfig.from_config 를 부를 때)."""
-    global EXTRACT_GLOBAL
+    global EXTRACT_GLOBAL, FETCH_GLOBAL
     EXTRACT_GLOBAL = int(cfg.extract_concurrency_global or 0)
+    FETCH_GLOBAL = int(getattr(cfg, "fetch_concurrency_global", 0) or 0)
     extract_proc.configure(cfg.extract_pool_size)
 
 
@@ -246,22 +252,66 @@ def rank_results(results: list[dict]) -> list[dict]:
     return sorted(results, key=score)
 
 
+def _http() -> "object":
+    """이 루프의 공유 HTTP 클라이언트 (2026-09-08).
+
+    전에는 페이지 한 장마다 httpx.AsyncClient 를 새로 만들고 버렸다 — 장마다 DNS 조회 + TCP + TLS 악수를
+    처음부터 다시 했다는 뜻이다. 조사 워커 80 이 각자 최대 6장을 동시에 받으므로 소켓이 수백 개씩 열렸다
+    (60명 부하 실측: 1장 받는 데 가벼울 때 4.8초 → 부하 때 10.6초).
+    하나를 공유하면 같은 도메인(네이버·언론사 등 반복되는 곳)에 커넥션을 재사용한다.
+    """
+    import httpx
+    loop = asyncio.get_running_loop()
+    c = _https.get(loop)
+    if c is None or c.is_closed:
+        n = FETCH_GLOBAL or 100
+        c = httpx.AsyncClient(
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (modoo-writer research)"},
+            # 풀 대기(pool)는 시간 제한을 두지 않는다 — 세마포어가 이미 입구를 막고 있어 여기서 또 끊으면
+            # 페이지가 조용히 사라진다(빈 문자열 = 근거 없는 문항). 연결·읽기만 제한한다.
+            timeout=httpx.Timeout(15.0, pool=None),
+            limits=httpx.Limits(max_connections=n, max_keepalive_connections=max(8, n // 2),
+                                keepalive_expiry=30.0))
+        _https[loop] = c
+    return c
+
+
+async def aclose_http() -> None:
+    """종료 때 공유 클라이언트를 닫는다 (main.lifespan)."""
+    loop = asyncio.get_event_loop()
+    c = _https.pop(loop, None)
+    if c is not None:
+        try:
+            await c.aclose()
+        except Exception:
+            pass
+
+
 async def fetch_page(url: str, timeout: int = 15) -> str:
     """HTML → 본문 텍스트 (trafilatura). 실패/비HTML 이면 빈 문자열."""
     if not url or url.lower().split("?")[0].endswith(SKIP_EXT):
         return ""
-    import httpx
     timing.count("fetch")          # 성공·실패 무관하게 '나간 요청' 을 센다
+    # 전역 상한 (2026-09-08): 조사 워커 80 × 페이지 6 = 동시 480 소켓까지 열릴 수 있었다. 추출(extract)에는
+    # 상한이 있었는데 그 앞단인 받기에는 없어서, 부하가 오면 여기부터 늘어졌다. 넉넉히 잡되(오늘 부하에서는
+    # 걸리지 않는 값) 병적인 폭주만 막는다 — 실제로 걸리는지는 fetch_wait_ms 로 본다.
+    sem = _sem("fetch", FETCH_GLOBAL)
+    tw = time.monotonic()
+    if sem is not None:
+        await sem.acquire()
     t0 = time.monotonic()
+    timing.count("fetch_wait_ms", int((t0 - tw) * 1000))
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True,
-                                     headers={"User-Agent": "Mozilla/5.0 (modoo-writer research)"}) as c:
-            r = await c.get(url)
-            if r.status_code >= 400 or "html" not in (r.headers.get("content-type") or "html"):
-                return ""
-            html = r.text
+        r = await _http().get(url, timeout=timeout)
+        if r.status_code >= 400 or "html" not in (r.headers.get("content-type") or "html"):
+            return ""
+        html = r.text
     except Exception:
         return ""
+    finally:
+        if sem is not None:
+            sem.release()
     timing.count("fetch_ms", int((time.monotonic() - t0) * 1000))
     # 추출은 별도 프로세스에서 (extract_proc) — lxml 이 C 레벨에서 죽어도 API 프로세스는 살아남는다.
     # 전역 상한(EXTRACT_GLOBAL): 조사 워커 80 이 한꺼번에 받아온 페이지가 풀(8)에 줄을 서는 시간을 대기로 따로 센다 (2026-09-04).

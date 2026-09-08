@@ -99,6 +99,7 @@ async def lifespan(_: FastAPI):
     if research_client is not client:
         await research_client.queue.stop()
     storage.close()
+    await research_pipeline.aclose_http()       # 페이지 받기용 공유 HTTP 클라이언트 정리 (2026-09-08)
     research_pipeline.extract_proc.shutdown()   # 본문 추출 프로세스 풀 정리
 
 

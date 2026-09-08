@@ -822,3 +822,60 @@ def test_kci_pages_are_never_indexed():
     assert P.indexable({"url": "https://kci.go.kr/x", "source_type": "news"}) is False
     assert P.indexable({"url": "https://evil.com/kci.go.kr/x", "source_type": "web"}) is True   # 경로 위장은 도메인이 아니다
     assert P.indexable({"url": "https://a.co/x", "from_vectorstore": True}) is False
+
+
+# ── 페이지 받기: 커넥션 재사용 + 전역 상한 (2026-09-08) ──
+
+@pytest.mark.asyncio
+async def test_fetch_page_reuses_one_client(monkeypatch):
+    """호출마다 새 클라이언트를 만들지 않는다 — 장마다 TLS 악수를 다시 하던 것이 부하 때 늘어짐의 한 축이었다."""
+    import httpx
+
+    made = []
+    real = httpx.AsyncClient
+
+    class Counted(real):
+        def __init__(self, *a, **k):
+            made.append(k)
+            super().__init__(*a, **k)
+
+        async def get(self, url, **k):
+            return httpx.Response(200, headers={"content-type": "text/html"}, text="<html>본문</html>")
+
+    monkeypatch.setattr(httpx, "AsyncClient", Counted)
+    monkeypatch.setattr(P, "_https", __import__("weakref").WeakKeyDictionary())
+    monkeypatch.setattr(P.extract_proc, "extract", lambda html, **k: _aret("본문 텍스트"))
+    for i in range(5):
+        assert await P.fetch_page(f"https://ex.co.kr/{i}") == "본문 텍스트"
+    assert len(made) == 1                                   # 다섯 장을 한 클라이언트로
+    assert made[0]["limits"].max_connections == P.FETCH_GLOBAL
+
+
+@pytest.mark.asyncio
+async def test_fetch_page_respects_global_limit(monkeypatch):
+    """동시에 받는 장수가 상한을 넘지 않고, 기다린 시간이 계측에 남는다."""
+    import httpx
+
+    live = {"now": 0, "peak": 0}
+
+    class Slow(httpx.AsyncClient):
+        async def get(self, url, **k):
+            live["now"] += 1
+            live["peak"] = max(live["peak"], live["now"])
+            await asyncio.sleep(0.02)
+            live["now"] -= 1
+            return httpx.Response(200, headers={"content-type": "text/html"}, text="<html>본문</html>")
+
+    monkeypatch.setattr(httpx, "AsyncClient", Slow)
+    monkeypatch.setattr(P, "_https", __import__("weakref").WeakKeyDictionary())
+    monkeypatch.setattr(P, "_sems", __import__("weakref").WeakKeyDictionary())
+    monkeypatch.setattr(P, "FETCH_GLOBAL", 3)
+    monkeypatch.setattr(P.extract_proc, "extract", lambda html, **k: _aret("본문"))
+    from backend import timing
+    monkeypatch.setattr(P, "timing", timing)
+    timing._counts.clear()
+    await asyncio.gather(*(P.fetch_page(f"https://ex.co.kr/{i}") for i in range(12)))
+    assert live["peak"] <= 3                                # 상한을 넘지 않는다
+    assert "fetch_wait_ms" in timing._counts                # 기다린 시간이 남는다
+    timing._counts.clear()
+
