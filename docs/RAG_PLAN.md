@@ -42,7 +42,7 @@
 | 색인 단위 | 추출된 본문을 청크(약 512토큰)로 | LlamaIndex `SentenceSplitter` 기본 |
 | 메타데이터 | url, title, publisher, date(기사 날짜), fetched_at, source_kind(news/stats/report) | **date 필수** — 신선도 필터용 |
 | 중복 제거 | url 해시로 upsert (같은 url 재색인 안 함) | |
-| 임베딩 | 로컬 (Ollama `bge-m3` 또는 HuggingFace 한국어 모델) | **결정 필요** — 아래 5절 |
+| 임베딩 | 로컬 Ollama **`bge-m3`** | ✅ 결정·적용됨 (5절 [x]). 운영 중 — Ollama 가 죽으면 색인·조회를 건너뛰고 웹 검색만 한다(`degraded`) |
 | 벡터 스토어 | 1단계: LlamaIndex 기본 persist(디스크). 커지면 Chroma 등 검토 | `backend/.vectorstore/` (커밋 금지, .gitignore 추가) |
 | 신선도 | 뉴스류는 date 2년 초과 시 검색 결과에서 제외 또는 감점 | 낡은 통계 인용 방지 |
 

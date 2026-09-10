@@ -82,7 +82,7 @@ Q6(사업 분야)는 AI 가 고르지 않고 사람이 UI 의 선택지(modoo �
 | 벡터DB | LlamaIndex + Ollama `bge-m3` 임베딩 | `backend/.vectorstore/` (색인만, 조회는 "충분하면 웹 검색 생략" 단계까지) |
 | DB | SQLAlchemy Core + SQLite(WAL) ×2 (서비스/백업) | URL 만 바꾸면 PostgreSQL |
 | 배포 | nginx(50001) → NSSM 서비스 `mochang-api`(8000) | 같은 PC 의 bustartup.kr nginx 에 얹혀 있음 |
-| 테스트 | pytest + pytest-asyncio, 모델·네트워크 호출 0 | **466 passed** (2026-09-07 밤) |
+| 테스트 | pytest + pytest-asyncio, 모델·네트워크 호출 0 | **483 passed** (2026-09-10) |
 
 ---
 
@@ -214,7 +214,6 @@ mochang-bot/
 ├── CLAUDE.md                     Claude Code 작업 지침 (세션 시작 순서, 실행·검증 명령, 규칙)
 ├── PROGRESS.md                   세션 인수인계 일지 — 맨 위 절이 최신
 ├── README.md                     실행 방법 · API 표 · 자주 겪는 문제
-├── REPORT.md                     (보고서)
 ├── .env.example                  OPENROUTER_API_KEY · NAVER_* · DATA_GO_KR · KOSIS · ECOS · KCI · KIPRIS 키 자리
 ├── pytest.ini                    asyncio_mode=auto, 마커 outline/polish/refine
 ├── requirements-dev.txt          pytest, pytest-asyncio (+ backend/requirements.txt)
@@ -272,10 +271,11 @@ mochang-bot/
 │       ├── i18n.jsx              LANGS · DICT(ko/en/zh/ja ≈200키) · makeT · LangContext
 │       └── index.css             @import "tailwindcss" + `.modoo-link` 컴포넌트 CSS (바로가기 버튼 사선, §25-3)
 │
-├── tests/                        23개 파일 466건, 모델·네트워크 0 (conftest 가 DB·계측 격리, 후처리 기본 OFF)
+├── tests/                        23개 파일 483건, 모델·네트워크 0 (conftest 가 DB·계측 격리, 후처리 기본 OFF)
 ├── scripts/                      운영·점검 스크립트 (§20). `svc/` 는 서비스 등록용 런처 bat + ps1
 │   └── svc/  mochang-dashboard.bat (cp949+CRLF — cmd 가 배치를 OEM 으로 읽는다) · add-dashboard-service.ps1 (BOM 필요)
-├── docs/                         설계·품질·부하 문서, measurements/, prompt_backups/, tools/
+├── docs/                         **사람이 읽는 것만.** 설계·품질·부하 문서 + measurements/ · reports/ · prompt_backups/ · tools/
+│                                 (런타임이 읽는 프롬프트는 backend/prompts/ 에만 있다 — §27)
 └── k8s/                          vllm-qwen(-b)-deployment.yaml · vane-deployment.yaml · backup/vllm-llama
 ```
 
@@ -1291,15 +1291,16 @@ https://www.bustartup.kr:50001/            nginx (Desktop\nginx\conf\nginx.conf 
    ├── /            → frontend/dist (정적, SPA fallback, index.html no-store)
    └── /api/        → proxy_pass http://127.0.0.1:8000/   (끝 슬래시가 /api 접두어를 떼어냄)
                         └── NSSM 서비스 mochang-api = uvicorn backend.main:app --port 8000
-                              └── http://localhost:30801/v1  (ssh -N -L 30801:localhost:30801 gpu)
+                              └── http://localhost:30801/v1  (NSSM 서비스 mochang-tunnel = ssh -N -L 30801:localhost:30801 gpu)
                                     └── k8s Service vllm-qwen (NodePort 30801) → 파드 vllm-qwen(GPU2) · vllm-qwen-b(GPU1)
 
 http://127.0.0.1:8001/                     NSSM 서비스 mochang-dashboard = scripts/admin_dashboard.py (읽기 전용, 이 PC 에서만)
+NSSM 서비스 mochang-tunnel                 ssh -N -L 30801:localhost:30801 gpu  (계정 .\bon505, 죽으면 5초 뒤 재시작)
 작업 스케줄러 mochang-watchdog             5분마다 pythonw scripts/watchdog.py --notify  (로그온한 사용자 화면에 팝업)
 작업 스케줄러 mochang-db-snapshot          매일 04:30 오프사이트 백업
 ```
 
-**항상 떠 있어야 하는 것** (2026-09-07 기준):
+**항상 떠 있어야 하는 것** (2026-09-10 기준):
 
 | 이름 | 방식 | 창 필요 | 재부팅 후 |
 |---|---|---|---|
@@ -1307,7 +1308,7 @@ http://127.0.0.1:8001/                     NSSM 서비스 mochang-dashboard = sc
 | `mochang-dashboard` (8001) | NSSM 서비스 | ✗ | 자동 |
 | `mochang-watchdog` | 작업 스케줄러 5분 (`/IT` — 로그온 세션에서 실행해야 팝업이 보인다) | ✗ | 로그온 후 자동 |
 | `mochang-db-snapshot` | 작업 스케줄러 매일 04:30 | ✗ | 로그온 후 자동 |
-| **SSH 터널 (30801)** | **콘솔 프로세스** | **○** | **수동** ← 유일하게 남은 것 |
+| **`mochang-tunnel`** (30801) | NSSM 서비스 (2026-09-10 등록) | ✗ | 자동 |
 
 - 프론트를 고치면 **`cd frontend; npx vite build`** 를 다시 해야 반영된다. `npx vite build --outDir dist-check` 는 문법 검증용(gitignore). **`dist` 빌드는 즉시 공개 배포**이므로 승인 뒤에만.
 - 백엔드(코드·프롬프트·config)를 고치면 **`nssm restart mochang-api`** (관리자 PowerShell, 큐가 빌 때). 재시작 때 `storage.init()` 이 스키마 이행(ALTER TABLE)을 수행한다.
@@ -1317,7 +1318,19 @@ http://127.0.0.1:8001/                     NSSM 서비스 mochang-dashboard = sc
   대상이 `/opt` 가 아니라 GPU 서버 **홈**인 이유: `/opt` 는 root 권한이 필요한데 공유 GPU 서버에 시스템 변경을 남기지 않으려고. SSH 는 ssh-agent 없이 키 파일로 붙으므로 무인 실행에서도 동작한다(실행 검증 완료).
   **원격 권한·보관(2026-09-04)**: 스냅샷에는 학생들의 아이디어·경력이 그대로 들어 있고 GPU 서버는 공유다 → 복사 뒤 디렉터리 `700`·파일 `600` 으로 조인다(기본은 775/644 였다). 원격 보관은 `--remote-keep-days`(기본 30일, 로컬 7일보다 길게 — 오프사이트 사본이 본체다)로 `find -name 'mochang-*.sqlite.gz' -mtime +30 -delete`. 0 이면 정리하지 않는다(무한 누적 주의). 정리·권한 단계가 실패해도 사본이 도착했으면 백업은 성공으로 본다.
 - **8000 포트**: `127.0.0.1:8000` 전용 바인딩 확인(2026-09-04) — nginx 를 우회한 직접 접속 경로가 없다.
-- **SSH 터널 서비스화(권장, 미적용)**: `nssm install mochang-tunnel ssh "-N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 30801:localhost:30801 gpu"` 로 터널을 NSSM 서비스로 두면 끊겨도 재시작된다. `/health.llm_reachable` 이 False 면 터널 또는 vLLM 이 죽은 것이고, **그동안 생성·번역이 전부 실패한다** — 워치독이 최우선으로 보는 항목이 이것이다.
+- **SSH 터널 서비스화(2026-09-10 적용 완료)**: `mochang-tunnel` 이 NSSM 서비스로 등록돼 **부팅 시 자동 시작, 죽으면 5초 뒤 재시작**한다. 등록에 쓴 값:
+
+  | 항목 | 값 | 이유 |
+  |---|---|---|
+  | 실행 파일 | `C:\WINDOWS\System32\OpenSSH\ssh.exe` | |
+  | 인자 | `-N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 30801:localhost:30801 gpu` | `ExitOnForwardFailure` 로 포워딩 실패를 조용히 넘기지 않게, `ServerAlive*` 로 좀비 터널을 스스로 끊게 |
+  | `ObjectName` | **`.\bon505`** | **LocalSystem 으로 두면 `~/.ssh/id_gpu` 와 `gpu` 호스트 별칭을 못 찾아 붙지 않는다.** `mochang-api` 와 같은 계정 |
+  | `Start` | `SERVICE_AUTO_START` | 재부팅 후 자동 |
+  | `AppExit Default` | `Restart` (nssm 기본값 — `set` 하면 "Reset ... to its default" 로 표시되는 게 정상) | |
+  | `AppRestartDelay` | `5000` | |
+
+  `/health.llm_reachable` 이 False 면 터널 또는 vLLM 이 죽은 것이고, **그동안 생성·번역이 전부 실패한다** — 워치독이 최우선으로 보는 항목이 이것이다.
+  **이 값은 30초 캐시다**(`main.py` `_llm_reachable`) — 터널을 막 살린 직후에는 False 가 최대 30초 더 보인다. 놀라지 말 것.
 - **배포 안전 창**: `scripts/deploy_window.py` 로 두 큐가 비고 최근 요청이 없는 순간을 잡는다. 진행 중 작업은 메모리에만 있어(`JobQueue._jobs`) 재시작하면 사라지고, 프론트 `followJob` 은 404 를 받는 즉시 `JobExpiredError` 를 던진다 — 생성·번역은 다시 누르면 되지만 **인테이크(44~470초)를 맞으면 학생이 처음부터** 해야 한다.
 - **알림 수단**: `msg.exe` 는 이 PC 에서 `Access is denied` 로 **조용히 실패한다**(실측). 워치독은 권한이 필요 없는 `WScript.Shell Popup`(60초 자동 닫힘)을 먼저 쓰고 msg.exe 는 대비책으로 둔다. 상시 감시를 화면 밖으로 보내려면 웹훅이 맞다 — Discord·Telegram·Slack 모두 이 서버에서 200 으로 도달 확인(2026-09-07).
 - **서비스 제어 권한**: 이 계정은 `mochang-api` 를 stop/start 할 수 없다(`nssm start` → `OpenService(): 액세스가 거부되었습니다`). 재시작은 항상 사용자의 **관리자 PowerShell** 에서.
@@ -1378,7 +1391,7 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | `test_timing.py` | 계측 격리·소스 카운터·브레이커 |
 | `test_hardening.py` | 2026-09-04 보강: 접근 열쇠·XFF 마지막 항목·초안 단위 상한·IP 천장·인테이크 시간당·번역 상한·동기 404·/health·신선도·Ollama 다운·오프라인 임베딩 격리·q7_1·db_snapshot·**full_stack**(운영 스위치 전부 ON 으로 8문항 한 바퀴, 마커 `full_stack`) |
 
-실행: `.venv\Scripts\python -m pytest -q` → **466 passed** (2026-09-07 밤). 커밋 전 필수.
+실행: `.venv\Scripts\python -m pytest -q` → **483 passed** (2026-09-10). 커밋 전 필수.
 
 > 단위 테스트가 못 잡는 것: **요청 안의 쓰기 순서**와 **실제 데이터 크기**(§24-4-1), 그리고 **React 상태 타이밍**(§25-2 — 세 건 다 실서비스에서만 드러났다). 배포마다 `?test=1` 로 한 바퀴 도는 스모크를 절차로 삼는다.
 
@@ -1526,7 +1539,7 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | 사소 | 동기 엔드포인트(`/generate` 등 7개)가 큐 상한·저장 규칙을 우회 | 프론트가 안 쓰는데 열려 있었음 | `sync_endpoints: false` → `Depends(_require_sync)` 404. 개발·테스트는 `MOCHANG_SYNC_ENDPOINTS=1`. `/generate/dry-run` 은 모델 호출이 없어 열어 둠. 프론트 `intakeRegenerate` → `/jobs/intake_regenerate` | `test_sync_endpoints_are_closed_unless_enabled` |
 | 사소 | `GenerateRequest.style` 기본 `"story"` (운영은 logic) | 스키마 기본값 | `"logic"` | `test_generate_request_defaults_to_logic_style` |
 | 사소 | 운영 구성(polish+outline+refine 전부 ON)으로 도는 통합 테스트가 없음 | conftest 가 셋을 기본 OFF | `test_full_stack_*` — 마커 `full_stack`, 가짜 모델로 8문항 한 바퀴, 골자 1회·1인칭 통일·한도 준수 확인 | 같은 테스트 |
-| 사소 | SSH 터널이 끊기면 아무도 모르고 재시작도 수동 | 터널이 콘솔 프로세스 | `/health.llm_reachable`(모델 서버 `/models` 2초, 30초 캐시). 터널 NSSM 서비스화는 **명령만 문서화**(§18-1, 관리자 필요·미적용) | — |
+| 사소 | SSH 터널이 끊기면 아무도 모르고 재시작도 수동 | 터널이 콘솔 프로세스 | `/health.llm_reachable`(모델 서버 `/models` 2초, 30초 캐시). 터널 NSSM 서비스화는 **명령만 문서화**(§18-1, 관리자 필요·미적용) → **2026-09-10 실제 등록(§26)** | — |
 
 ### 24-2. 새 요청 흐름 (열쇠가 오가는 자리)
 
@@ -1716,5 +1729,106 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | **번역 전용 큐 + vLLM 전역 세마포어** | 40명 시나리오 대비. **둘은 다른 문제를 푼다** — 전용 큐는 번역이 조사·인테이크를 밀어내는 것(공유 FIFO)을, 세마포어는 번역이 생성을 밀어내는 것(priority 50 < 100)을 막는다. 상한 30 은 *작업* 수라 카드 번역이 2청크로 갈라지면 실제 vLLM 호출은 60까지 간다 |
 | **재시도 지터** | 프론트 429 재시도가 5초 고정이라 맞은 요청들이 같은 순간에 다시 몰린다(서버 큐 재시도에는 이미 지터가 있다). 부하 회차에 함께 |
 | **설정 핫리로드** | 상한값은 모듈 임포트 시점 상수라 바꾸려면 재시작해야 한다. 전용 큐 작업과 같은 배포에 넣으면 이후 튜닝이 무중단이 된다 |
-| **SSH 터널 서비스화** | 유일하게 콘솔 프로세스로 남아 있다. 죽으면 생성·번역이 전부 실패한다 |
+| ~~**SSH 터널 서비스화**~~ | **2026-09-10 완료** — `mochang-tunnel` NSSM 서비스(§26). 이 항목은 그날 실제 6시간 30분 장애로 현실이 됐다 |
 | **첫 화면 이탈 79%** | 사이트를 연 279 네트워크 중 인테이크까지 간 것은 59개. 유실이 아니라 UX 문제라 별도로 볼 항목 |
+
+---
+
+## 26. 2026-09-10 — 6시간 30분 장애와 그 뒤 조치
+
+재부팅 하나가 **서로 다른 두 지점**을 동시에 무너뜨렸다. 증상이 "사이트가 안 열림"과 "글 생성 실패"로 달라 별개 사고처럼 보였지만 방아쇠는 하나다.
+
+### 26-1. 타임라인
+
+| 시각 | 일 |
+|---|---|
+| 03:26:15 | nginx 첫 `bind() to 0.0.0.0:8080 failed (10013)` |
+| **03:27:30** | **PC 재부팅** |
+| 03:27:39 | `iphlpsvc`(IP Helper)가 부팅과 함께 8080 선점 |
+| 03:27~09:5x | nginx 기동 실패 반복 → 443·80·**50001 전부 다운**. SSH 터널도 재부팅으로 소실 |
+| ~09:45 | NSSM 이 2분마다 재시도, **186회 연속 실패** 후 `vsp-nginx` 를 `PAUSED` 로 |
+| 09:41 | 사용자 로그온 → 워치독이 그제서야 "심각 — 모델 서버 연결 끊김" 팝업 |
+| 09:49~09:51 | 학생 작업 **12건 실패**(전부 `APIConnectionError`) · 429 15건 |
+| ~09:53 | portproxy 규칙 삭제 + `vsp-nginx` 재시작 → 사이트 복구 |
+| 09:54 | SSH 터널 재기동 → `llm_reachable` true, 생성 복구 |
+
+### 26-2. 원인 ① — 유령 portproxy 규칙이 8080 을 선점
+
+레지스트리에 `0.0.0.0:8080 → 172.17.0.2:8080` 규칙(도커 브리지 대역)이 남아 있었다. **이 PC 엔 도커도 WSL 도 없고** 대상은 응답이 없다. portproxy 는 레지스트리에 영구 저장돼 재부팅해도 되살아나고, 이를 구현하는 `iphlpsvc` 가 nginx 보다 먼저 떠서 8080 을 잡는다.
+
+**nginx 는 `listen` 하나만 실패해도 전체 기동을 포기한다.** 그래서 8080 과 무관한 443·80·50001 까지 같이 죽었다. 밖에서 502 가 아니라 **연결거부(000)** 가 나온 것이 "앱이 아니라 nginx 자체가 없다"는 결정적 단서였다.
+
+```
+netsh interface portproxy show all                                    # 규칙 확인
+netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=8080
+sc.exe stop vsp-nginx ; sc.exe start vsp-nginx                        # PAUSED 는 stop→start 로 푼다
+```
+
+> **미해결**: 이 규칙을 누가 만들었는지 못 찾았다. 다음 재부팅 뒤 `netsh interface portproxy show all` 이 비어 있는지 한 번 확인해야 재발 여부가 판정된다.
+
+### 26-3. 원인 ② — SSH 터널이 재부팅에서 살아나지 않음
+
+Qwen 은 원격 GPU 서버에 있고 이 PC 는 `ssh -L 30801` 로 붙는다. 이 터널만 서비스가 아니라 콘솔 프로세스여서 재부팅과 함께 사라졌다. 백엔드는 `localhost:30801` 에 연결조차 못 해 **`APIConnectionError: Connection error.`** 를 던진다.
+
+**GPU 서버·모델은 정상이었다** — 파드 `vllm-qwen`·`vllm-qwen-b` 가 7일째 재시작 0회, GPU 각 88 GB 점유 중이었다. 즉 이 사고에서 원격은 무죄이고 이 PC 의 터널만 문제였다. 진단할 때 원격부터 의심하지 말 것.
+
+**조치**: `mochang-tunnel` NSSM 서비스 등록(§18-1 표). 이제 부팅 시 자동 시작하고 죽으면 5초 뒤 재시작한다. **`ObjectName` 을 `.\bon505` 로 두는 것이 핵심** — LocalSystem 은 `~/.ssh/id_gpu` 와 `gpu` 별칭을 못 찾는다.
+
+### 26-4. 이 사고가 드러낸 감시의 구멍
+
+워치독은 **제대로 동작했다**(09:41·09:46·09:51 세 번 "심각" 판정). 문제는 알림 방식이다 — `WScript.Shell Popup` 은 **로그온한 세션 화면에만** 뜬다. 아무도 로그인하지 않은 03:27~09:41 의 **6시간 14분을 통째로 놓쳤다.**
+
+| | 2026-09-01 | 2026-09-10 |
+|---|---|---|
+| 다운 | 25시간 | 6시간 30분 |
+| 발견 경로 | 사람이 우연히 | 사람이 우연히 |
+
+**PC 안의 감시는 PC 가 죽으면 같이 죽고, 화면 알림은 아무도 안 볼 때 무의미하다.** 외부 감시(UptimeRobot 등)는 여전히 미등록이며, 이 두 번의 장애 모두 `/` 하나만 걸어 뒀어도 5분 안에 잡혔을 종류였다.
+
+### 26-5. 덤으로 확인된 것
+
+- **오늘 04:30 오프사이트 백업이 건너뛰어졌다** — 재부팅 직후라 로그온 상태가 아니었고, 이 예약 작업은 "로그인해 있을 때만" 실행된다. 17:09 에 수동 실행해 채웠다(초안 226건, 2,569 KB). 원격에 09-04~09-10 7개가 연속으로 쌓여 있다.
+- **`/health.llm_reachable` 은 30초 캐시**라, 터널을 살린 직후 확인하면 False 가 최대 30초 더 보인다. 실제로 이날 사용자가 이걸 보고 실패로 오해했다.
+- **`nssm set … AppExit Default Restart` 는 "Reset parameter to its default" 로 출력된다** — `Restart` 가 nssm 기본값이라서다. 정상이며, `nssm get mochang-tunnel AppExit Default` 로 확인된다.
+
+---
+
+## 27. 문서와 프롬프트의 경계 (2026-09-10 정리)
+
+프롬프트 사본이 배포 폴더 옆에 쌓여 "어느 것이 진짜인지" 가 흐려졌다. 기준을 **한 질문**으로 고정한다.
+
+> ### 런타임이 읽는가?
+
+| 자리 | 무엇 | 규칙 |
+|---|---|---|
+| `backend/prompts/**` (34개) | LLM 이 읽는 프롬프트 | **제품 자산.** 여기 있는 것만 배포된다. **사본·백업·기록을 두지 않는다** |
+| `docs/**` | 사람·다음 세션이 읽는 문서 | 런타임은 절대 읽지 않는다 |
+| git 커밋·태그 | 프롬프트 옛 판본 | **이력의 유일한 보관소** |
+
+### 왜 `backend/prompts/` 는 옮기지 않았나
+
+`assemble.py:13` 이 `PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"` 로 위치를 직접 잡는다.
+옮기면 코드 수정과 배포 위험이 생기는데, **위치 자체는 이미 옳다**(제품 자산이 제품 코드 옆).
+문제는 프롬프트가 아니라 그 옆에 붙어 있던 사본이었다.
+
+`PROMPTS_DIR` 은 정확 경로이고 **프롬프트 폴더를 glob 으로 훑는 코드는 한 곳도 없다** — 사본이 실행에 섞일 위험은 원래 없었다. 위험은 사람이 헷갈리는 쪽이었다.
+
+### 정리 결과
+
+| 전 | 후 |
+|---|---|
+| 프롬프트 백업 **5벌 / 2곳** (`backend/prompts.backup-*` ×2, `backend/prompts.before-fix`, `docs/prompt_backups/2026-09-02`, + 태그) | **2벌 / 1곳** (`docs/prompt_backups/2026-09-01-2012`, `2026-09-01-before-fix`) + 태그 |
+| 루트에 `REPORT.md` | `docs/reports/2026-09-01-prompt-diagnosis.md` |
+
+지운 두 벌은 git 에 이미 있어 언제든 꺼낼 수 있다 — **이력 손실 0**:
+
+    git show fcdb1b2:backend/prompts.backup-20260901-130535/questions/q1.md
+    git show prompts-before-mvp-2026-09-02:backend/prompts/questions/q1.md
+
+살린 두 벌은 `.gitignore` 때문에 **git 에 한 번도 안 들어간 상태**였다(디스크에만 존재). 그래서 지우지 않고 `docs/` 로 옮겨 커밋했다.
+
+### 앞으로
+
+- 프롬프트를 크게 고치기 전에는 **폴더 사본이 아니라 태그**: `git tag prompts-<날짜>-<이유>`
+- `.gitignore` 의 `backend/prompts.*/` 가 배포 폴더 옆 사본을 막는다
+

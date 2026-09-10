@@ -6,6 +6,19 @@
 
 modoo.or.kr은 자동 접근이 차단되어 있어 폼 자동 입력은 하지 않고, **복사·붙여넣기 방식**으로 동작합니다.
 
+> ### 운영 현황 (2026-09-10)
+>
+> | | |
+> |---|---|
+> | 공개 주소 | `https://bustartup.kr:50001/` (nginx → `mochang-api` 8000) |
+> | 운영 모델 | **`Qwen/Qwen3.8-27B-FP8`** on vLLM — GPU 서버 k8s 복제본 2개, SSH 터널 `localhost:30801` |
+> | 상시 프로세스 | NSSM 서비스 `mochang-api` · `mochang-dashboard` · `mochang-tunnel` / 예약 작업 `mochang-watchdog`(5분) · `mochang-db-snapshot`(매일 04:30). **수동 기동 항목 없음** |
+> | 테스트 | `483 passed`, 모델·네트워크 호출 0 |
+>
+> **아래 문서의 OpenRouter 관련 절(무료 한도·폴백·배지)은 개발 초기 구성입니다.**
+> 지금 생성 경로는 OpenRouter 를 쓰지 않습니다(`config.yaml fallback: false`, 운영 모델에 일일 한도 없음).
+> 운영 구조의 정확한 기준은 `docs/SYSTEM_ARCHITECTURE.md` 입니다.
+
 ---
 
 ## 무엇을 만들어 주나
@@ -100,6 +113,9 @@ http://localhost:5173 을 열면 화면 상단에 `모델: minimax/minimax-m3:fr
 ---
 
 ## OpenRouter 무료 한도와 대응
+
+> ⚠️ **이 절은 개발 초기(OpenRouter 무료 모델) 구성 기록입니다.** 지금 운영은 자체 GPU 서버의 Qwen 이라
+> 일일 한도가 없고 폴백도 꺼져 있습니다. OpenRouter 로 되돌릴 때만 유효합니다.
 
 [OpenRouter 공식 문서](https://openrouter.ai/docs/api-reference/limits) 기준 (2026-08-31 확인):
 
@@ -267,12 +283,12 @@ API 문서는 백엔드 실행 후 http://localhost:8000/docs (Swagger) 에서 �
 - [x] Q4-2 멘토링 카드(항상 생성) + 카드 재생성("다른 보기 보기", 고른 보기는 유지) — 2026-09-01
 - [x] 웹 조사 API (`/research`) — Vane/ddgs 검색 → 출처·원문 있는 사실 → 참고자료 주입 (UI 연결은 미구현)
 - [x] 동시성 층 — 큐·워커·백오프·`/jobs` 폴링
-- [ ] 로컬 70B 모델(Ollama/vLLM) 전환 및 모델 품질 비교 (같은 입력으로 MiniMax 무료 vs Llama 70B)
-- [ ] Vane 의 채팅 LLM 을 로컬 Ollama 에 연결 → 검색이 무료 한도를 안 먹게 (`vane_setup.py` ollama 옵션)
+- [x] 로컬 모델(vLLM) 전환 및 품질 비교 — **2026-09-02 `Qwen3.8-27B-FP8` 채택**(라마 70B 와 A/B: 32초/1,609자 vs 61초/1,153자). 09-03 복제본 2개로 처리량 2배
+- [x] ~~Vane 의 채팅 LLM 을 로컬 Ollama 에 연결~~ — **Vane 자체를 껐습니다**(`enabled: false`). ddgs 가 한국어 품질이 더 나아 주 경로
 - [ ] **조사 단계 UI** — 인테이크 뒤 주제 단위 조사(시장 통계 / 기존 서비스 / 고객 페인포인트 / 유사 BM / 정책 / 논문) → 사실 카드 체크 → 문항별 참고자료 주입
 - [ ] **조사 기반 카드** — customer/problem/alternative/revenue 보기를 검색 결과 근거로 생성, 보기마다 출처 표시
-- [ ] `/verify` 결과 UI(누락 요소·근거 없는 문장 하이라이트), `/jobs` 폴링으로 프론트 전환
-- [ ] 무료 한도 배지 정확도 — OpenRouter management key 로 `/api/v1/activity` 실제 집계 표시 (로컬 카운터는 성공 시에만)
+- [x] `/jobs` 폴링으로 프론트 전환 — 2026-09-02 (문항별 파이프라인 + 인테이크 대기 순번). `/verify` 결과 UI 는 여전히 미구현
+- [ ] ~~무료 한도 배지 정확도~~ — 로컬 모델 전환으로 무의미해짐
 - [ ] 로컬 문서 RAG (`/ingest`) — **LlamaIndex** (2026-09-01 결정)
 - [ ] `styles/story.md`·`plain.md` 품질 다듬기 (기본은 논리·근거형)
 
@@ -312,7 +328,7 @@ python -m backend.rag.vane_setup          # .env 의 키로 OpenRouter + minimax
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest                          # 456 tests (2026-09-04), 모델·네트워크 호출 없음 (전부 mock)
+python -m pytest                          # 483 tests (2026-09-10), 모델·네트워크 호출 없음 (전부 mock)
 python scripts/db_snapshot.py --remote gpu:/opt/mochang-backup   # 서비스 DB 스냅샷(.sqlite.gz) + 다른 머신으로 복사 (작업 스케줄러에 매일 등록 — 스크립트 머리말)
 python -m scripts.load_test --n 50        # 동시 50 요청으로 큐 제한 확인 (가짜 모델)
 python -m scripts.load_test --n 50 --jobs # /jobs 제출+폴링 경로
