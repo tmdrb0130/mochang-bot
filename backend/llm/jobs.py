@@ -24,9 +24,53 @@ Factory = Callable[[], Awaitable[Any]]
 # 같은 큐에 중첩 제출되어 워커가 모두 자기 자식을 기다리는 교착이 생긴다 → 그 경우 큐를 거치지 않고 바로 실행한다.
 _in_worker: contextvars.ContextVar[bool] = contextvars.ContextVar("llm_in_worker", default=False)
 
+# 지금 이 워커가 돌리고 있는 작업 (2026-09-11). 실행 중인 코드가 자기 단계를 알릴 수 있게 하려는 것 —
+# 인테이크는 2분 넘게 걸리는데 학생 화면에는 "앞에 N명" 밖에 없어 아무 단계 정보가 없었다.
+_current_job: contextvars.ContextVar["Job | None"] = contextvars.ContextVar("llm_current_job", default=None)
+
+
+def set_phase(name: str | None) -> None:
+    """실행 중인 작업의 세부 단계를 적는다. 큐 밖에서 부르면 아무 일도 하지 않는다.
+    폴링(`GET /jobs/{id}`) 응답의 `phase` 로 나가므로 **요청이 늘지 않는다**."""
+    job = _current_job.get()
+    if job is not None:
+        job.phase = name
+
+
+def set_partial(value: Any) -> None:
+    """완성 전에 보여줄 중간 결과를 적는다 (2026-09-11).
+
+    인테이크 카드 생성은 단일 LLM 호출이 40초 걸리는데, 학생은 **첫 카드 한 장이면** 답을 시작할 수 있다.
+    모델이 뱉는 대로 카드를 꺼내 여기에 넣으면 폴링 응답의 `partial` 로 나간다 — 추가 요청 없이.
+    최종 결과가 언제나 우선이다(여기 실린 것은 미리보기일 뿐)."""
+    job = _current_job.get()
+    if job is not None:
+        job.partial = value
+
 
 class QueueError(RuntimeError):
     pass
+
+
+class TooManyJobs(QueueError):
+    """동시 작업 상한 초과 → HTTP 429. 세 겹으로 건다 (2026-09-04):
+
+    - owner  : 초안(draft_id) 단위. 한 명이 문항 9개를 연달아 눌러 큐를 독점하는 것을 막는다.
+               예전엔 IP 였는데 강의실 NAT(같은 공인 IP 40명)에서 서로 막혀 초안 단위로 바꿨다. draft_id 가 없으면 IP.
+    - ip     : IP 단위의 느슨한 천장. 초안 id 를 무한히 만들어 우회하는 것을 막는다 (강의실 한 반이 다 들어갈 만큼 넉넉하게).
+    - kind   : 작업 종류 단위의 전역 상한 (예: translate 전체 동시 30건). 무제한이던 번역을 남용하는 것을 막는다."""
+
+    def __init__(self, active: int, limit: int, scope: str = "owner"):
+        self.active = active
+        self.limit = limit
+        self.scope = scope
+        if scope == "ip":
+            msg = f"같은 네트워크에서 동시에 진행할 수 있는 작업은 {limit}건까지입니다 (현재 {active}건). 잠시 뒤 다시 시도해 주세요."
+        elif scope == "kind":
+            msg = f"이 종류의 작업은 서버 전체에서 동시에 {limit}건까지입니다 (현재 {active}건). 잠시 뒤 다시 시도해 주세요."
+        else:
+            msg = f"동시에 진행할 수 있는 작업은 {limit}건까지입니다 (현재 {active}건). 하나가 끝나면 다시 시도해 주세요."
+        super().__init__(msg)
 
 
 @dataclass
@@ -35,9 +79,14 @@ class Job:
     factory: Factory
     kind: str = "llm"
     status: str = "queued"          # queued | running | done | error
+    owner: str | None = None        # 제출자 식별자(초안 id 또는 IP). 동시 작업 제한용 — 응답에는 내보내지 않는다
+    ip: str | None = None           # 제출한 클라이언트 IP. IP 단위 천장(max_per_ip)용 — 응답에는 내보내지 않는다
+    test: bool = False              # 부하 테스트·E2E(헤더 X-Mochang-Test). 계측에만 쓴다 — 실행 방식은 실사용과 똑같다
     result: Any = None
     error: str | None = None
     attempts: int = 0
+    phase: str | None = None        # 실행 중 어느 단계인지 (set_phase). 학생 화면에 "자료 찾는 중" 같은 안내로 쓴다
+    partial: Any = None             # 완성 전에 먼저 보여줄 수 있는 중간 결과 (set_partial). 인테이크 카드가 이걸 쓴다
     created: float = field(default_factory=time.time)
     started: float | None = None
     finished: float | None = None
@@ -48,6 +97,8 @@ class Job:
             "job_id": self.id,
             "kind": self.kind,
             "status": self.status,
+            "phase": self.phase,             # running 일 때 세부 단계 (없으면 None)
+            "partial": self.partial if self.status == "running" else None,   # 도착한 만큼 먼저 (2026-09-11)
             "position": position,            # 대기 순번 (0 = 다음 차례). running/done 이면 None
             "attempts": self.attempts,
             "queued_seconds": round((self.started or time.time()) - self.created, 1),
@@ -59,7 +110,13 @@ class Job:
 
 class JobQueue:
     def __init__(self, max_workers: int = 4, retry_attempts: int = 3, base_delay: float = 2.0, max_delay: float = 30.0,
-                 retry_on: tuple[type[BaseException], ...] = (), history_limit: int = 500, sleep=asyncio.sleep):
+                 retry_on: tuple[type[BaseException], ...] = (), history_limit: int = 500, sleep=asyncio.sleep,
+                 on_done=None, max_per_client: int = 0):
+        # max_per_client: 한 클라이언트(owner)가 동시에 가질 수 있는 작업 수(queued+running). 0 이면 무제한.
+        self.max_per_client = max(0, int(max_per_client))
+        # on_done(job): 작업이 끝날 때(성공·실패 모두) 한 번 호출. 소요 시간 기록용.
+        # 기본 None 이라 테스트 동작에는 영향이 없다.
+        self.on_done = on_done
         self.max_workers = max(1, int(max_workers))
         self.retry_attempts = max(1, int(retry_attempts))
         self.base_delay = base_delay
@@ -101,10 +158,28 @@ class JobQueue:
         return bool(self._workers)
 
     # ── 제출 ──
-    def submit(self, factory: Factory, kind: str = "llm") -> Job:
+    def submit(self, factory: Factory, kind: str = "llm", owner: str | None = None, *,
+               ip: str | None = None, max_per_owner: int | None = None, max_per_ip: int = 0, max_per_kind: int = 0,
+               test: bool = False) -> Job:
+        """큐에 넣는다. 상한 검사 순서: owner(초안) → ip → kind. 0 이면 그 검사는 안 한다.
+        max_per_owner 가 None 이면 큐 기본값(max_per_client). 어느 하나라도 넘으면 TooManyJobs(scope)."""
         if not self._workers:
             raise QueueError("JobQueue 가 시작되지 않았습니다 (app startup 에서 await queue.start()).")
-        job = Job(id=uuid.uuid4().hex[:12], factory=factory, kind=kind, future=asyncio.get_running_loop().create_future())
+        per_owner = self.max_per_client if max_per_owner is None else max(0, int(max_per_owner))
+        if owner and per_owner:
+            active = self.active_for(owner)
+            if active >= per_owner:
+                raise TooManyJobs(active, per_owner, "owner")
+        if ip and max_per_ip:
+            active = self.active_ip(ip)
+            if active >= int(max_per_ip):
+                raise TooManyJobs(active, int(max_per_ip), "ip")
+        if max_per_kind:
+            active = self.active_kind(kind)
+            if active >= int(max_per_kind):
+                raise TooManyJobs(active, int(max_per_kind), "kind")
+        job = Job(id=uuid.uuid4().hex[:12], factory=factory, kind=kind, owner=owner, ip=ip, test=bool(test),
+                  future=asyncio.get_running_loop().create_future())
         self._jobs[job.id] = job
         self._trim_history()
         self._queue.put_nowait(job)
@@ -150,10 +225,23 @@ class JobQueue:
                 ahead += 1
         return ahead
 
+    def active_for(self, owner: str) -> int:
+        """해당 제출자(초안 또는 IP)가 아직 끝나지 않은(queued+running) 작업 수."""
+        return sum(1 for j in self._jobs.values() if j.owner == owner and j.status in ("queued", "running"))
+
+    def active_ip(self, ip: str) -> int:
+        """해당 IP 가 아직 끝나지 않은 작업 수 (초안 id 가 달라도 합산)."""
+        return sum(1 for j in self._jobs.values() if j.ip == ip and j.status in ("queued", "running"))
+
+    def active_kind(self, kind: str) -> int:
+        """해당 종류(kind)의 진행 중 작업 수 — 종류별 전역 상한용."""
+        return sum(1 for j in self._jobs.values() if j.kind == kind and j.status in ("queued", "running"))
+
     def stats(self) -> dict:
         statuses = [j.status for j in self._jobs.values()]
         return {
             "max_workers": self.max_workers,
+            "max_per_client": self.max_per_client,
             "running": self._running,
             "queued": statuses.count("queued"),
             "done": self.total_done,
@@ -182,6 +270,7 @@ class JobQueue:
             self._running += 1
             self.peak_running = max(self.peak_running, self._running)
             job.status, job.started = "running", time.time()
+            _current_job.set(job)             # 실행 중인 작업이 set_phase 로 자기 단계를 알릴 수 있게
             try:
                 while True:
                     job.attempts += 1
@@ -212,3 +301,8 @@ class JobQueue:
                 job.finished = time.time()
                 self._running -= 1
                 self._queue.task_done()
+                if self.on_done:
+                    try:
+                        self.on_done(job)
+                    except Exception:
+                        pass          # 계측 실패가 작업 처리를 막으면 안 된다

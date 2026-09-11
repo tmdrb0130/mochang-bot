@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
 
+import httpx
 import yaml
 from dotenv import load_dotenv
 from openai import APIStatusError, AsyncOpenAI, RateLimitError
@@ -24,6 +25,8 @@ ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 CONFIG_PATH = BACKEND_DIR / "config.yaml"
 USAGE_PATH = BACKEND_DIR / ".usage.json"
+# 조사 전용 클라이언트(로컬 70B)는 별도 파일에 센다 — OpenRouter 무료 한도 카운터를 오염시키지 않기 위해.
+RESEARCH_USAGE_PATH = BACKEND_DIR / ".usage.research.json"
 
 _ENV_REF = re.compile(r"^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$")
 
@@ -62,7 +65,30 @@ def load_config(path: Path = CONFIG_PATH) -> dict:
     with open(path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
     config["llm"]["api_key"] = _expand_env(config["llm"].get("api_key", ""))
+    rl = (config.get("research") or {}).get("llm")
+    if isinstance(rl, dict) and rl.get("api_key"):
+        rl["api_key"] = _expand_env(rl["api_key"])
     return config
+
+
+def research_client_config(config: dict) -> dict | None:
+    """research.llm 이 있으면 조사 전용 LLMClient 용 설정을 만든다. 없으면 None (주 클라이언트를 공용).
+
+    조사(검색어 생성·사실 추출)는 로컬 70B 로 돌리고, 지원서 본문 작성은 llm: 이 가리키는 모델이 한다.
+    조사 클라이언트는 UI 의 모델 선택(models:)을 따르지 않는다 — 다른 서버라 모델 id 가 통하지 않기 때문."""
+    rl = (config.get("research") or {}).get("llm")
+    if not isinstance(rl, dict) or not rl.get("base_url"):
+        return None
+    return {
+        "llm": rl,
+        "models": [],
+        "fallback": False,
+        "daily_request_limit": None,
+        "max_workers": rl.get("max_workers") or config.get("max_workers") or 4,
+        "retry": config.get("retry") or {},
+        # 인테이크·조사 작업(/jobs/intake·/jobs/research)이 이 큐에서 돌므로 IP 당 동시 제한도 같이 건다 (2026-09-03)
+        "max_jobs_per_client": config.get("max_jobs_per_client") or 0,
+    }
 
 
 class UsageCounter:
@@ -118,7 +144,8 @@ class UsageCounter:
 
 
 class LLMClient:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, usage_path: Path = USAGE_PATH, pin_model: bool = False):
+        # pin_model=True 면 요청의 model 을 무시하고 항상 config 의 모델을 쓴다 (조사 전용 클라이언트).
         c = config["llm"]
         self.base_url = c["base_url"]
         self.model = c["model"]
@@ -129,7 +156,8 @@ class LLMClient:
         self.model_ids = [m["id"] for m in self.models] or [self.model]
         self.is_openrouter = "openrouter.ai" in self.base_url
         self.fallback = bool(config.get("fallback", True)) and self.is_openrouter and len(self.model_ids) > 1
-        self.usage = UsageCounter(USAGE_PATH, config.get("daily_request_limit") if self.is_openrouter else None)
+        self.pin_model = pin_model
+        self.usage = UsageCounter(usage_path, config.get("daily_request_limit") if self.is_openrouter else None)
         # 동시 요청 수 제한 — asyncio.Queue + 워커 N개 (jobs.py). 모든 모델 호출이 이 큐를 거친다.
         # OpenRouter 로 나가는 동시 요청 = max_workers. 429/일시 오류는 워커가 지수 백오프로 재시도.
         retry = config.get("retry") or {}
@@ -139,18 +167,29 @@ class LLMClient:
             base_delay=float(retry.get("base_delay_seconds", 2.0)),
             max_delay=float(retry.get("max_delay_seconds", 30.0)),
             retry_on=(RateLimited,),
+            # 한 클라이언트(IP)가 동시에 점유할 수 있는 작업 수. 0 이면 무제한 (config.yaml max_jobs_per_client)
+            max_per_client=int(config.get("max_jobs_per_client") or 0),
         )
         headers = {"HTTP-Referer": "http://localhost", "X-Title": "modoo-writer"} if self.is_openrouter else {}
+        # timeout: openai 기본은 전체 600초 / **연결 5초**. 2026-09-03 40명 실측에서 요청 폭주 때 SSH 터널(30801) 연결이
+        # 5초를 넘겨 APITimeoutError 3건(→ 인테이크 500) 이 났다. 연결 30초로 늘린다. 읽기 600초는 그대로.
         self._client = AsyncOpenAI(
-            base_url=self.base_url, api_key=c["api_key"], default_headers=headers, max_retries=2
+            base_url=self.base_url, api_key=c["api_key"], default_headers=headers, max_retries=2,
+            timeout=httpx.Timeout(600.0, connect=30.0),
         )
 
     def resolve_model(self, model: str | None) -> str:
-        """요청에서 온 model 을 검증. 목록에 없는 id 는 거부(유료 모델 오남용 방지)."""
+        """요청에서 온 model 을 검증. 목록에 없는 id 는 기본 모델로 대체(유료 모델 오남용 방지)."""
+        if self.pin_model:
+            return self.model   # 조사 전용 클라이언트 — 다른 서버라 UI 의 모델 id 가 통하지 않는다
         if not model:
             return self.model
         if self.models and model not in self.model_ids:
-            raise ValueError(f"허용되지 않은 모델입니다: {model}. /models 에서 목록을 확인하세요.")
+            # config.yaml 에서 모델을 갈아끼우면, 예전 localStorage 를 가진 브라우저가 옛 id 를 계속 보낸다.
+            # 여기서 예외를 던지면 사용자는 25초를 기다린 끝에 실패를 본다 → 기본 모델로 대체하고 진행한다.
+            # 목록 밖 모델을 쓰게 해주는 것이 아니라 기본값으로 되돌리는 것이므로 오남용 방지 의도는 그대로다.
+            print(f"[warn] 목록에 없는 모델 요청: {model} → 기본 모델 {self.model} 로 대체", flush=True)
+            return self.model
         return model
 
     def _extra_for(self, model: str) -> dict:
@@ -167,27 +206,44 @@ class LLMClient:
     # OpenRouter 가 HTTP 200 본문 안에 error 객체로 돌려주는 일시 오류 코드 (업스트림 타임아웃·과부하)
     _TRANSIENT = {408, 429, 500, 502, 503, 504, 520, 522, 524, 529}
 
-    async def complete(self, system: str, user: str, model: str | None = None) -> LLMResult:
+    async def complete(self, system: str, user: str, model: str | None = None, extra: dict | None = None,
+                       on_delta=None) -> LLMResult:
+        """extra: 이 호출에만 덧붙일 extra_body (예: {"priority": 50}). 설정의 extra 위에 덮어쓴다 (2026-09-04, 번역 우선순위용).
+
+        on_delta(text): 주면 **스트리밍**으로 받고 지금까지 쌓인 전체 텍스트를 넘긴다 (2026-09-11).
+        인테이크 카드처럼 40초짜리 출력을 다 기다리지 않고 먼저 보여주려는 것이다. 반환값은 스트리밍이 아닐 때와 같다."""
         model = self.resolve_model(model)
         if not self.queue.started:
             await self.queue.start()   # FastAPI startup 밖(CLI·테스트)에서 써도 동작하게 지연 시작
-        return await self.queue.run(lambda: self._complete_with_model_fallback(system, user, model), kind="llm")
+        return await self.queue.run(lambda: self._complete_with_model_fallback(system, user, model, extra, on_delta),
+                                    kind="llm")
 
-    async def _complete_with_model_fallback(self, system: str, user: str, model: str) -> LLMResult:
+    async def _complete_with_model_fallback(self, system: str, user: str, model: str, extra: dict | None = None,
+                                            on_delta=None) -> LLMResult:
         # 일시 오류(업스트림 504 등)면 목록의 다음 모델로 바꿔 최대 3번 시도 (같은 제공자가 연속으로 끊는 경우가 많음).
         # 429(RateLimited) 는 여기서 잡지 않고 큐 워커가 지수 백오프로 재시도한다.
         order = [model] + [i for i in self.model_ids if i != model]
         last: Exception | None = None
         for attempt, m in enumerate(order[:3]):
             try:
-                return await self._complete(system, user, m)
+                # extra·on_delta 가 없으면 예전 시그니처로 부른다 — 테스트가 _complete(system, user, model) 을 가짜로 바꿔 끼운다
+                kw = {}
+                if extra:
+                    kw["extra"] = extra
+                if on_delta is not None:
+                    kw["on_delta"] = on_delta
+                return await (self._complete(system, user, m, **kw) if kw else self._complete(system, user, m))
             except TransientError as e:
                 last = e
                 await asyncio.sleep(1.5 * (attempt + 1))
         raise LLMError(f"{last} — 무료 제공자가 연속으로 응답을 끊었습니다. 잠시 후 '다시 생성'을 눌러주세요.")
 
-    async def _complete(self, system: str, user: str, model: str) -> LLMResult:
+    async def _complete(self, system: str, user: str, model: str, extra: dict | None = None,
+                        on_delta=None) -> LLMResult:
         used = await self.usage.hit(model)
+        body = {**self._extra_for(model), **(extra or {})}
+        if on_delta is not None:
+            return await self._complete_streaming(system, user, model, body, on_delta)
         try:
             res = await self._client.chat.completions.create(
                 model=model,
@@ -197,7 +253,7 @@ class LLMClient:
                     {"role": "system", "content": system},
                     {"role": "user", "content": user},
                 ],
-                extra_body=self._extra_for(model) or None,
+                extra_body=body or None,
             )
         except RateLimitError as e:
             snap = self.usage.snapshot()
@@ -222,3 +278,42 @@ class LLMClient:
         if choice.finish_reason == "length" and not text.strip():
             raise LLMError(f"max_tokens({self.max_tokens}) 안에 본문을 못 냈습니다. 추론 모델이면 extra.reasoning 을 끄세요.")
         return LLMResult(text=text, model=getattr(res, "model", None) or model)
+
+    async def _complete_streaming(self, system: str, user: str, model: str, body: dict, on_delta) -> LLMResult:
+        """스트리밍으로 받으면서 지금까지의 전체 텍스트를 on_delta 에 넘긴다 (2026-09-11).
+
+        **on_delta 는 토큰마다 부르지 않는다** — 카드 객체가 닫히는 순간(`}`)에만 부른다.
+        받는 쪽이 매번 JSON 을 훑기 때문이고, 그 사이에는 보여줄 새 카드가 없다.
+        on_delta 에서 난 예외는 삼킨다 — 미리보기 때문에 본 생성이 실패하면 안 된다."""
+        parts: list[str] = []
+        used_model = model
+        try:
+            stream = await self._client.chat.completions.create(
+                model=model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                extra_body=body or None,
+                stream=True,
+            )
+            async for chunk in stream:
+                used_model = getattr(chunk, "model", None) or used_model
+                if not getattr(chunk, "choices", None):
+                    continue
+                piece = getattr(chunk.choices[0].delta, "content", None)
+                if not piece:
+                    continue
+                parts.append(piece)
+                if "}" in piece:                       # 카드 하나가 닫혔을 수 있다
+                    try:
+                        on_delta("".join(parts))
+                    except Exception:
+                        pass
+        except RateLimitError as e:
+            raise RateLimited("무료 모델 풀이 혼잡합니다(429). 몇 초 후 다시 시도하세요.") from e
+        except APIStatusError as e:
+            raise LLMError(f"LLM 서버 오류 {e.status_code} (model={model}): {getattr(e, 'message', str(e))[:300]}") from e
+        text = "".join(parts)
+        if not text.strip():
+            raise TransientError(f"스트리밍 응답이 비었습니다 (model={model})")
+        return LLMResult(text=text, model=used_model)

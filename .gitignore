@@ -25,4 +25,21 @@ backend/.usage.json
 
 # 조사 결과 캐시
 backend/.cache/
+backend/.vectorstore/
+# Chroma 저장소 (299MB) — 이관은 scripts/vectorstore_migrate.py
+backend/.vectorstore-chroma/
 .pytest_cache/
+backend/.timing.jsonl
+# 아이디어·초안 DB (로컬 전용)
+backend/.data/
+backend/.timing.jsonl.1
+# 프롬프트 사본은 backend/ 에 두지 않는다 (2026-09-10 규칙) — 보관은 docs/prompt_backups/<날짜>/ 또는 git 태그
+backend/prompts.*/
+backend/prompts.backup-*
+*.before-fix
+backend/.usage.research.json
+frontend/dist-check/
+
+# switch_model.py 가 남기는 직전 설정
+backend/config.yaml.prev
+scripts/.foreign_e2e_result.json

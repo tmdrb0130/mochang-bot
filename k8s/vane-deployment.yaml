@@ -1,0 +1,142 @@
+# Vane(구 Perplexica) — 검색 + 본문 읽기 + 임베딩이 이미지에 내장된 단일 컨테이너.
+#
+# 무엇: 브라우저에서 퍼플렉시티처럼 쓰는 검색·조사 UI.
+#   채팅 LLM 은 내장돼 있지 않아 외부에 붙여야 하는데, 같은 클러스터의 vLLM(Llama-3.3-70B)에
+#   http://vllm:8000/v1 로 직결한다 → LLM 트래픽이 서버 밖으로 안 나가고 SSH 터널도 안 탄다.
+#
+# GPU 를 쓰지 않는다: 검색·본문추출·임베딩은 전부 CPU 작업이라 nvidia.com/gpu 를 요청하지 않는다.
+#   따라서 GPU1(Llama 70B)·GPU0(타 사용자 작업)과 자원 경합이 없다.
+#
+# 기존 배포(vllm, open-webui)는 건드리지 않는다. Deployment/Service 를 하나씩 추가할 뿐이다.
+#
+# 배포:
+#   scp k8s/vane-deployment.yaml gpu:/tmp/
+#   ssh gpu "sudo kubectl apply -f /tmp/vane-deployment.yaml"
+# 접속(작업 PC 에서):
+#   ssh -L 50000:localhost:30500 gpu      # 이 창을 켜둔 채
+#   브라우저 http://localhost:50000
+# 되돌리기:
+#   ssh gpu "sudo kubectl delete deploy/vane svc/vane"   # /opt/vane-data 는 남음
+# SearXNG 엔진 설정 — 2026-09-01 실측으로 교체한 이유:
+#   이 서버 IP 는 DuckDuckGo 에서 CAPTCHA, AOL 404, Brave 오류를 받아 검색 결과가 0건이었다.
+#   (네트워크 문제가 아니다 — duckduckgo.com/google.com 자체는 HTTP 200 이 온다. 스크래퍼로 차단당하는 것.)
+#   컨테이너 안에서 직접 재본 결과 bing(200, 103KB)·naver(200, 861KB)는 정상이라 이 둘만 켠다.
+#   naver 는 한국어 결과에 특히 유리하다.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vane-searxng
+data:
+  settings.yml: |
+    use_default_settings: true
+
+    general:
+      instance_name: 'searxng'
+
+    search:
+      autocomplete: 'google'
+      formats:
+        - html
+        - json
+
+    server:
+      secret_key: 'a2fb23f1b02e6ee83875b09826990de0f6bd908b6638e8c10277d415f6ab852b'  # ${SEARXNG_SECRET} 가 덮어씀
+
+    engines:
+      - name: wolframalpha
+        disabled: false
+      # 이 서버 IP 가 차단당하는 엔진 — 켜두면 매 검색마다 실패 로그만 쌓인다
+      - name: duckduckgo
+        disabled: true
+      - name: brave
+        disabled: true
+      # 서버에서 실제로 응답하는 엔진
+      - name: bing
+        disabled: false
+      - name: naver
+        disabled: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vane
+  labels:
+    app: vane
+spec:
+  replicas: 1
+  # hostPath 단일 볼륨을 쓰므로 롤링 업데이트 시 두 파드가 동시에 마운트하지 않도록 Recreate.
+  # (기존 open-webui 배포와 같은 관례)
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vane
+  template:
+    metadata:
+      labels:
+        app: vane
+    spec:
+      # 서비스 이름 기반 env 자동 주입(VANE_PORT=tcp://... 등)을 끈다.
+      # vLLM 이 같은 문제로 44회 크래시했던 전례가 있어 기존 배포들과 동일하게 맞춘다.
+      enableServiceLinks: false
+      containers:
+        - name: vane
+          image: itzcrazykns1337/vane:latest
+          # 이미지 3.7GB. 재배포마다 다시 받지 않도록 로컬 캐시를 쓴다.
+          # 갱신하려면: ssh gpu "sudo k3s ctr images pull docker.io/itzcrazykns1337/vane:latest"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: ANONYMIZED_TELEMETRY
+              value: "false"
+            - name: DO_NOT_TRACK
+              value: "true"
+          volumeMounts:
+            # 설정(config.json)·대화기록 영속화. 여기가 비면 모델 제공자를 다시 등록해야 한다.
+            - name: data
+              mountPath: /home/vane/data
+            # settings.yml 하나만 덮어쓴다(subPath) — 같은 디렉터리의 limiter.toml·uwsgi.ini 는 이미지 것을 유지.
+            - name: searxng-settings
+              mountPath: /etc/searxng/settings.yml
+              subPath: settings.yml
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "2Gi"
+            limits:
+              memory: "8Gi"
+          # 최초 이미지 pull 3.7GB — 실측 회선 2.44MB/s 기준 ~25분. 여유 있게 60분(15s × 240).
+          # Vane 의 헬스 경로가 문서화돼 있지 않아 HTTP 대신 TCP 로 판정한다.
+          startupProbe:
+            tcpSocket:
+              port: 3000
+            periodSeconds: 15
+            failureThreshold: 240
+          readinessProbe:
+            tcpSocket:
+              port: 3000
+            periodSeconds: 20
+      volumes:
+        - name: data
+          hostPath:
+            path: /opt/vane-data
+            type: DirectoryOrCreate
+        - name: searxng-settings
+          configMap:
+            name: vane-searxng
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vane
+spec:
+  type: NodePort
+  selector:
+    app: vane
+  ports:
+    - port: 3000
+      targetPort: 3000
+      # 쿠버네티스 NodePort 허용 범위는 30000~32767 이라 50000 을 쓸 수 없다.
+      # 작업 PC 쪽에서 ssh -L 50000:localhost:30500 으로 50000 에 맞춘다.
+      nodePort: 30500

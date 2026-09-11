@@ -24,6 +24,9 @@ JSON 배열 한 개만. 설명·코드펜스 없이. 최대 {max_facts}개, 도�
     "url": "문서 URL",
     "date": "YYYY-MM-DD 또는 null",
     "publisher": "발행 기관/매체 (문서에서 알 수 있으면)",
-    "use_for": "이 사실을 쓸 곳 (예: 문제 크기 근거, 기존 대안 한계)"
+    "use_for": "이 사실을 쓸 곳 (예: 문제 크기 근거, 기존 대안 한계)",
+    "angle": "problem | competitor | pricing | trend 중 하나 — problem=문제의 크기·고객 행동·현황 통계, competitor=기존 대안·경쟁 서비스가 하는 일, pricing=과금·가격·지불 행태·시장 규모, trend=산업·시장 변화"
   }
 ]
+
+- competitor 로 분류한 사실은 **그 서비스·업체의 이름과 하는 일**이 quote 에 그대로 있어야 합니다. 이름 없는 일반론은 competitor 가 아닙니다.

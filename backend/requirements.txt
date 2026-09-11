@@ -8,3 +8,17 @@ httpx
 ddgs
 trafilatura
 lxml_html_clean
+
+# RAG 벡터DB (backend/rag/vectorstore.py) — 임베딩은 로컬 Ollama bge-m3
+llama-index-core
+llama-index-embeddings-ollama
+
+# 벡터 저장소 = Chroma (SQLite+HNSW, 2026-09-11 전환). 예전 LlamaIndex 기본 JSON 저장소는
+# 열 때 전체를 파싱하고(실측 143초) 쓸 때 362MB 를 통째로 다시 썼다(68.9초).
+# **버전을 고정한다** — chromadb 는 판마다 내부 스키마·의존성이 바뀌어, 재설치 때 다른 판이 들어오면
+# 기존 컬렉션을 못 여는 일이 생긴다. 올릴 때는 scripts/vectorstore_compare.py 로 재검증할 것.
+chromadb==1.5.9
+llama-index-vector-stores-chroma==0.6.0
+
+# 아이디어·초안 저장소 (backend/storage.py) — 기본 SQLite, URL 만 바꾸면 PostgreSQL
+sqlalchemy

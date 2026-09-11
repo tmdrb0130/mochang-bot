@@ -3,6 +3,8 @@
 조립 순서: system + track + question + style (+ 나중에 RAG 참고자료) → system 프롬프트
 지원자 입력(아이디어·창업여부·역량·팀원) → user 프롬프트
 """
+import hashlib
+import itertools
 import re
 from pathlib import Path
 
@@ -18,6 +20,28 @@ _FRONTMATTER = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.S)
 class PromptNotFound(Exception):
     pass
 
+# ── Q1 문장 짜임 회전 (작업 15 후속) ──
+# 라마는 "넷 중 골라 써라" 같은 선택형·금지형 지시를 지키지 못한다(실호출 25건 확인) — 그래서 코드가 **하나만**
+# 골라 넣는다. 문구는 여전히 md 에만 있고(q1_structures.md), 코드는 어느 것을 넣을지만 정한다.
+STRUCTURES_FILE = "q1_structures.md"
+# 짧은 문항별 짜임 파일 — Q10 은 대중 홍보 문장이라 Q1 과 짜임이 다르다 (Q1_Q10_QUALITY 3절)
+STRUCTURE_FILES = {"q1": "q1_structures.md", "q10": "q10_structures.md"}
+_STRUCT_SEP = re.compile("^-{3,}$", re.M)
+_rotation = itertools.count()          # 요청마다 한 칸씩 — 같은 아이디어를 다시 눌러도 다른 짜임이 나온다
+
+
+def structures(question_id: str = "q1") -> list[str]:
+    """문항의 짜임 파일을 '---' 줄로 나눈 목록."""
+    path = STRUCTURE_FILES.get(str(question_id or "q1"), STRUCTURES_FILE)
+    return [b.strip() for b in _STRUCT_SEP.split(_read(path)) if b.strip()]
+
+
+def pick_structure(idea: str, offset: int, question_id: str = "q1") -> str:
+    """아이디어 해시 + 회전값으로 짜임 하나를 고른다. 아이디어가 다르면 시작점이 다르고, 요청마다 한 칸씩 돈다."""
+    items = structures(question_id)
+    base = int(hashlib.sha1((idea or "").encode("utf-8")).hexdigest()[:8], 16)
+    return items[(base + int(offset)) % len(items)]
+
 
 def _read(relpath: str) -> str:
     path = PROMPTS_DIR / relpath
@@ -27,6 +51,13 @@ def _read(relpath: str) -> str:
 
 
 read_prompt = _read  # 다른 모듈(intake 등)에서 쓰는 공개 이름
+
+
+def process_block() -> str:
+    """창업교육 MVP 8단계 프레임 (process.md). system 프롬프트와 인테이크에 같은 블록을 한 번씩 넣는다.
+
+    문항별로 '어느 단계를 다루는 글인지'는 각 문항 md 의 [프로세스 위치] 절이 말한다 (docs/MVP_PROCESS.md 2절)."""
+    return _read("process.md")
 
 
 def section_headers() -> dict:
@@ -56,6 +87,46 @@ def load_question(question_id: str) -> tuple[dict, str]:
     return meta, m.group(2).strip()
 
 
+def _is_short_question(question_id: str | None) -> bool:
+    """100자 이내로 끝나는 문항인지(Q1·Q10). 참고자료 삽입 여부를 정할 때 쓴다."""
+    if not question_id:
+        return False
+    try:
+        meta, _ = load_question(question_id)
+    except Exception:
+        return False
+    return int(meta.get("limit", 2000)) <= 100
+
+
+# 문항마다 인용할 참고자료를 나눠 준다 (작업 20 실측에서 드러난 반복의 주범).
+# 2단계(공통 조사 공유) 뒤로 문항 9개가 **같은 facts 목록**을 받는데 프롬프트는 "인용하라"고 하니
+# 같은 통계 문장이 문항마다 그대로 반복됐다 (실측: 'foodtoday … 7.2%' 가 한 신청서에서 9번).
+# 문항별로 다른 구간을 주면 각 문항이 다른 근거를 인용한다. 0 이면 예전처럼 전부 준다.
+FACTS_PER_QUESTION = 2
+FACT_SLOT = {"q2": 0, "q3_1": 1, "q3_2": 2, "q7_1": 3}
+# 참고자료를 아예 주지 않는 문항 (WORKORDER_QUALITY 1-7): 실행 계획·멘토 요청·역량 문항에 외부 기사가 끼어들면
+# 다른 문항의 통계가 또 인용되거나 계획 대신 기사 요약이 들어간다. Q1·Q10 은 짧아서 원래 안 준다.
+NO_REFERENCE_QUESTIONS = ("q4_1", "q4_2", "q8", "q1", "q10")
+
+
+def references_for(refs, question_id: str | None, per: int = FACTS_PER_QUESTION, outline: dict | None = None):
+    """이 문항이 인용할 참고자료만 — 문항 역할(각도) 기반, 문항 간 중복 없이 (작업 33, backend/rag/allocate.py).
+
+    per=0 이면 예전처럼 전부 준다(테스트·비교용)."""
+    qid = str(question_id or "")
+    if qid in NO_REFERENCE_QUESTIONS:
+        return []
+    if not qid or not isinstance(refs, list) or per <= 0:
+        return refs                      # 문항 밖(골자·인테이크)에서는 전부 준다
+    from ..rag.allocate import for_question
+    hints = None
+    if isinstance(outline, dict):
+        # 골자의 문항 몫 텍스트를 키워드 단서로 — 각도가 안 붙은 사실을 그 문항 주제에 맞춰 보낸다
+        from .outline import ROLE_KEYS
+        hints = {q: " ".join(str(outline.get(k) or "") for k in keys) for q, keys in ROLE_KEYS.items()}
+    return for_question(refs, qid, hints)
+
+
 def build_context(form: dict) -> str:
     """지원자 입력 → user 프롬프트."""
     parts = [
@@ -69,7 +140,25 @@ def build_context(form: dict) -> str:
     capability = form.get("capability") or "(입력 없음 — 아이디어 설명에서 유추 가능한 범위만 언급하고 지어내지 말 것)"
     parts.append(f"지원자 역량·경력: {capability}")
     parts.extend(_answer_sections(form.get("answers") or []))
+    outline = form.get("outline")
+    if isinstance(outline, dict) and any(outline.values()):
+        # 사업계획 골자 (작업 20) — 문항 9개가 같은 사실을 쓰게 하는 공유 메모.
+        # 짧은 문항(Q1·Q10)에는 고객·해결책 두 줄만 넣는다.
+        from .outline import format_outline, slice_for
+        # 이 문항이 맡은 항목만 보여 준다 — 골자 전체를 주면 라마가 남의 몫까지 그대로 옮겨 적는다.
+        mine = slice_for(outline, form.get("question_id"))
+        body = format_outline(mine, short=_is_short_question(form.get("question_id")))
+        if body:
+            parts.append(section_headers().get("outline", "[사업계획 골자]") + "\n" + body)
     refs = form.get("references")
+    if refs and _is_short_question(form.get("question_id")):
+        # Q1·Q10 처럼 90자 안팎으로 끝나는 문항: 인용할 자리가 없는데
+        # 참고자료 1,000자와 "인용하면 출처를 붙이라"는 지시가 붙으면
+        # 한 문장에 통계를 욱여넣게 된다. 아예 넣지 않는다.
+        refs = None
+    qid = str(form.get("question_id") or "")
+    if refs and not isinstance(refs, str):
+        refs = references_for(refs, qid, outline=form.get("outline") if isinstance(form.get("outline"), dict) else None)
     if refs:
         # 조사 파이프라인(backend/rag/pipeline.py)이 만든 사실 목록 → 참고자료 섹션. 문자열이면 그대로.
         if isinstance(refs, str):
@@ -79,6 +168,9 @@ def build_context(form: dict) -> str:
             section = format_references(refs)
             if section:
                 parts.append(section)
+    elif qid and qid not in NO_REFERENCE_QUESTIONS and not _is_short_question(qid):
+        # 근거가 0건인 긴 문항 — 섹션을 그냥 빼면 라마가 기관명·통계를 지어낸다 (WORKORDER_QUALITY 2-4)
+        parts.append(section_headers().get("no_references", "[웹 참고자료 없음 — 통계·기관명·서비스명을 쓰지 않습니다]"))
     return "\n\n".join(parts)
 
 
@@ -113,10 +205,25 @@ def _answer_sections(answers: list[dict]) -> list[str]:
 
 def build_prompts(form: dict) -> tuple[str, str, dict]:
     """(system 프롬프트, user 프롬프트, 문항 메타) 반환."""
+    meta_check, _ = load_question(form["question_id"])
+    if meta_check.get("only_business") and not form.get("is_business"):
+        # Q7-1("현재 사업 아이템과 어떻게 다른가")은 기창업자 전용이다.
+        # 프론트는 이미 거르지만(App.jsx QUESTIONS.filter), API 를 직접 부르면 뚫린다.
+        # 막지 않으면 있지도 않은 기존 사업을 지어내서 쓴다.
+        raise PromptNotFound(
+            f"{meta_check['label']} 문항은 현재 사업자에게만 해당합니다 (지원자 창업 여부: 예비창업자).")
+
     system_md = _read("system.md")
     track_md = _read(f"tracks/{form['track']}.md")
     style_md = _read(f"styles/{form['style']}.md")
     meta, question_body = load_question(form["question_id"])
+    structure_offset = form.get("structure_offset")
+    if "{structure}" in question_body:
+        # 회전값은 요청마다 하나씩 소비한다. 재생성(generate_one)은 meta 로 받은 값에 +1 해서 다른 짜임을 부른다.
+        structure_offset = next(_rotation) if structure_offset is None else int(structure_offset)
+        question_body = question_body.replace(
+            "{structure}", pick_structure(form.get("idea", ""), structure_offset, form["question_id"]))
+    meta = {**meta, "structure_offset": structure_offset}
 
     question_section = "\n".join([
         "[작성 문항]",
@@ -128,14 +235,19 @@ def build_prompts(form: dict) -> tuple[str, str, dict]:
 
     if int(meta.get("limit", 2000)) <= 100:
         # Q1·Q10 같은 100자 문항: 스타일(장면 묘사·1인칭 서술)을 적용하면 문장 중간에서 잘린다.
-        # 스타일 섹션 대신 prompts/short_question.md 의 '한 문장' 규칙을 최우선으로 둔다.
+        # 스타일 섹션 대신 prompts/short_question.md 의 '한 문장' 규칙을 쓴다.
+        # 길이는 문항 md 의 min/max 를 우선 쓴다 — 없으면 limit 의 60~90%.
+        # (Q1 60~90, Q10 70~90 처럼 문항마다 다르고, frontmatter 의 target 과 어긋나면 안 된다)
         limit = int(meta["limit"])
-        style_section = render("short_question.md", min=int(limit * 0.6), max=int(limit * 0.9), limit=limit, style=form["style"])
+        lo = int(meta.get("min") or limit * 0.6)
+        hi = int(meta.get("max") or limit * 0.9)
+        style_section = render("short_question.md", min=lo, max=hi, limit=limit, style=form["style"])
     else:
         style_section = f"[글 스타일]\n{style_md}"
 
     system = "\n\n".join([
         system_md,
+        process_block(),
         f"[지원 트랙 지침]\n{track_md}",
         question_section,
         style_section,

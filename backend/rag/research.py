@@ -3,11 +3,13 @@
 백엔드(우선순위):
   1. Vane (구 Perplexica) POST /api/search — SearXNG + 모델 요약. config.yaml research.vane.* 로 설정.
      Vane 은 자체 모델 호출(질의 분류·답변)을 하므로 OpenRouter 무료 한도를 쓴다.
-  2. ddgs (DuckDuckGo) — 모델 호출 없음. Vane 이 없거나 실패하면 자동 폴백.
+  2. 네이버 검색 API (NAVER API HUB, 2026-06-25 이관) — 공식 키. 월 775,000건·50 RPS.
+     뉴스+블로그(+웹문서·카페)를 합쳐 준다. .env 의 NAVER_CLIENT_ID/NAVER_CLIENT_SECRET 이 있어야 켜진다.
+  3. ddgs (DuckDuckGo) — 비공식이라 대규모에서 봇 차단. **최후 폴백** (RESEARCH_PLAN 3단계).
 
-결과 형식은 두 백엔드 공통:
+결과 형식은 백엔드 공통:
   [{"title", "url", "snippet", "date", "source_type"}]
-    source_type: "web" | "news" | "vane"
+    source_type: "web" | "news" | "vane" | "blog" | "cafe"
     date: "YYYY-MM-DD" 또는 None
 
 같은 검색어(+백엔드+개수)는 디스크 캐시 (backend/.cache/research/*.json, 기본 7일).
@@ -25,6 +27,9 @@ from pathlib import Path
 from typing import Any, Callable, Awaitable
 from urllib.parse import urlparse
 
+from .. import timing
+from .breaker import Breaker
+
 CACHE_DIR = Path(__file__).resolve().parents[1] / ".cache" / "research"
 DEFAULT_TTL = 7 * 24 * 3600
 
@@ -32,6 +37,10 @@ SearchFn = Callable[[str, int], Awaitable[list[dict]]]
 
 
 # ────────────────────────── 결과 정규화 ──────────────────────────
+
+_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+
 
 def _norm_date(value: Any) -> str | None:
     if not value:
@@ -43,6 +52,14 @@ def _norm_date(value: Any) -> str | None:
     m = re.search(r"(\d{4})[./년]\s*(\d{1,2})[./월]\s*(\d{1,2})", s)
     if m:
         return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    # 네이버 뉴스 pubDate: "Mon, 01 Sep 2026 09:00:00 +0900"
+    m = re.search(r"(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s+(\d{4})", s)
+    if m and m.group(2).lower() in _MONTHS:
+        return f"{m.group(3)}-{_MONTHS[m.group(2).lower()]:02d}-{int(m.group(1)):02d}"
+    # 네이버 블로그 postdate: "20260901"
+    m = re.fullmatch(r"\s*(\d{4})(\d{2})(\d{2})\s*", s)
+    if m and "01" <= m.group(2) <= "12":
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
     return None
 
 
@@ -154,22 +171,170 @@ class VaneSearch:
     async def __call__(self, query: str, max_results: int = 8) -> list[dict]:
         import httpx
         async with httpx.AsyncClient(timeout=self.cfg.timeout) as client:
+            timing.count("vane")
             r = await client.post(self.cfg.base_url.rstrip("/") + "/api/search", json=self.build_body(query))
             r.raise_for_status()
             return self.parse(r.json())[:max_results]
 
 
-# ────────────────────────── 백엔드 2: ddgs ──────────────────────────
+# ────────────────────────── 백엔드 2: 네이버 검색 API (NAVER API HUB) ──────────────────────────
+# 2026-06-25 developers.naver.com → 네이버클라우드플랫폼 NAVER API HUB 로 이관됐다.
+# 구 규격(openapi.naver.com/v1/search/{kind}.json + X-Naver-Client-* 헤더)은 신규 발급이 끝났고
+# 기존 키도 2027-06-30 까지만 산다 — 여기서는 API HUB 규격만 쓴다.
+# 한도: 검색 통합 **월 775,000건**, 키당 **50 RPS**(초과 시 429). 일·월 한도와 알림은 NCP 콘솔에서 설정.
+
+NAVER_ENDPOINTS = {                      # 검색 유형 → (경로 조각, source_type)
+    "news": ("news", "news"),            # 뉴스·산업 동향
+    "blog": ("blog", "blog"),            # 비정형 웹문서 대체
+    "webkr": ("webkr", "web"),           # 웹문서
+    "cafearticle": ("cafearticle", "cafe"),   # 카페 글 (고객 불만·후기 성격)
+}
+# 'doc'(전문자료)·책·쇼핑은 2026-07-31 종료 — 학술 근거는 KCI(KCI_API_KEY) → OpenAlex/Semantic Scholar 로 간다.
+
+NAVER_MAX_DISPLAY = 100                  # display 는 1~100 (start 는 1~1000)
+
+# 유형별 기본 정렬. 2026-09-02 실호출 확인: 블로그를 sort=sim 으로 부르면 3년 전 무관한 글이 섞여 나온다.
+# 뉴스는 sim 이 관련도가 좋았고, 블로그·카페는 date(최신순)가 낫다.
+NAVER_SORT_BY_KIND = {"news": "sim", "blog": "date", "cafearticle": "date", "webkr": "sim"}
+
+
+def strip_tags(text: str) -> str:
+    """네이버 응답의 <b> 강조 태그와 HTML 엔티티 제거."""
+    import html
+    return html.unescape(re.sub(r"<[^>]+>", "", text or ""))
+
+
+def naver_error_message(payload: Any) -> str:
+    """API HUB 는 오류 본문이 두 형태다 — API 쪽 {"errorCode","errorMessage"} 와
+    게이트웨이 쪽 {"error":{"errorCode","message"}}. 둘 다 읽어 한 줄로 만든다."""
+    if not isinstance(payload, dict):
+        return ""
+    nested = payload.get("error")
+    if isinstance(nested, dict):
+        code = nested.get("errorCode") or nested.get("code") or ""
+        msg = nested.get("message") or nested.get("errorMessage") or ""
+    else:
+        code = payload.get("errorCode") or ""
+        msg = payload.get("errorMessage") or payload.get("message") or ""
+    return " ".join(str(x) for x in (code, msg) if x).strip()
+
+
+class SearchRateLimited(RuntimeError):
+    """소스가 429 를 냈다. 5단계 서킷브레이커가 잡을 신호 — 지금은 다음 백엔드로 넘어가는 용도."""
+
+
+@dataclass
+class NaverConfig:
+    client_id: str = ""
+    client_secret: str = ""
+    base_url: str = "https://naverapihub.apigw.ntruss.com/search/v1"
+    kinds: list[str] = field(default_factory=lambda: ["news", "blog"])
+    sort: str = ""                       # 비우면 유형별 기본값(NAVER_SORT_BY_KIND). 값을 주면 전 유형에 강제
+    timeout: int = 10
+
+    def sort_for(self, kind: str) -> str:
+        return self.sort or NAVER_SORT_BY_KIND.get(kind, "sim")
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.client_id and self.client_secret)
+
+    @classmethod
+    def from_config(cls, rc: dict) -> "NaverConfig":
+        """config.yaml research.naver 섹션 + .env 의 키. 키가 없으면 configured=False 라 백엔드에서 빠진다.
+
+        env 이름은 NCP 이관 뒤에도 그대로 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET 를 쓴다
+        (콘솔의 Client ID / Client Secret 값을 그대로 넣으면 된다)."""
+        nc = (rc or {}).get("naver") or {}
+        import os
+        return cls(
+            client_id=os.environ.get(nc.get("client_id_env", "NAVER_CLIENT_ID"), ""),
+            client_secret=os.environ.get(nc.get("client_secret_env", "NAVER_CLIENT_SECRET"), ""),
+            base_url=nc.get("base_url", "https://naverapihub.apigw.ntruss.com/search/v1"),
+            kinds=[k for k in nc.get("kinds", ["news", "blog"]) if k in NAVER_ENDPOINTS],
+            sort=nc.get("sort", ""),
+            timeout=int(nc.get("timeout", 10)),
+        )
+
+    @property
+    def headers(self) -> dict:
+        """API HUB 인증 헤더. 구 X-Naver-Client-Id/Secret 은 이 게이트웨이에서 통하지 않는다."""
+        return {"X-NCP-APIGW-API-KEY-ID": self.client_id, "X-NCP-APIGW-API-KEY": self.client_secret}
+
+
+class NaverSearch:
+    """네이버 검색 API(NAVER API HUB). 모델 호출 없음. kinds 각각에 요청 1회씩 나간다 (기본 news+blog = 2회).
+
+    한도는 키 단위 월 775,000건 합산 — kinds 를 늘리면 그만큼 소모가 빨라진다.
+    ddgs 와 달리 공식 API 라 차단 걱정이 없어 1차 소스로 쓴다 (RESEARCH_PLAN 3단계).
+    """
+
+    def __init__(self, cfg: NaverConfig):
+        self.cfg = cfg
+        self.last_error: str | None = None
+
+    def parse(self, kind: str, payload: dict) -> list[dict]:
+        source_type = NAVER_ENDPOINTS[kind][1]
+        out = []
+        for item in (payload or {}).get("items") or []:
+            out.append(make_result(
+                strip_tags(item.get("title")),
+                item.get("originallink") or item.get("link"),
+                strip_tags(item.get("description")),
+                item.get("pubDate") or item.get("postdate"),
+                source_type,
+            ))
+        return out
+
+    async def __call__(self, query: str, max_results: int = 8) -> list[dict]:
+        import httpx
+        per_kind = min(NAVER_MAX_DISPLAY, max(1, max_results // max(1, len(self.cfg.kinds))))
+        out: list[dict] = []
+        errors: list[str] = []
+        rate_limited = False
+        async with httpx.AsyncClient(timeout=self.cfg.timeout, headers=self.cfg.headers) as client:
+            for kind in self.cfg.kinds:
+                path = NAVER_ENDPOINTS[kind][0]
+                try:
+                    timing.count("naver")
+                    r = await client.get(f"{self.cfg.base_url.rstrip('/')}/{path}",
+                                         params={"query": query, "display": per_kind,
+                                                 "sort": self.cfg.sort_for(kind)})
+                    if r.status_code >= 400:
+                        try:
+                            detail = naver_error_message(r.json())
+                        except Exception:
+                            detail = (r.text or "")[:120]
+                        errors.append(f"{kind}: HTTP {r.status_code} {detail}".strip())
+                        if r.status_code == 429:
+                            rate_limited = True
+                            break            # 한도 초과면 남은 유형도 어차피 막힌다 — 더 쏘지 않는다
+                        continue             # 유형 하나가 죽어도 나머지는 살린다
+                    out.extend(self.parse(kind, r.json()))
+                except Exception as e:
+                    errors.append(f"{kind}: {type(e).__name__}: {str(e)[:100]}")
+        self.last_error = "; ".join(errors) or None
+        if rate_limited and not out:
+            raise SearchRateLimited(self.last_error or "네이버 검색 API 429")
+        return dedupe(out)[:max_results]
+
+
+# ────────────────────────── 백엔드 3: ddgs ──────────────────────────
 
 class DDGSearch:
-    """DuckDuckGo(ddgs). 모델 호출 없음. text + news 를 합쳐 준다."""
+    """DuckDuckGo(ddgs). 모델 호출 없음. 기본은 text 만 — include_news=True 면 news 도 합쳐 준다.
 
-    def __init__(self, region: str = "kr-kr", include_news: bool = True):
+    2026-09-02: 뉴스 호출을 기본으로 끄면서 조사 1회당 DDG 요청이 절반(8→4)이 됐다.
+    뉴스 근거 자체를 버린 게 아니라 네이버 뉴스 API 로 옮길 예정이다 (RESEARCH_PLAN 3단계).
+    그때까지 ddgs 뉴스가 필요하면 DDGSearch(include_news=True) 로 되살릴 수 있다."""
+
+    def __init__(self, region: str = "kr-kr", include_news: bool = False):
         self.region = region
         self.include_news = include_news
 
     def _sync(self, query: str, max_results: int) -> list[dict]:
         from ddgs import DDGS
+        timing.count("ddgs")
         out: list[dict] = []
         with DDGS() as d:
             for r in d.text(query, region=self.region, max_results=max_results):
@@ -195,11 +360,18 @@ class Researcher:
     """
 
     def __init__(self, backends: list[tuple[str, SearchFn]] | None = None, cache: DiskCache | None = None,
-                 vane: VaneConfig | None = None):
+                 vane: VaneConfig | None = None, naver: NaverConfig | None = None,
+                 extras: list[tuple[str, SearchFn]] | None = None, breaker: Breaker | None = None):
+        # extras: 폴백 사슬이 아니라 **항상 같이 물어보는** 소스 (정형 API). 결과는 웹 검색 결과 앞에 붙는다.
+        self.extras = extras or []
+        # 연속 실패하는 소스는 일정 시간 건너뛴다 (RESEARCH_PLAN 5단계). None 이면 제한 없음.
+        self.breaker = breaker
         if backends is None:
             backends = []
             if vane and vane.configured:
                 backends.append(("vane", VaneSearch(vane)))
+            if naver and naver.configured:            # 키가 있을 때만 — 없으면 예전처럼 ddgs 단독
+                backends.append(("naver", NaverSearch(naver)))
             backends.append(("ddgs", DDGSearch()))
         self.backends = backends
         self.cache = cache if cache is not None else DiskCache()
@@ -210,28 +382,53 @@ class Researcher:
         query = query.strip()
         if not query:
             return []
-        key = f"{'+'.join(n for n, _ in self.backends)}|{max_results}|{query}"
+        names = "+".join(n for n, _ in self.backends) + ("|x:" + "+".join(n for n, _ in self.extras) if self.extras else "")
+        key = f"{names}|{max_results}|{query}"
         if use_cache:
             hit = self.cache.get(key)
             if hit is not None:
                 self.last_backend = "cache"
                 return hit
-        errors = []
+        extra_rows: list[dict] = []
+        errors: list[str] = []
+        for name, fn in self.extras:
+            if self.breaker and self.breaker.is_open(name):
+                errors.append(f"{name}: 연속 실패로 쉬는 중")
+                continue
+            try:
+                extra_rows.extend(await fn(query, max_results))
+                if self.breaker:
+                    self.breaker.record(name, ok=True)
+            except Exception as e:      # 정형 소스가 죽어도 웹 검색은 그대로 간다
+                errors.append(f"{name}: {type(e).__name__}: {str(e)[:120]}")
+                if self.breaker:
+                    self.breaker.record(name, ok=False)
+
         for name, fn in self.backends:
+            if self.breaker and self.breaker.is_open(name):
+                errors.append(f"{name}: 연속 실패로 쉬는 중")
+                continue
             try:
                 results = await fn(query, max_results)
+                if self.breaker:
+                    self.breaker.record(name, ok=True)
             except Exception as e:  # 백엔드 하나가 죽어도 다음으로
                 errors.append(f"{name}: {type(e).__name__}: {str(e)[:120]}")
+                if self.breaker:
+                    self.breaker.record(name, ok=False)
                 continue
             if results:
                 self.last_backend = name
                 self.last_error = "; ".join(errors) or None
+                merged = dedupe(extra_rows + results)
                 if use_cache:
-                    self.cache.set(key, results)
-                return results
-        self.last_backend = None
-        self.last_error = "; ".join(errors) or "no results"
-        return []
+                    self.cache.set(key, merged)
+                return merged
+        self.last_backend = "opendata" if extra_rows else None
+        self.last_error = "; ".join(errors) or ("no results" if not extra_rows else None)
+        if extra_rows and use_cache:
+            self.cache.set(key, dedupe(extra_rows))
+        return dedupe(extra_rows)
 
 
 def researcher_from_config(config: dict) -> Researcher:
@@ -248,7 +445,12 @@ def researcher_from_config(config: dict) -> Researcher:
         optimization_mode=vane_cfg.get("optimization_mode", "speed"),
     ) if vane_cfg.get("enabled", False) else None
     cache = DiskCache(ttl=int(rc.get("cache_ttl_seconds", DEFAULT_TTL)))
-    return Researcher(vane=vane, cache=cache)
+    from .opendata import OpenDataConfig, OpenDataSources, build_sources     # 순환 import 방지용 지연 import
+    bc = rc.get("breaker") or {}
+    breaker = Breaker(fails=int(bc.get("fails", 3)), cooldown=float(bc.get("cooldown_seconds", 300)))
+    sources = build_sources(OpenDataConfig.from_config(rc))
+    extras = [("opendata", OpenDataSources(sources, breaker=breaker))] if sources else []
+    return Researcher(vane=vane, naver=NaverConfig.from_config(rc), cache=cache, extras=extras, breaker=breaker)
 
 
 def today_iso() -> str:

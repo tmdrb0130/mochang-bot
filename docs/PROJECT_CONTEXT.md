@@ -1,7 +1,12 @@
 # 모두의 창업 신청서 자동 작성기 — 프로젝트 컨텍스트
 
 > 새 세션에서 이 파일만 읽고 작업을 이어갈 수 있도록 정리한 인수인계 문서.
-> 작성일: 2026-08-31
+> 작성일: 2026-08-31 · **마지막 대조: 2026-09-10**
+>
+> ⚠️ **이 문서는 기획 단계(08-31)의 판단 기록이다.** 그 뒤 결정이 여러 번 뒤집혔다.
+> **지금 돌아가는 것의 정확한 모습은 `docs/SYSTEM_ARCHITECTURE.md` 가 기준이다.**
+> 여기서는 "왜 그렇게 정했나" 를 보고, 값·구조는 저쪽을 믿을 것.
+> 아래 표에서 화살표(→ 2026-09-xx)가 붙은 줄이 그 뒤 바뀐 것들이다.
 
 ---
 
@@ -19,16 +24,16 @@
 |---|---|
 | 현재 단계 | 데모/MVP |
 | 데모용 모델 | Claude Sonnet (claude-sonnet-4-6). **개발 중 무료 테스트는 OpenRouter `minimax/minimax-m3:free`** (2026-08-31 확정, 아래 진행 상황 참고) |
-| 최종 기본 모델 | 로컬 Llama 70B (Ollama → 트래픽 늘면 vLLM) |
+| 최종 기본 모델 | 로컬 Llama 70B (Ollama → 트래픽 늘면 vLLM) → **2026-09-02 변경: `Qwen/Qwen3.8-27B-FP8`** on vLLM 0.25, GPU 서버 k8s **복제본 2개**(GPU1+GPU2), SSH 터널 `localhost:30801`. 라마 70B 와 A/B 후 교체(32초/1,609자 vs 61초/1,153자, KV 토큰 5.3배) |
 | 모델 연결 방식 | **OpenAI 호환 API 하나로 통일**. `base_url / api_key / model` 세 값만 설정 파일로 분리. Claude·Gemini는 LiteLLM 프록시로 같은 형식 사용 |
 | 프롬프트 관리 | 코드에 하드코딩하지 않고 **md 파일**로 분리 (아래 4절) |
 | RAG | 로컬 문서(PDF/PPTX/DOCX) 먼저, 웹 검색(뉴스·근거자료)은 2차 → 실제로는 웹 조사(`/research`)가 먼저 구현됨(2026-08-31) |
 | RAG 프레임워크 | **LlamaIndex 확정**(2026-09-01). 로컬 문서 `/ingest` 는 미착수 |
-| 웹 검색 | **Vane(구 Perplexica)** 확정(2026-09-01). 자체 모델 없음 → 채팅 LLM 은 **로컬 Ollama** 에 연결(무료 한도 보호), 임베딩은 Vane 내장. ddgs 는 폴백 |
+| 웹 검색 | **Vane(구 Perplexica)** 확정(2026-09-01). 자체 모델 없음 → 채팅 LLM 은 **로컬 Ollama** 에 연결, 임베딩은 Vane 내장. ddgs 는 폴백 → **역전됨: Vane `enabled: false`, ddgs 가 주 경로.** 네이버 검색 API 와 공공데이터(KOSIS·ECOS·K-Startup·상권·KCI)는 **키가 들어와 실제로 함께 돈다**(2026-09-11 확인, 빈 키는 KIPRIS 하나). 네이버는 `enabled` 플래그가 없고 키 유무로만 켜진다 |
 | 백엔드 | Python + FastAPI |
 | 프론트엔드 | 기존 React 아티팩트를 `frontend/src/App.jsx`로 이관(Vite + React 19 + Tailwind v4). API 호출은 `frontend/src/api.js` → 백엔드 |
 
-### 모델 관련 주의
+### 모델 관련 주의 (08-31 검토 당시의 판단. Qwen 전환으로 대부분 무효)
 - Llama 70B Q4 양자화 기준 VRAM 40GB 이상 필요 (24GB×2, 48GB×1, Mac 통합메모리 64GB+). 미만이면 CPU 오프로드로 문항당 수 분 소요.
 - Llama 3.x 계열은 한국어 장문에서 번역투·반복·존댓말 흐트러짐 발생 가능. **같은 입력으로 Sonnet vs Llama 70B vs 한국어 강한 모델(Gemma 3 27B, EXAONE 3.5 32B 등) 나란히 비교**한 뒤 기본 모델 최종 결정.
 - 아티팩트 환경의 Anthropic API는 `max_tokens: 1000` 제한 → 한국어 2000자 문항을 한 번에 못 채움. 그래서 초안은 1000~1300자로 생성하고 "이어쓰기"로 보충하는 구조. 자체 백엔드에서는 이 제한이 없으므로 한 번에 1500~1900자 목표로 바꿔도 됨.
@@ -330,9 +335,63 @@ frontend/
 
 **2~3단계에서 반드시**: 같은 입력으로 Sonnet vs Llama 70B (vs Gemma 3 27B / EXAONE 3.5 32B) 결과 비교 → 기본 모델 방향 결정.
 
+## 12. 운영 메모 — SSH 터널 서비스화 ✅ **2026-09-10 적용 완료**
+
+본문 생성 모델(**Qwen3.8-27B-FP8**)은 원격 GPU 서버의 vLLM 이고, 이 PC 는 SSH 터널 **30801** 로 붙는다.
+
+> **이 절의 경고는 2026-09-10 에 그대로 현실이 됐다.** 새벽 03:27 재부팅으로 터널이 사라졌고,
+> 아래 예측대로 nginx·백엔드는 200 을 돌려주는데 생성만 전부 실패했다. 6시간 30분 뒤 사람이 발견했다.
+> 사고 전말은 `SYSTEM_ARCHITECTURE.md` §26. 아래는 그때 실제로 등록한 값이다.
+>
+>     nssm install mochang-tunnel "C:\WINDOWS\System32\OpenSSH\ssh.exe" ^
+>         "-N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 30801:localhost:30801 gpu"
+>     nssm set mochang-tunnel ObjectName ".\bon505" <비밀번호>
+>     nssm set mochang-tunnel Start SERVICE_AUTO_START
+>     nssm set mochang-tunnel AppExit Default Restart
+>     nssm set mochang-tunnel AppRestartDelay 5000
+>
+> **`ObjectName` 을 `.\bon505` 로 두는 것이 핵심이다.** 기본값 LocalSystem 은 `%USERPROFILE%` 가 달라
+> `~/.ssh/id_gpu` 와 `gpu` 호스트 별칭을 못 찾는다 — 서비스는 뜨는데 터널이 안 붙는다.
+> 실행 파일도 Git 의 ssh 가 아니라 **Windows 내장 OpenSSH** 를 쓴다.
+
+아래는 적용 전의 기록이다(포트 30800·라마 시절 표기 그대로 남긴다).
+
+지금 이 터널은 **Windows 서비스가 아니라 로그인 세션 프로세스**다. `-f` 로 백그라운드에
+분리돼 있어 VS Code 나 터미널을 닫아도 살아남지만, **로그아웃하거나 재부팅하면 죽는다.**
+(서버로 상시 운영 중이라 로그아웃은 사실상 없고, 재부팅만 실질 위험이다.)
+
+터널이 죽으면 nginx·백엔드는 멀쩡히 200 을 돌려주는데 **글 생성만 전부 실패**한다.
+겉으로는 정상으로 보여 알아채기 어렵다.
+
+필요해지면 NSSM 서비스로 등록할 수 있다:
+
+    nssm install vsp-tunnel "C:\Program Files\Git\usr\bin\ssh.exe" ^
+        -N -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -L 30800:localhost:30800 <gpu>
+    nssm set vsp-tunnel Start SERVICE_AUTO_START
+    nssm set vsp-tunnel AppExit Default Restart
+    nssm set vsp-tunnel AppRestartDelay 5000
+
+포인트 두 가지
+
+- **`-f` 를 뺀다.** NSSM 이 프로세스를 직접 붙잡아야 죽었을 때 되살릴 수 있다.
+  `-f` 로 분리되면 NSSM 은 껍데기가 즉시 끝난 것으로 보고 관리하지 못한다.
+- `ServerAliveInterval` 로 네트워크가 끊긴 좀비 터널을 스스로 감지하게 한다.
+  포트는 열려 있는데 실제로는 안 통하는 상태를 막는다.
+
+전제: 키 인증이 되어 있어야 한다(비밀번호를 물으면 서비스로 못 띄운다).
+같은 PC 의 나머지 서비스(vsp-nginx / vsp-faiss / vsp-llama / vsp-spring / vsp-front /
+**mochang-api / mochang-dashboard / mochang-tunnel**)도 전부 NSSM 으로 등록돼 자동 복구된다.
+상세는 바탕화면 vsp자동복구.txt, 전체 운영 지도는 `SYSTEM_ARCHITECTURE.md` §18.
+
+**2026-09-10 부로 모창봇에 수동 기동 항목은 없다** (예약 작업 `mochang-watchdog` 5분 · `mochang-db-snapshot` 매일 04:30 포함).
+
 ## 11. 미결 사항
-- 로컬 70B 서빙 하드웨어 확정 → 2026-09-01 Llama 70B 머신 확보, 거기서 이어 작업
+
+> 2026-09-10 대조: 아래 대부분이 해소됐다. 지금 남은 진짜 미결은 **외부 감시 부재**(§26)와
+> ~~자료조사 API 키 미발급~~ → **발급 완료, 실제 가동 중**(2026-09-11 확인). 남은 미결은 외부 감시 하나다.
+
+- ~~로컬 70B 서빙 하드웨어 확정~~ → 2026-09-01 머신 확보 → **09-02 Qwen3.8-27B-FP8 로 교체, k8s 복제본 2개로 운영 중**
 - ~~웹 검색 API 선택~~ → Vane 확정 (2절)
-- 다중 사용자 서비스 시 인증·저장(사용자별 초안 보관) 여부
-- 무료 한도 초과 시 운영 방침: OpenRouter $10 충전(1000회/일)로 갈지, 서버 컴 로컬 모델로 바로 갈지. 여러 사용자가 쓰면 50회/일은 하루 5명 분량밖에 안 됨
+- ~~다중 사용자 서비스 시 인증·저장(사용자별 초안 보관) 여부~~ → **해소.** SQLite(WAL) 2벌(서비스/백업) + 초안 열쇠(`owner_token`) + 공유 링크(`share_token`) + 브라우저 익명 id(`client_id`). 계정 로그인은 도입하지 않기로 함
+- ~~무료 한도 초과 시 운영 방침~~ → **해소.** 자체 GPU 서버 vLLM 으로 갔다. `daily_request_limit: 50` 은 설정에 남아 있지만 운영 모델(Qwen)에는 한도가 없다(`/health.usage.limit = null`)
 - "정성껏 다시 쓰기"에만 상위 모델(Claude Opus/Fable) 붙이는 하이브리드 구성 검토

@@ -3,6 +3,8 @@
 중소벤처기업부 「모두의 창업 프로젝트」 도전신청서 자동 작성기. FastAPI 백엔드(`backend/`) + React/Vite 프론트(`frontend/`). 한국어 프로젝트 — 응답·커밋 메시지·주석 모두 한국어.
 
 ## 세션 시작 시 먼저 읽을 것 (순서대로)
+0. **병렬 세션 작업 중이면** `docs/TEAMWORK.md`(규칙) + `docs/WORKBOARD.md`(배정·상태) 먼저.
+   자기 세션 번호의 소유 구역 밖 파일은 수정 금지.
 1. `PROGRESS.md` **맨 위 절** — 직전 세션이 어디까지 했고 다음에 뭘 할지. 여러 PC 를 오가며 작업하므로 이 파일이 인수인계 문서다.
 2. `docs/PROJECT_CONTEXT.md` — 설계 결정·문항 분석·로드맵 (필요한 절만).
 3. `README.md` — 실행 방법·API 표.
@@ -12,14 +14,23 @@
 ## 실행·검증
 ```bash
 .venv/Scripts/python -m pytest -q          # 모델·네트워크 호출 0 (전부 mock). 커밋 전 반드시 통과
-cd frontend && npx vite build              # 프론트 문법 검증
+cd frontend && npx vite build --outDir dist-check   # 프론트 문법 검증 (dist-check 는 gitignore)
+# ⚠️ `npx vite build` 를 그냥 실행하면 frontend/dist 가 덮여 **즉시 공개 배포**된다
+#    (nginx 가 dist 를 그대로 서빙). dist 빌드는 배포 승인 후에만.
 uvicorn backend.main:app --reload --port 8000   # 백엔드 / 프론트: cd frontend && npm run dev
 ```
 Windows 는 `.venv\Scripts\python`, Linux/mac 은 `.venv/bin/python`. **작업 PC 들은 Windows PowerShell 5.1** — 사용자에게 주는 명령어에 `&&`·`source`·`export` 같은 bash 문법을 쓰지 말고 한 줄씩, venv 활성화는 `.\.venv\Scripts\Activate.ps1`. 의존성: `backend/requirements.txt`, `requirements-dev.txt`.
 
 ## 규칙
 - **프롬프트 문구는 전부 `backend/prompts/*.md`** — 코드에 한국어 프롬프트를 박지 않는다. 새 md 는 `tests/test_prompts.py` 목록에 등록.
+- **사람용 문서와 제품 자산을 섞지 않는다** (2026-09-10 정리). 기준은 "런타임이 읽는가?" 하나다.
+  - `backend/prompts/**` = LLM 이 읽는 것. **여기엔 사본·백업·기록을 두지 않는다.**
+  - `docs/**` = 사람·다음 세션이 읽는 것. 런타임은 절대 읽지 않는다.
+  - 프롬프트 옛 판본은 **git 태그**로 남긴다: `git tag prompts-<날짜>-<이유>`. 폴더 사본을 만들지 않는다
+    (`.gitignore` 가 `backend/prompts.*/` 를 막는다). 이미 있는 사본은 `docs/prompt_backups/<날짜>/`.
 - 테스트는 실제 모델을 호출하지 않는다 (`FakeClient` 패턴, `tests/test_intake.py` 참고). 실호출 검증은 사람이 하고 결과를 PROGRESS.md 에 적는다.
-- 무료 OpenRouter 한도(하루 50회)를 의식한다: 실호출은 최소로, 호출 수를 늘리는 설계는 PROGRESS "결정 필요"에 적고 진행.
+- 실호출은 최소로. (~~무료 OpenRouter 한도 50회/일~~ → **2026-09-02 자체 GPU 서버 Qwen 으로 전환해 한도 없음.** 다만 GPU 는 공유 자원이고 학생과 나눠 쓰므로 부하 큰 실호출은 큐가 빈 때. 호출 수를 늘리는 설계는 PROGRESS "결정 필요"에 적고 진행.)
 - `.env`(API 키)는 커밋 금지. `backend/.usage.json`, `backend/.cache/` 도 로컬 전용.
-- 검색은 Vane(구 Perplexica), RAG 는 LlamaIndex 로 가기로 결정됨 (2026-09-01). Vane 의 채팅 LLM 은 로컬 Ollama 에 붙인다.
+- RAG 는 LlamaIndex + **Chroma**(2026-09-11 전환) + 로컬 Ollama `bge-m3` 임베딩. 벡터 저장소는 `backend/.vectorstore-chroma/`.
+- 조사 소스는 **ddgs + 네이버 검색 API + 공공데이터(KOSIS·ECOS·K-Startup·상권·KCI)가 전부 실제로 돈다** (`.env` 에 키가 들어와 있다. 빈 것은 KIPRIS 하나). `enabled: false` 인 것은 **Vane** 뿐이다(SearXNG 가 봇 차단을 맞고 한국어 품질이 ddgs 보다 나빴다).
+- 운영 모델은 **`Qwen/Qwen3.8-27B-FP8`** (GPU 서버 vLLM, 복제본 2개, SSH 터널 `localhost:30801`). 터널은 NSSM 서비스 `mochang-tunnel` 이라 재부팅에도 자동으로 뜬다. `/health` 의 `llm_reachable` 이 False 면 그 둘 중 하나가 죽은 것 — 그동안 생성·번역이 전부 실패한다.

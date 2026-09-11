@@ -1,0 +1,95 @@
+# LLM 연결 설정 — base_url / api_key / model 세 값만 바꾸면 어떤 OpenAI 호환 서버든 연결됨
+# api_key 에 "${ENV_NAME}" 형식으로 쓰면 환경변수(프로젝트 루트 .env 포함)에서 읽어옴.
+#
+# OpenRouter (무료 테스트):  base_url: https://openrouter.ai/api/v1   api_key: ${OPENROUTER_API_KEY}  model: <아래 목록>
+#   무료 모델(2026-08-31 기준, id 끝 ":free"):
+#     minimax/minimax-m3:free                 ✔ 테스트 통과: Q2 1600자 한국어 40초, 품질 무난 (현재 기본)
+#     nvidia/nemotron-3-super-120b-a12b:free  추론 모델. extra.reasoning 끄지 않으면 본문이 안 나옴. 200초+ 로 느림
+#     google/gemma-4-31b-it:free              한국어 강하지만 무료 풀 429 잦음 (2026-08-31 테스트 시 계속 실패)
+#     z-ai/glm-5.2:free                       무료 풀 429 잦음
+#     openrouter/free                         자동 선택 — 영어로 답하는 모델에 걸릴 수 있어 비추
+#   무료 티어는 분당/일일 요청 제한이 있어 429가 나면 잠시 후 재시도.
+# Ollama (로컬):        base_url: http://localhost:11434/v1   api_key: ollama        model: llama3.3:70b
+# 서버 컴 Ollama:       base_url: http://<서버IP>:11434/v1    api_key: ollama        model: llama3.3:70b
+# vLLM:                base_url: http://<서버IP>:8000/v1     api_key: dummy         model: <서빙 모델명>
+# LiteLLM 프록시(Claude): base_url: http://localhost:4000/v1  api_key: <litellm key> model: claude-sonnet-4-6
+
+llm:
+  base_url: "https://openrouter.ai/api/v1"
+  api_key: "${OPENROUTER_API_KEY}"
+  model: "minimax/minimax-m3:free"
+  max_tokens: 4096      # 한국어 1900자 ≈ 3000토큰 내외, 여유 포함
+  temperature: 0.7
+  # extra: 요청 본문에 그대로 추가되는 서버별 옵션. OpenRouter 에서는 추론(thinking)을 꺼서
+  # nemotron 같은 추론 모델이 thinking 으로 max_tokens 를 다 먹고 본문을 못 내는 문제를 막는다.
+  # (추론 없는 모델은 이 옵션을 무시함.)  Ollama/vLLM 으로 바꾸면 extra 는 비워둘 것.
+  extra:
+    reasoning: { enabled: false }
+
+# UI에서 고를 수 있는 모델 목록. llm.model 이 기본값. 각 항목에 extra 를 두면 그 모델에만 추가 적용.
+models:
+  - id: minimax/minimax-m3:free
+    name: MiniMax M3
+    note: 테스트 통과 — 한국어 자연스럽고 규칙 준수 양호. 문항당 25~40초. 기본값
+  - id: google/gemma-4-31b-it:free
+    name: Gemma 4 31B
+    note: 한국어 강함. 무료 풀 혼잡 시 429 잦음 (폴백으로 넘어감)
+  - id: z-ai/glm-5.2:free
+    name: GLM 5.2
+    note: 무료 풀 혼잡 시 429 잦음
+  - id: nvidia/nemotron-3-super-120b-a12b:free
+    name: Nemotron 3 Super
+    note: 추론 모델(reasoning 꺼서 사용). 반말·제목 출력 등 규칙 준수가 약함
+
+# 선택 모델이 429/다운이면 목록의 다른 모델로 OpenRouter 가 자동 전환 (`models` 파라미터, 최대 3개 → 선택 모델 + 목록 위쪽 2개).
+# 응답의 model 로 실제 모델 확인.
+fallback: true
+
+# 무료 티어 하루 요청 한도 (OpenRouter 문서: 누적 결제 $10 미만 50회/일, 이상 1000회/일, 공통 20회/분. UTC 00:00 리셋)
+# 백엔드가 요청 수를 backend/.usage.json 에 세어 /health 로 알려준다. $10 충전했으면 1000 으로 바꿀 것.
+daily_request_limit: 50
+
+# ── 동시성 층 (backend/llm/jobs.py) ──
+# 모든 모델 호출은 asyncio.Queue 를 거치고 워커 max_workers 개가 처리 → OpenRouter 로 나가는 동시 요청 수 상한.
+# 무료 티어(20회/분)는 2~3, 유료/로컬 vLLM 이면 4~8. 429 는 지수 백오프(base_delay × 2^n, 최대 max_delay)로 attempts 회 재시도.
+max_workers: 2
+retry:
+  attempts: 3
+  base_delay_seconds: 2
+  max_delay_seconds: 30
+
+# ── 웹 조사(research) ──
+# search(query) 는 vane → ddgs 순으로 시도. vane.enabled=false 면 ddgs(DuckDuckGo, 모델 호출 없음)만 쓴다.
+# Vane 은 검색 1회마다 자체 모델 호출(질의 분류·답변)을 하므로 OpenRouter 무료 한도를 추가로 소모한다 →
+# 한도가 넉넉해질 때(충전 또는 로컬 모델) enabled: true 로. provider id 는 `python -m backend.rag.vane_setup --show` 출력값.
+research:
+  # ── 조사 전용 LLM (검색어 생성 · 웹 본문에서 사실 추출) ──
+  # 지원서 본문 작성은 위의 llm: 이 하고, 조사는 여기 적힌 모델이 한다. 이 블록을 지우면 둘 다 llm: 을 쓴다.
+  # 로컬 70B 는 무료 한도가 없으므로 조사처럼 호출이 잦은 단계에 적합하다.
+  # 주의: base_url 이 SSH 터널이라 `ssh -L 30800:localhost:30800 gpu` 가 켜져 있어야 한다.
+  llm:
+    base_url: "http://localhost:30800/v1"
+    api_key: "dummy"                                        # vLLM 은 키를 검증하지 않음
+    model: "casperhansen/llama-3.3-70b-instruct-awq"
+    max_tokens: 4096
+    temperature: 0.3                                        # 사실 추출·JSON 이라 낮게
+    max_workers: 4                                          # 로컬 서버라 OpenRouter(2)보다 높여도 됨
+
+  cache_ttl_seconds: 604800      # 같은 검색어 결과 디스크 캐시 7일 (backend/.cache/research/)
+  max_queries: 4                 # 아이디어+문항당 생성할 검색어 수 (3~5)
+  max_results_per_query: 6
+  max_pages_to_extract: 6        # trafilatura 본문 추출 페이지 수 상한
+  vane:
+    # 2026-09-01 끔. Vane 의 SearXNG 는 httpx 로 검색엔진에 붙는데 DuckDuckGo 가 그 지문을 봇으로 보고 캡차를 준다
+    # (IP 문제가 아니다 — 같은 curl 을 작업 PC/서버에서 쏘면 둘 다 202). 살아남은 엔진이 Bing 하나뿐이라
+    # 한국어 자료 품질이 ddgs 보다 확연히 나빴다. ddgs 는 primp(브라우저 TLS 지문 위장)를 써서 정상 응답을 받는다.
+    # 게다가 Vane 은 검색마다 자체 요약(라마 25~30초)을 만드는데 우리는 그걸 버린다 → 순수 낭비.
+    # 설정은 남겨둔다: ddgs 가 막히면 enabled: true 한 줄로 되살릴 수 있다.
+    enabled: false
+    base_url: "http://localhost:50000"   # SSH 터널 50000 -> 서버 NodePort 30500
+    chat_provider_id: "c3493b45-9630-48e2-be8e-ec42023a1f6b"      # vLLM Llama 70B (2026-09-01 등록)
+    chat_model_key: "casperhansen/llama-3.3-70b-instruct-awq"
+    embedding_provider_id: "7cf7ae74-4613-43cd-a8c0-54a67bf97885" # Transformers (Vane 내장, 로컬 임베딩)
+    embedding_model_key: "Xenova/nomic-embed-text-v1"
+    sources: ["web"]
+    optimization_mode: "speed"

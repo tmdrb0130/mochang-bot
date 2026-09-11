@@ -1,0 +1,110 @@
+# Qwen3.8-27B-FP8 vLLM — GPU 서버 GPU2 (2026-09-02). 2026-09-03 부터 GPU1 복제본(vllm-qwen-b)과 같은 Service 로 묶임.
+#
+# 적용:   ssh gpu 'kubectl apply -f -' < k8s/vllm-qwen-deployment.yaml
+# 확인:   ssh gpu 'kubectl get pods -l app=vllm-qwen; kubectl logs deploy/vllm-qwen --tail=20'
+# 제거:   ssh gpu 'kubectl delete deploy,svc vllm-qwen'      (라마 배포 vllm 은 영향 없음)
+# 이 PC:  ssh -f -N -o BatchMode=yes -o ExitOnForwardFailure=yes -L 30801:localhost:30801 gpu
+#         → http://localhost:30801/v1  (config.yaml base_url)
+#
+# 설계 근거 (PROGRESS 2026-09-02 저녁 절):
+# - GPU 지정: k8s 자원 요청(nvidia.com/gpu)을 쓰면 다른 사람 Docker 가 14.7GB 점유 중인 GPU0 을 받을 수 있다
+#   → 자원 요청 없이 NVIDIA_VISIBLE_DEVICES 로 GPU2(UUID) 고정. 런타임 설정 accept-nvidia-visible-devices-envvar-when-unprivileged 기본 true.
+# - 다운로드: 서버→huggingface.co 본진은 차단(20 B/s), hf-mirror.com 은 4.5 MB/s. 그런데 파드 안의 huggingface_hub 는 미러 응답을
+#   "HF 가 아니다"(FileMetadataError) 라며 거부 → 전임자 방식대로 **호스트에서 curl 로 폴더에 직접 받고 경로로 로드**한다.
+#   폴더 /opt/llm-models/qwen3.8-27b-fp8 (스크립트 .download.sh, 로그 .download.log — 3병렬 ≈ 5 MB/s, 31GB ≈ 2시간).
+#   ⚠ 파일 목록을 Windows 에서 만들면 줄 끝 \r 이 URL 에 들어가 curl 이 전부 거부한다 (sed 's/\r$//').
+#   파드는 HF_HUB_OFFLINE=1 — 네트워크를 아예 안 본다. served-model-name 으로 API 상 id 는 Qwen/Qwen3.8-27B-FP8 유지.
+# - 모델: Qwen3.8 은 thinking 기본 ON — 앱 쪽 config.yaml extra.chat_template_kwargs.enable_thinking=false 로 요청마다 끈다.
+#   비전 입력은 안 쓰므로 limit-mm-per-prompt 0 (멀티모달 프로파일링 메모리 절약).
+# - vLLM 0.25.0 (서버에 있는 이미지 그대로) — Qwen3_5ForConditionalGeneration 지원 확인, transformers 5.13 ≥ 5.8 요건 충족.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-qwen
+  namespace: default
+  labels:
+    app: vllm-qwen
+    serving: qwen          # 2026-09-03: Service 공통 라벨 (GPU1 복제본 k8s/vllm-qwen-b-deployment.yaml 머리말 참고)
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm-qwen
+  template:
+    metadata:
+      labels:
+        app: vllm-qwen
+        serving: qwen
+    spec:
+      runtimeClassName: nvidia
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: vllm
+          # 서버에 있는 이미지(라마 파드와 동일, vLLM 0.25.0)를 digest 로 고정 — 'latest' 태그는 서버에서 사라져 있어
+          # 태그로 쓰면 kubelet 이 도커허브에서 8.8GB 를 새로 받으려 한다 (2026-09-02 22:3x ContainerCreating 7분 멈춤의 원인).
+          image: vllm/vllm-openai@sha256:fc56161ee42a011aeee78b65d0a81b6683c7d04402fd40503d14d4d6c98f07cb
+          imagePullPolicy: IfNotPresent
+          args:
+            - --model
+            - /root/.cache/huggingface/qwen3.8-27b-fp8      # hostPath /opt/llm-models/qwen3.8-27b-fp8
+            - --served-model-name
+            - Qwen/Qwen3.8-27B-FP8
+            - --max-model-len
+            - "32768"
+            - --gpu-memory-utilization
+            - "0.90"
+            # --kv-cache-dtype fp8 은 뺐다: 체크포인트에 k/v scale 보정값이 없어 vLLM 이 "uncalibrated q_scale/prob_scale 1.0,
+            # 정확도 문제 가능" 경고를 낸다 (2026-09-02 첫 기동 로그). 96GB 중 가중치 28GB 라 bf16 KV 로도 캐시가 넉넉하다.
+            - --reasoning-parser
+            - qwen3
+            # 우선순위 스케줄링 (2026-09-03): 요청의 priority 가 낮은 수일수록 먼저. 앱은 조사·인테이크 호출에 0, 본문 생성에 100 을
+            # 보낸다 (config.yaml extra.priority) → GPU 가 붐빌 때 카드·참고자료가 먼저 나오고 생성(순번 표시되는 큐)이 대기를 흡수.
+            # 40명 실측에서 인테이크가 생성 320건과 GPU 를 나눠 쓰느라 11분 걸린 것의 처방.
+            - --scheduling-policy
+            - priority
+            - --limit-mm-per-prompt
+            - '{"image": 0, "video": 0}'
+            - --port
+            - "8000"
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: GPU-136470ac-db1a-2a7c-a856-9f368e2068d8   # nvidia-smi index 2
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: compute,utility
+            - name: HF_HUB_OFFLINE
+              value: "1"
+          ports:
+            - containerPort: 8000
+              protocol: TCP
+          startupProbe:                # 다운로드 2시간 + 로드를 기다린다 (30초 × 8640 = 3일)
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            failureThreshold: 8640
+          volumeMounts:
+            - name: model-cache
+              mountPath: /root/.cache/huggingface
+      volumes:
+        - name: model-cache
+          hostPath:
+            path: /opt/llm-models
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-qwen
+  namespace: default
+spec:
+  type: NodePort
+  selector:
+    serving: qwen          # 2026-09-03: GPU2(vllm-qwen) + GPU1(vllm-qwen-b) 두 파드를 번갈아 쓴다
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30801
+      protocol: TCP
