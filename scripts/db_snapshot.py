@@ -6,7 +6,8 @@
     .venv/Scripts/python scripts/db_snapshot.py --remote gpu:mochang-backup --remote-keep-days 60
     .venv/Scripts/python scripts/db_snapshot.py --dry-run                # 무엇을 할지만 출력
 
-왜: 지금까지의 "백업 DB"(mochang-backup.sqlite)는 같은 PC 의 같은 폴더에 있어 디스크·PC 장애에는 백업이 아니었다.
+왜: 전체기록 DB(mochang-archive.sqlite, 2026-09-11 개명 전 이름 mochang-backup.sqlite)는 같은 PC 의
+같은 폴더에 있어 디스크·PC 장애에는 백업이 아니다. **진짜 백업은 이 스크립트가 만드는 오프사이트 스냅샷이다.**
 이 스크립트는 sqlite3 backup API 로 **서비스가 도는 중에도** 일관된 스냅샷을 만들고(WAL 모드라 무중단),
 다른 머신에 사본을 두는 것으로 5번 문제(오프사이트 부재)를 끝낸다. 모델·네트워크(scp 제외) 호출 없음.
 

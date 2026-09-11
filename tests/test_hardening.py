@@ -80,9 +80,9 @@ def test_legacy_row_without_token_opens_for_same_ip_and_gets_upgraded(tmp_path):
     st.close()
 
 
-def test_owner_key_fills_legacy_row_and_mirrors_backup(tmp_path):
+def test_owner_key_fills_legacy_row_and_mirrors_archive(tmp_path):
     bak = S.Storage("sqlite:///" + (tmp_path / "bak.sqlite").as_posix())
-    st = S.Storage("sqlite:///" + (tmp_path / "svc.sqlite").as_posix(), backup=bak)
+    st = S.Storage("sqlite:///" + (tmp_path / "svc.sqlite").as_posix(), archive=bak)
     st.init()
     info = st.upsert({"draft_id": "draft-mirror-0001", "idea": "미러", "track": "tech"}, owner="1.1.1.1")
     with bak.engine.connect() as conn:

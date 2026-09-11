@@ -20,8 +20,8 @@ os.environ.setdefault("MOCHANG_ALLOW_OFFLINE_EMBEDDING", "1")
 #    벡터DB 동작 자체는 tests/test_vectorstore.py 와 test_pipeline.py 가 임시 디렉터리로 본다.
 os.environ.setdefault("MOCHANG_SKIP_VECTORSTORE_WARMUP", "1")
 os.environ["MOCHANG_DATABASE_URL"] = "sqlite:///" + Path(tempfile.mkdtemp(prefix="mochang-test-db-")).joinpath("t.sqlite").as_posix()
-# 백업 DB 도 임시로 — 안 그러면 config.yaml 의 backend/.data/mochang-backup.sqlite 에 가짜 초안이 쌓인다.
-os.environ["MOCHANG_BACKUP_DATABASE_URL"] = "sqlite:///" + Path(tempfile.mkdtemp(prefix="mochang-test-bak-")).joinpath("b.sqlite").as_posix()
+# 전체기록 DB 도 임시로 — 안 그러면 config.yaml 의 backend/.data/mochang-archive.sqlite 에 가짜 초안이 쌓인다.
+os.environ["MOCHANG_ARCHIVE_DATABASE_URL"] = "sqlite:///" + Path(tempfile.mkdtemp(prefix="mochang-test-bak-")).joinpath("b.sqlite").as_posix()
 
 from backend import timing            # noqa: E402  (환경변수를 먼저 세팅해야 한다)
 from backend.pipeline import generate  # noqa: E402

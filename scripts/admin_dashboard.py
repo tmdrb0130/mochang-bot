@@ -284,7 +284,7 @@ def collect() -> dict:
     if health:
         live.update(llm=health.get("llm_reachable"), model=health.get("model"),
                     storage={"enabled": (health.get("storage") or {}).get("enabled"),
-                             "backup": (health.get("storage") or {}).get("backup"),
+                             "archive": (health.get("storage") or {}).get("archive"),
                              "errors": (health.get("storage") or {}).get("error_count")},
                     usage_today=(health.get("usage") or {}).get("used"),
                     finisher=health.get("finisher"))

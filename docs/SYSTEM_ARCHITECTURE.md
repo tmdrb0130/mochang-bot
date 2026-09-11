@@ -106,7 +106,7 @@ flowchart LR
       FIN["Finisher 루프<br/>60초마다 DB 훑기"]
     end
     SQL1[("mochang.sqlite<br/>서비스 DB (실사용만)")]
-    SQL2[("mochang-backup.sqlite<br/>백업 DB (전부, is_test)")]
+    SQL2[("mochang-archive.sqlite<br/>전체기록 DB (테스트 포함 전부)<br/>※백업 아님")]
     CACHE["backend/.cache/research/*.json<br/>7일 디스크 캐시<br/>(검색 결과·조사 facts·골자)"]
     VEC["backend/.vectorstore/<br/>LlamaIndex 색인"]
     LOGS["backend/.timing.jsonl<br/>.usage.json / .usage.research.json"]
@@ -260,7 +260,7 @@ mochang-bot/
 │   │   ├── tracks/ tech.md local.md
 │   │   └── research/ queries.md followup_queries.md extract_facts.md
 │   ├── prompts.backup-20260901-130535/   (구 프롬프트 백업, gitignore 아님)
-│   └── (런타임 생성, gitignore)  .data/mochang.sqlite · .data/mochang-backup.sqlite · .cache/research/ · .vectorstore/ · .timing.jsonl · .usage*.json
+│   └── (런타임 생성, gitignore)  .data/mochang.sqlite · .data/mochang-archive.sqlite · .cache/research/ · .vectorstore/ · .timing.jsonl · .usage*.json
 │
 ├── frontend/
 │   ├── index.html · vite.config.js(포트 5173) · package.json · .env.production(VITE_API_BASE=/api)
@@ -383,7 +383,7 @@ finisher = Finisher(storage, finisher_client, settings, generate_fn=generate.gen
 | `_require_sync()` | 동기 엔드포인트 게이트. `sync_endpoints: false`(운영)면 404. 환경변수 `MOCHANG_SYNC_ENDPOINTS=1` 로 개발·테스트에서만 연다 |
 | `_authorize(draft_id, key, request)` | 초안 접근 확인: `storage.check_access`(열쇠 일치 또는 열쇠 없는 옛 행 + 같은 IP) 실패 → 404. 통과하면 `owner_key` 로 열쇠를 돌려준다(옛 행은 이때 생성) |
 | `_llm_reachable()` | 모델 서버 `GET {base_url}/models` 2초 타임아웃, 30초 캐시 → `/health.llm_reachable` |
-| `_is_test(request)` | 헤더 `X-Mochang-Test` 가 `""/0/false/no` 가 아니면 True → 서비스 DB 를 건너뛰고 백업 DB 에 `is_test=1` |
+| `_is_test(request)` | 헤더 `X-Mochang-Test` 가 `""/0/false/no` 가 아니면 True → 서비스 DB 를 건너뛰고 전체기록 DB 에 `is_test=1` |
 | `_client_id(request)` | 헤더 `X-Mochang-Client`(브라우저 익명 id). `storage._ID_RE` 형식이 아니면 None — 인증 값이 아니라 집계용이라 거부하지 않고 조용히 버린다. `submit_job` 이 `form["client_id"]` 로 넣는다 (§25-5) |
 | `_persisted(kind, form, coro, owner, test)` | 코루틴 결과를 받아 `storage.record(...)` 후 그대로 반환. 저장됐으면 결과 dict 에 `draft_key`(초안 접근 열쇠)를 붙인다. 저장 실패는 storage 가 삼키되 `error_count` 로 센다 |
 | `_with_idea_research(form)` | `run_idea_research` 를 돌려 `form["references"]` 에 facts 주입. 실패해도 `{facts:[], error}` 로 계속 |
@@ -859,7 +859,7 @@ Vane 컨테이너의 `/api/providers` 로 OpenRouter 제공자·모델을 등록
 
 - 모델을 부르지 않고, 저장 실패는 서비스 동작에 영향을 주지 않는다(`record` 가 모든 예외를 삼킴).
 - 쓰기는 `asyncio.to_thread` 로 스레드에서.
-- **서비스 DB**(`storage.url`)에는 실제 사용자 입력만, **백업 DB**(`storage.backup_url`)에는 전부. 쓰기 메서드(`upsert_draft`, `add_generation`, `add_research`, `share_token`)가 백업에 미러링한다. `record(test=True)` 면 서비스 DB 를 건너뛰고 백업에만 `is_test=1`.
+- **서비스 DB**(`storage.url`)에는 실제 사용자 입력만, **전체기록 DB**(`storage.archive_url`, 2026-09-11 개명 전 이름 `backup_url`)에는 전부. 쓰기 메서드(`upsert_draft`, `add_generation`, `add_research`, `share_token`)가 전체기록에 미러링한다. `record(test=True)` 면 서비스 DB 를 건너뛰고 전체기록에만 `is_test=1`.
 - 사용자 고지 없이 저장한다(2026-09-02 사용자 결정).
 
 ### 9-2. 테이블 (SCHEMA_VERSION 6)
@@ -889,7 +889,7 @@ schema_meta   key PK · value        (version)
 
 | 메서드 | 동작 |
 |---|---|
-| `from_config(config)` | `MOCHANG_DATABASE_URL` > `storage.url` > 기본. 백업은 `MOCHANG_BACKUP_DATABASE_URL`(빈 문자열이면 끔) > `storage.backup_url`. 같은 URL 이면 백업 끔 |
+| `from_config(config)` | `MOCHANG_DATABASE_URL` > `storage.url` > 기본. 백업은 `MOCHANG_ARCHIVE_DATABASE_URL`(빈 문자열이면 끔) > `storage.archive_url`. 같은 URL 이면 백업 끔 |
 | `upsert(form, owner, test)` → `{draft_id, draft_key}` / None | 행이 있으면 `_access_ok` 통과 시 UPDATE(`request_count+1`, 입력·answers·model·updated_at, 옛 행이면 `owner_token` 채움) → 없으면 INSERT(`is_test=test`, 새 열쇠 발급). 동시 INSERT 충돌(`IntegrityError`)은 UPDATE 로. 거부·형식 밖 id 는 None. **이미 실사용으로 들어온 초안은 test 로 바뀌지 않는다**. `upsert_draft` 는 draft_id 만 돌려주는 얇은 포장 |
 | `check_access(draft_id, key, ip)` / `owner_key(draft_id)` | GET /drafts·share 용 접근 확인 / 열쇠 조회(옛 행은 생성·백업 미러) |
 | `add_generation(draft_id, kind, form, result)` | `result.text` 가 있을 때만. `meta` = 결과에서 text/question_id/style/model 을 뺀 나머지(polished·refined·auto 등) |
@@ -1061,7 +1061,7 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `generate.refine.enabled` | true | `refine_settings` | refine() 연결 + 신호 재생성 |
 | `generate.outline.enabled` / `cache_ttl_seconds` | true / 604800 | `outline_settings` | 골자 공유, 7일 캐시 |
 | `auto_extend.enabled/min_ratio/min_limit` | true / 0.7 / 500 | `auto_extend_settings` | 짧게 끝난 긴 문항 이어쓰기 |
-| `storage.enabled/url/backup_url` | true / `sqlite:///backend/.data/mochang.sqlite` / `…mochang-backup.sqlite` | `Storage.from_config` | 서비스/백업 DB |
+| `storage.enabled/url/archive_url` | true / `sqlite:///backend/.data/mochang.sqlite` / `…mochang-archive.sqlite` | `Storage.from_config` | 서비스/전체기록 DB |
 | `finisher.*` | §10 표 | `finisher.load_settings` | 마무리 작업자 |
 | `research.llm.*` | 같은 Qwen, `temperature 0.3`, `extra.priority 0`, `max_workers 80` | `research_client_config` | 조사·인테이크·번역 클라이언트 |
 | `research.llm_concurrency/extract_concurrency_global/extract_pool_size` | 60 / 8 / 8 | `_sem`, `apply_runtime_limits` | 조사 경로 전역 상한 (5차 부하 테스트에서 조정) |
@@ -1270,7 +1270,7 @@ Q2. 아이디어를 떠올린 배경 이야기를 들려주세요
 | `backend/.cache/research/<sha1>.json` | `DiskCache` | ① 검색 결과 (키 `백엔드|max|query`) ② 조사 facts (`research-facts|sha1(track|idea|qid or __idea__)`) ③ 골자 (`outline|sha1(track|idea|answers)`) | 7일 (`ttl`) |
 | `backend/.vectorstore/` | `VectorStore._persist` | LlamaIndex docstore·index (조사 페이지 청크 + 메타) | 만료 없음 (조회 시 730일 신선도 컷) |
 | `backend/.data/mochang.sqlite` (+`-wal`,`-shm`) | `Storage` | 서비스 DB | 영구 |
-| `backend/.data/mochang-backup.sqlite` | `Storage(backup)` | 백업 DB (테스트 포함 전부) — 같은 PC 라 장애 대비 백업은 아니다 | 영구 |
+| `backend/.data/mochang-archive.sqlite` | `Storage(archive)` | **전체기록 DB** (테스트 포함 전부). 2026-09-11 개명 `backup`→`archive` — **백업이 아니다**(같은 PC 같은 폴더라 디스크가 죽으면 같이 죽는다). 진짜 백업은 아래 스냅샷 | 영구 |
 | `backend/.data/snapshots/mochang-YYYY-MM-DD.sqlite.gz` | `scripts/db_snapshot.py` | 서비스 DB 스냅샷(sqlite backup API, 무중단) ≈340 KB. 매일 04:30 예약 작업이 GPU 서버 `~/mochang-backup` 으로 복사 → **오프사이트 백업** | 로컬 7일 보관 |
 | `backend/.usage.json` / `.usage.research.json` | `UsageCounter` | UTC 날짜별 요청 수·모델별 | 날짜 바뀌면 리셋 |
 | `backend/.timing.jsonl` (+`.1`) | `timing.log` | §11 의 이벤트 전부 | 20MB 롤링 |
@@ -1370,7 +1370,7 @@ python -m backend.test_generate q2 --call             # 실제 생성
 ### 19-1. 격리 (`conftest.py`)
 
 - `MOCHANG_TIMING_LOG` → 임시 파일 (운영 지표 오염 방지)
-- `MOCHANG_DATABASE_URL`, `MOCHANG_BACKUP_DATABASE_URL` → 임시 SQLite
+- `MOCHANG_DATABASE_URL`, `MOCHANG_ARCHIVE_DATABASE_URL` → 임시 SQLite
 - `MOCHANG_EXTRACT_ISOLATION=0` (프로세스 풀 대신 스레드; `test_extract_proc.py` 만 켬)
 - `MOCHANG_SYNC_ENDPOINTS=1` (동기 엔드포인트 개방 — 운영은 404), `MOCHANG_ALLOW_OFFLINE_EMBEDDING=1` (오프라인 임베딩 허용)
 - autouse fixture 로 **polish·outline·refine 을 기본 OFF** (`generate._polish_cfg/_outline_cfg/_refine_cfg` 를 `{enabled: False}` 로). 마커 `@pytest.mark.polish/outline/refine` 를 붙인 테스트만 켠다.
@@ -1408,8 +1408,8 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | 스크립트 | 용도 | 모델/네트워크 |
 |---|---|---|
 | `scripts/drafts_report.py [--last N | --id ID | --dump out.jsonl]` | 저장된 초안 읽기 | 없음 |
-| `scripts/drafts_delete.py --list [--backup] / --tests --yes / <id> --yes` | **is_test 표시 초안만** 삭제 | 없음 |
-| `scripts/db_copy_to_backup.py --yes` | 서비스 DB → 백업 DB 최초 복사 (sqlite3 backup API) | 없음 |
+| `scripts/drafts_delete.py --list [--archive] / --tests --yes / <id> --yes` | **is_test 표시 초안만** 삭제 | 없음 |
+| `scripts/db_copy_to_archive.py --yes` | 서비스 DB → 전체기록 DB 최초 복사 (sqlite3 backup API) | 없음 |
 | `scripts/db_snapshot.py [--remote host:/dir --keep-days 7 --dir …]` | 서비스 DB 스냅샷 `.sqlite.gz` + scp 오프사이트 복사 + 보관 정리. 작업 스케줄러 매일 등록용 | scp 만 |
 | `scripts/db_views.sql` | `v_progress`·`v_outputs`·`v_research` 뷰 | — |
 | `scripts/timing_report.py [--last 분 | --tail]` | `.timing.jsonl` 단계별 대기·실행 요약 ("[마무리 작업자]"·"[동시 상한 429]" 절 포함) | 없음 |
@@ -1471,7 +1471,7 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | 09-02 | 초안 DB 저장 (고지 없음), draftId 유사도 0.5 규칙 | `storage.py`, App.jsx `withDraft` |
 | 09-03 | 인테이크·조사를 조사 큐로, vLLM priority, 문항별 파이프라인+카드 단계 선조사, 40명 실측 | `main.py`, App.jsx `runPipeline` |
 | 09-03 | 마무리 작업자, research 테이블, 재접속 복원·개인 링크, 복제본 2개(워커 80/80) | `finisher.py`, k8s |
-| 09-03 | 다국어(영·중·일) 화면 + 읽기 번역, 서비스/백업 DB 분리 + `?test=1`, is_test 만 삭제 | `translate.py`, `i18n.jsx`, `storage.py` |
+| 09-03 | 다국어(영·중·일) 화면 + 읽기 번역, 서비스/전체기록 DB 분리 + `?test=1`, is_test 만 삭제 | `translate.py`, `i18n.jsx`, `storage.py` |
 | 09-04 | 공유 링크 별도 토큰(`share_token`), 번역 상자 스크롤, 카드 번역 순서(보는 카드 먼저·다른 언어 미리) | `storage.py`, `main.py`, App.jsx |
 | 09-04 오후 | **보강 묶음**: 초안 접근 열쇠(`owner_token`, 스키마 5, sha1 폴백 제거) · 동기 엔드포인트 운영 404 · XFF 는 신뢰 프록시의 마지막 항목 · 동시 제한 단위 IP→초안 + IP 천장 + 인테이크 시간당 · 번역 초안당 10/전역 30/priority 50 · 조사 경로 전역 세마포어(모델 60·추출 8, 풀 8) + 대기 계측 · 벡터DB Ollama 헬스체크·오프라인 임베딩 테스트 전용·`embed_model` 메타·persist 직렬화·신선도 90일 · 저장 오류 카운터(`/health.storage`) · `/health.llm_reachable` · `db_snapshot.py` 오프사이트 백업 · q7_1 미배분 명시 · style 기본 logic · full_stack 테스트 | `main.py`, `storage.py`, `jobs.py`, `client.py`, `translate.py`, `rag/pipeline.py`, `rag/vectorstore.py`, `rag/extract_proc.py`, `rag/allocate.py`, api.js, App.jsx, `scripts/db_snapshot.py`, `tests/test_hardening.py` |
 
@@ -1538,7 +1538,7 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | 2 | 번역 작업이 IP 제한 예외(`_UNLIMITED_KINDS`)라 무제한 — 남용하면 조사 큐를 독점 | `main._UNLIMITED_KINDS`, `JobQueue.submit` 이 owner 한 겹만 검사 | `config translate: {max_jobs_per_client: 10, global_limit: 30, priority: 50}`. `JobQueue.submit(..., max_per_owner, max_per_ip, max_per_kind)` + `active_ip/active_kind`. 번역은 초안당 10·전역 30. `LLMClient.complete(extra=)` 로 번역만 vLLM priority 50(조사 0 < 번역 50 < 본문 100 < 마무리 200). 프론트는 기존 429→5초 재시도로 수정 0 | `test_queue_limits_by_ip_and_kind_independently`, `test_same_ip_many_drafts_pass_but_ip_ceiling_and_translate_limits_hold`, `test_translate.py::test_jobs_translate_*` |
 | 3a | `_client_key` 가 XFF **첫** 항목을 믿어 클라이언트가 헤더로 IP 를 위조할 수 있었다 | nginx 는 실제 IP 를 뒤에 덧붙이는데 코드는 앞을 읽음 | `trusted_proxies: ["127.0.0.1", "::1"]` — 피어가 신뢰 프록시일 때만 XFF 의 **마지막** 항목, 아니면 피어 IP. nginx 미수정 | `test_client_key_trusts_last_xff_only_behind_trusted_proxy` |
 | 3b | 강의실(같은 공인 IP 40명)에서 IP 당 3건 제한이 서로를 막음 | 제한 단위가 IP | 제한 단위를 **초안**으로(`_job_owner` = `d:<draft_id>` \| `ip:<ip>`). 우회(초안 id 남발) 방지로 `max_jobs_per_ip: 300` 천장 + `max_intakes_per_ip_hour: 80`(`_check_intake_rate`). storage `owner` 열은 여전히 IP | 같은 테스트 + `test_job_owner_is_draft_then_ip`, `test_intake_rate_limit_per_ip_hour` |
-| 5 | "백업 DB" 가 같은 PC 같은 폴더 — 디스크·PC 장애에는 백업이 아님 | 구조상 오프사이트 사본이 없음 | `scripts/db_snapshot.py`: sqlite backup API 스냅샷(무중단) → `.sqlite.gz` → `--remote host:/dir` scp → 7일 보관 정리 → `timing.log("db_snapshot")`. 작업 스케줄러 명령은 스크립트 머리말(등록은 사용자) | `test_db_snapshot_creates_gz_and_prunes_old` + 실 DB `--dry-run` |
+| 5 | "전체기록 DB" 가 같은 PC 같은 폴더 — 디스크·PC 장애에는 백업이 아님 | 구조상 오프사이트 사본이 없음 | `scripts/db_snapshot.py`: sqlite backup API 스냅샷(무중단) → `.sqlite.gz` → `--remote host:/dir` scp → 7일 보관 정리 → `timing.log("db_snapshot")`. 작업 스케줄러 명령은 스크립트 머리말(등록은 사용자) | `test_db_snapshot_creates_gz_and_prunes_old` + 실 DB `--dry-run` |
 | 6 | 조사 큐 워커 80 × 페이지 동시 3 = 최대 240 모델 호출이 vLLM 로 나갈 수 있어 본문 생성 몫이 사라짐 | 조사 경로에 전역 상한이 없음(워커 수만) | `rag/pipeline._sem(name, n)`(이벤트 루프별 세마포어) — `_extract_from_page` 의 모델 호출을 `research.llm_concurrency: 60` 으로 | `test_research_semaphores_are_per_loop_and_optional`, `test_runtime_limits_apply_to_extract_pool` |
 | 7 | trafilatura 프로세스 풀 3개에 워커 80 의 페이지가 줄을 섬 | `extract_proc.POOL_SIZE=3` 고정, 대기 시간 측정 없음 | 풀 8(`research.extract_pool_size`, `extract_proc.configure`), 추출 전역 `extract_concurrency_global: 8`. `fetch_ms / extract_wait_ms / extract_run_ms / extract_n / llm_wait_ms / llm_run_ms / llm_n` 을 `sources` 이벤트에 → `timing_report.py` "[조사 경로 평균]". **값은 5차 부하 테스트에서 측정 뒤 조정** | 같은 테스트 |
 | 8 | Ollama 가 죽거나 embed_model 이 비면 품질 없는 `OfflineEmbedding` 으로 색인이 오염되고, 동시 persist 가 안전하지 않음 | `get_vector_store` 의 `embed_model=None → Offline` 폴백, 헬스체크·락 없음 | `VectorStore(health_url=…)` 60초마다 `GET /api/tags`(2초) → 죽으면 `degraded`: 색인·조회 건너뛰고 웹 검색만(`timing.log("vectorstore_degraded")`). 오프라인 임베딩은 `MOCHANG_ALLOW_OFFLINE_EMBEDDING=1`(conftest) 일 때만, 운영에서 embed_model 이 비면 벡터DB 끔. 문서 메타 `embed_model`. `upsert_pages` 를 `threading.Lock` 으로 직렬화 | `test_degraded_store_*`, `test_offline_embedding_is_test_only` |
@@ -1593,7 +1593,7 @@ python -m backend.test_generate q2 --call             # 실제 생성
   | **새 번들 + 옛 백엔드** (프론트 먼저) | 깨지는 곳 없음. `draft_key` 는 Pydantic 이 무시(기본 `extra='ignore'`), `?key=` 는 FastAPI 가 무시, `adoptDraftKey` 는 키가 없으면 no-op, `toPayload` 는 빈 키를 아예 안 실음, `/jobs/intake_regenerate` 는 **옛 백엔드에도 이미 있었다**. 옛 번들과 동작이 같다 |
   | **옛 번들 + 새 백엔드** (백엔드 먼저) | 셋이 깨진다 — 동기 `/intake/regenerate` 404("다른 보기 보기"), 열쇠 없이 두 번째 요청부터 저장 거부, `GET /drafts` 복원 404(새 백엔드가 만든 행에는 열쇠가 있으므로 옛 행 규칙도 못 탄다) |
 
-- 재시작 때 `storage.init()` 이 서비스·백업 DB 에 `owner_token` 열을 붙인다(무해, 기존 행 NULL).
+- 재시작 때 `storage.init()` 이 서비스·전체기록 DB 에 `owner_token` 열을 붙인다(무해, 기존 행 NULL).
 - **둘 다 필요하다**: 프론트만 올리면 접근 통제·상한이 안 걸리고, 백엔드만 올리면 위 표의 오른쪽이 된다.
 - `live_load_test.py` 가 XFF 로 40명을 흉내내던 방식은 nginx 뒤에서 이제 **한 IP** 로 보인다 — 그 테스트가 곧 "같은 IP 40명" 시나리오다. `max_jobs_per_ip 300`·`max_intakes_per_ip_hour 80` 안이면 429 가 없어야 한다.
 - **벡터스토어는 오염되지 않았다 — 재축적 불필요(2026-09-04 확인)**. 메타(`embed_model`)가 없는 옛 문서라도 **임베딩 차원**으로 판별된다: `OfflineEmbedding` 은 256차원, bge-m3 는 1024차원. `default__vector_store.json` 의 8,803청크가 **전부 1024차원**이고 256차원은 0개였다(고유 URL 1,190). 앞으로도 같은 방법으로 확인할 수 있다:
@@ -1615,7 +1615,7 @@ python -m backend.test_generate q2 --call             # 실제 생성
 
 ②는 **이번 보강이 만든 버그가 아니라 처음부터 있던 구조적 문제**이고, 조사 자료가 쌓여 임계점을 넘은 것이다. 벡터DB 는 계속 커지므로 시간이 갈수록 악화됐을 것이다. 2026-09-03 40명 부하 테스트의 "첫 초안 p50 10분 27초" 에도 이 영향이 섞여 있을 수 있다.
 
-**수정 뒤 확인(3차 스모크)**: 예열 65.6초 동안 `/health` 응답 0.7ms·389ms(막히지 않음). 인테이크 2/2·조사 16/16·생성 16/16 성공, 백업 DB 생성문 222 → 238(+16 = 2명 × 8문항), 서비스 DB 26건/214건 그대로(테스트 격리 정상).
+**수정 뒤 확인(3차 스모크)**: 예열 65.6초 동안 `/health` 응답 0.7ms·389ms(막히지 않음). 인테이크 2/2·조사 16/16·생성 16/16 성공, 전체기록 DB 생성문 222 → 238(+16 = 2명 × 8문항), 서비스 DB 26건/214건 그대로(테스트 격리 정상).
 
 **교훈**: 단위 테스트는 "코드가 규칙대로 도는가" 를 보고, 스모크 테스트는 "실제 데이터·실제 순서·실제 크기에서 도는가" 를 본다. ①은 **요청 안의 쓰기 순서**, ②는 **데이터 크기**가 원인이라 둘 다 후자에서만 드러난다. 배포마다 `live_load_test.py --users 2` 를 돌리는 것을 절차로 삼는다(모델 호출 약 50회, 5분).
 

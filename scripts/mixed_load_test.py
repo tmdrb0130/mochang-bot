@@ -21,7 +21,7 @@
   ⑤ 모르는 문제                    → 끝나고 무결성 감사: 초안 분리·생성문 8/8·조사 저장·client_id 집계·조용한 저장 거부
 
 안전장치
-  - 모든 요청에 `X-Mochang-Test` → 서비스 DB 를 건너뛰고 백업 DB 에만 `is_test=1`. 정리는 `drafts_delete.py --tests --yes --backup`.
+  - 모든 요청에 `X-Mochang-Test` → 서비스 DB 를 건너뛰고 전체기록 DB 에만 `is_test=1`. 정리는 `drafts_delete.py --tests --yes --archive`.
   - `--abort-on-real-user`(기본 켬): nginx 로그를 보다가 **실사용자**가 작업을 제출하면 즉시 중단한다.
   - `--ramp` 로 시작을 흩는다 (강의실도 동시에 누르지 않는다).
 
@@ -58,7 +58,7 @@ B = "https://www.bustartup.kr:50001/api"
 VLLM_METRICS = "http://localhost:30801/metrics"
 NGINX_LOG = Path(r"C:\Users\bon505\Desktop\nginx\logs\access.log")
 SERVICE_DB = ROOT / "backend" / ".data" / "mochang.sqlite"
-BACKUP_DB = ROOT / "backend" / ".data" / "mochang-backup.sqlite"
+ARCHIVE_DB = ROOT / "backend" / ".data" / "mochang-archive.sqlite"
 TIMING = ROOT / "backend" / ".timing.jsonl"
 SELF_IPS = {"127.0.0.1", "::1", "61.34.63.189"}      # 이 PC 에서 쏘므로 nginx 로그에는 이 IP 로 찍힌다
 
@@ -441,7 +441,7 @@ def audit(run: str, started: datetime, users: list, recs: list) -> dict:
     exp_fr = sum(1 for u in users if u["kind"] == "fr")
     like = f"mx{run}-%"
     try:
-        con = sqlite3.connect(f"file:{BACKUP_DB.as_posix()}?mode=ro", uri=True)
+        con = sqlite3.connect(f"file:{ARCHIVE_DB.as_posix()}?mode=ro", uri=True)
         rows = con.execute("""select draft_id, client_id, is_test,
             (select count(*) from generations g where g.draft_id=d.draft_id) gc,
             (select count(*) from research r where r.draft_id=d.draft_id) rc
@@ -686,7 +686,7 @@ async def main(args) -> int:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(json.dumps({"summary": s, "users": recs, "monitor": mon}, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"원본 → {args.json}")
-    print(f"테스트 데이터 정리: .venv\\Scripts\\python scripts\\drafts_delete.py --tests --yes --backup")
+    print(f"테스트 데이터 정리: .venv\\Scripts\\python scripts\\drafts_delete.py --tests --yes --archive")
     return 0
 
 

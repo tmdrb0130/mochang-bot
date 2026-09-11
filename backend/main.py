@@ -224,7 +224,7 @@ async def health():
         "llm_reachable": await _llm_reachable(),
         # 저장소 (2026-09-04): 삼킨 저장 실패 수. 0 이 아니면 timing.jsonl 의 storage_error 줄과 scripts/timing_report.py 로 본다
         "storage": {"enabled": bool(storage.enabled and storage.engine is not None),
-                    "backup": bool(storage.backup is not None and storage.backup.engine is not None),
+                    "archive": bool(storage.archive is not None and storage.archive.engine is not None),
                     "error_count": storage.error_count, "last_error": storage.last_error},
         # 조사 단계가 쓰는 모델 (본문 작성 모델과 다를 수 있음)
         "research_model": research_client.model,
