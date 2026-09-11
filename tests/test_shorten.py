@@ -10,7 +10,7 @@ class Client:
         self.replies = list(replies)
         self.systems = []
 
-    async def complete(self, system, user, model=None):
+    async def complete(self, system, user, model=None, on_delta=None):
         self.systems.append(system)
         return LLMResult(text=self.replies.pop(0) if self.replies else "", model="fake")
 
@@ -96,7 +96,7 @@ async def test_shorten_survives_model_error():
     over = "가" * 130
 
     class Boom(Client):
-        async def complete(self, system, user, model=None):
+        async def complete(self, system, user, model=None, on_delta=None):
             self.systems.append(system)
             if len(self.systems) > 1:
                 raise RuntimeError("모델 오류")

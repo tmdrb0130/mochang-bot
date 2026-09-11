@@ -48,7 +48,7 @@ async def test_header_reaches_storage_and_shared_response_carries_it():
     """프론트가 X-Mochang-Client 로 보내면 초안 행에 남고, 공유 링크 응답에 실려 다른 기기가 물려받을 수 있다."""
     from backend import main as M
 
-    async def fake_complete(system, user, model, extra=None):
+    async def fake_complete(system, user, model, extra=None, on_delta=None):
         await asyncio.sleep(0.01)
         return LLMResult(text="가짜 본문", model=model)
 

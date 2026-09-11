@@ -16,7 +16,7 @@ class SequenceClient:
         self.replies = list(replies)
         self.systems = []
 
-    async def complete(self, system, user, model=None):
+    async def complete(self, system, user, model=None, on_delta=None):
         self.systems.append(system)
         return LLMResult(text=self.replies.pop(0) if self.replies else "", model="fake")
 

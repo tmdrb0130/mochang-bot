@@ -18,7 +18,7 @@ class FakeClient:
         self.replies = list(replies)
         self.calls = []
 
-    async def complete(self, system, user, model=None):
+    async def complete(self, system, user, model=None, on_delta=None):
         self.calls.append({"system": system, "user": user, "model": model})
         reply = self.replies.pop(0) if self.replies else ""
         return LLMResult(text=reply, model="fake")
@@ -157,7 +157,7 @@ async def test_extract_facts_runs_at_most_three_pages_at_a_time(form):
         def __init__(self):
             self.calls = 0
 
-        async def complete(self, system, user, model=None):
+        async def complete(self, system, user, model=None, on_delta=None):
             nonlocal live, peak
             live += 1
             peak = max(peak, live)
@@ -329,7 +329,7 @@ class ScriptedClient:
             return "queries"
         return "facts"
 
-    async def complete(self, system, user, model=None):
+    async def complete(self, system, user, model=None, on_delta=None):
         stage = self.stage(system)
         self.calls.append(stage)
         if stage in ("queries", "followup"):

@@ -226,6 +226,30 @@ def test_intake_rate_limit_per_ip_hour(monkeypatch):
         M._check_intake_rate("10.0.0.9", now=2000.0)                  # 0 = 끔
 
 
+def test_rejected_intake_does_not_eat_the_hourly_slot(monkeypatch):
+    """제출이 거절되면 시간당 칸을 되돌린다 (2026-09-11).
+
+    카운터를 q.submit **앞에서** 올리기 때문에, 제출이 다른 상한(초안·IP·번역 전역)에 걸려 429 가 나면
+    실행되지도 않은 인테이크가 한도를 먹었다. 프론트는 429 를 12회까지 재시도하므로 한 학생이
+    여러 칸을 날릴 수 있었다."""
+    from backend import main as M
+    monkeypatch.setattr(M, "MAX_INTAKES_PER_IP_HOUR", 2)
+    M._intake_times.clear()
+
+    M._check_intake_rate("10.0.0.7", now=1000.0)
+    assert len(M._intake_times["10.0.0.7"]) == 1
+    M._undo_intake_rate("10.0.0.7")                                   # 제출이 거절된 상황
+    assert len(M._intake_times["10.0.0.7"]) == 0                      # 칸이 되돌아온다
+
+    # 되돌렸으므로 상한 2 를 그대로 다 쓸 수 있다
+    M._check_intake_rate("10.0.0.7", now=1001.0)
+    M._check_intake_rate("10.0.0.7", now=1002.0)
+    with pytest.raises(TooManyJobs):
+        M._check_intake_rate("10.0.0.7", now=1003.0)
+
+    M._undo_intake_rate("10.0.0.6")                                   # 기록이 없는 IP 여도 터지지 않는다
+
+
 @pytest.mark.asyncio
 async def test_same_ip_many_drafts_pass_but_ip_ceiling_and_translate_limits_hold(monkeypatch):
     """강의실: 같은 IP 의 초안 둘이 각각 3건씩 → 전부 수락 (예전엔 IP 당 3건). IP 천장·번역 상한은 429."""
@@ -289,7 +313,7 @@ async def test_sync_endpoints_are_closed_unless_enabled(monkeypatch):
     import httpx
     from backend import main as M
 
-    async def fake_complete(system, user, model, extra=None):
+    async def fake_complete(system, user, model, extra=None, on_delta=None):
         return LLMResult(text="Hello", model=model)
 
     monkeypatch.setattr(M.client, "_complete", fake_complete)
@@ -345,7 +369,7 @@ async def test_intake_returns_key_and_following_requests_are_saved(monkeypatch):
     import httpx
     from backend import main as M
 
-    async def fake_complete(system, user, model, extra=None):
+    async def fake_complete(system, user, model, extra=None, on_delta=None):
         if "인터뷰어" in system or "슬롯" in system:
             return LLMResult(text='{"summary":"요약","slots":[],"cards":[]}', model=model)
         return LLMResult(text="가짜 본문입니다. 두 번째 문장입니다.", model=model)
@@ -578,7 +602,7 @@ class FullStackClient:
         self.calls = []
         self.model_ids = ["fake"]
 
-    async def complete(self, system, user, model=None, extra=None):
+    async def complete(self, system, user, model=None, extra=None, on_delta=None):
         self.calls.append(system[:40])
         if "사업계획의 골자" in system:
             return LLMResult(text=OUTLINE, model="fake")
@@ -639,7 +663,7 @@ async def test_test_header_marks_the_job_record(monkeypatch):
     from backend import main as M
     from backend.llm.client import LLMResult
 
-    async def fake_complete(system, user, model, extra=None):
+    async def fake_complete(system, user, model, extra=None, on_delta=None):
         return LLMResult(text="Hello", model=model)
 
     rows = []

@@ -12,7 +12,7 @@ class Client:
         self.replies = list(replies)
         self.systems = []
 
-    async def complete(self, system, user, model=None):
+    async def complete(self, system, user, model=None, on_delta=None):
         self.systems.append(system)
         return LLMResult(text=self.replies.pop(0) if self.replies else "", model="fake")
 
@@ -82,7 +82,7 @@ async def test_extend_failure_keeps_the_original_text():
     assert out["auto_extended"] is False and out["text"] == short
 
     class Boom(Client):
-        async def complete(self, system, user, model=None):
+        async def complete(self, system, user, model=None, on_delta=None):
             self.systems.append(system)
             if len(self.systems) > 1:
                 raise RuntimeError("모델 오류")

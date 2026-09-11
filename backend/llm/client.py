@@ -206,30 +206,44 @@ class LLMClient:
     # OpenRouter 가 HTTP 200 본문 안에 error 객체로 돌려주는 일시 오류 코드 (업스트림 타임아웃·과부하)
     _TRANSIENT = {408, 429, 500, 502, 503, 504, 520, 522, 524, 529}
 
-    async def complete(self, system: str, user: str, model: str | None = None, extra: dict | None = None) -> LLMResult:
-        """extra: 이 호출에만 덧붙일 extra_body (예: {"priority": 50}). 설정의 extra 위에 덮어쓴다 (2026-09-04, 번역 우선순위용)."""
+    async def complete(self, system: str, user: str, model: str | None = None, extra: dict | None = None,
+                       on_delta=None) -> LLMResult:
+        """extra: 이 호출에만 덧붙일 extra_body (예: {"priority": 50}). 설정의 extra 위에 덮어쓴다 (2026-09-04, 번역 우선순위용).
+
+        on_delta(text): 주면 **스트리밍**으로 받고 지금까지 쌓인 전체 텍스트를 넘긴다 (2026-09-11).
+        인테이크 카드처럼 40초짜리 출력을 다 기다리지 않고 먼저 보여주려는 것이다. 반환값은 스트리밍이 아닐 때와 같다."""
         model = self.resolve_model(model)
         if not self.queue.started:
             await self.queue.start()   # FastAPI startup 밖(CLI·테스트)에서 써도 동작하게 지연 시작
-        return await self.queue.run(lambda: self._complete_with_model_fallback(system, user, model, extra), kind="llm")
+        return await self.queue.run(lambda: self._complete_with_model_fallback(system, user, model, extra, on_delta),
+                                    kind="llm")
 
-    async def _complete_with_model_fallback(self, system: str, user: str, model: str, extra: dict | None = None) -> LLMResult:
+    async def _complete_with_model_fallback(self, system: str, user: str, model: str, extra: dict | None = None,
+                                            on_delta=None) -> LLMResult:
         # 일시 오류(업스트림 504 등)면 목록의 다음 모델로 바꿔 최대 3번 시도 (같은 제공자가 연속으로 끊는 경우가 많음).
         # 429(RateLimited) 는 여기서 잡지 않고 큐 워커가 지수 백오프로 재시도한다.
         order = [model] + [i for i in self.model_ids if i != model]
         last: Exception | None = None
         for attempt, m in enumerate(order[:3]):
             try:
-                # extra 가 없으면 예전 시그니처로 부른다 — 테스트가 _complete(system, user, model) 을 가짜로 바꿔 끼운다
-                return await (self._complete(system, user, m, extra) if extra else self._complete(system, user, m))
+                # extra·on_delta 가 없으면 예전 시그니처로 부른다 — 테스트가 _complete(system, user, model) 을 가짜로 바꿔 끼운다
+                kw = {}
+                if extra:
+                    kw["extra"] = extra
+                if on_delta is not None:
+                    kw["on_delta"] = on_delta
+                return await (self._complete(system, user, m, **kw) if kw else self._complete(system, user, m))
             except TransientError as e:
                 last = e
                 await asyncio.sleep(1.5 * (attempt + 1))
         raise LLMError(f"{last} — 무료 제공자가 연속으로 응답을 끊었습니다. 잠시 후 '다시 생성'을 눌러주세요.")
 
-    async def _complete(self, system: str, user: str, model: str, extra: dict | None = None) -> LLMResult:
+    async def _complete(self, system: str, user: str, model: str, extra: dict | None = None,
+                        on_delta=None) -> LLMResult:
         used = await self.usage.hit(model)
         body = {**self._extra_for(model), **(extra or {})}
+        if on_delta is not None:
+            return await self._complete_streaming(system, user, model, body, on_delta)
         try:
             res = await self._client.chat.completions.create(
                 model=model,
@@ -264,3 +278,42 @@ class LLMClient:
         if choice.finish_reason == "length" and not text.strip():
             raise LLMError(f"max_tokens({self.max_tokens}) 안에 본문을 못 냈습니다. 추론 모델이면 extra.reasoning 을 끄세요.")
         return LLMResult(text=text, model=getattr(res, "model", None) or model)
+
+    async def _complete_streaming(self, system: str, user: str, model: str, body: dict, on_delta) -> LLMResult:
+        """스트리밍으로 받으면서 지금까지의 전체 텍스트를 on_delta 에 넘긴다 (2026-09-11).
+
+        **on_delta 는 토큰마다 부르지 않는다** — 카드 객체가 닫히는 순간(`}`)에만 부른다.
+        받는 쪽이 매번 JSON 을 훑기 때문이고, 그 사이에는 보여줄 새 카드가 없다.
+        on_delta 에서 난 예외는 삼킨다 — 미리보기 때문에 본 생성이 실패하면 안 된다."""
+        parts: list[str] = []
+        used_model = model
+        try:
+            stream = await self._client.chat.completions.create(
+                model=model,
+                max_tokens=self.max_tokens,
+                temperature=self.temperature,
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                extra_body=body or None,
+                stream=True,
+            )
+            async for chunk in stream:
+                used_model = getattr(chunk, "model", None) or used_model
+                if not getattr(chunk, "choices", None):
+                    continue
+                piece = getattr(chunk.choices[0].delta, "content", None)
+                if not piece:
+                    continue
+                parts.append(piece)
+                if "}" in piece:                       # 카드 하나가 닫혔을 수 있다
+                    try:
+                        on_delta("".join(parts))
+                    except Exception:
+                        pass
+        except RateLimitError as e:
+            raise RateLimited("무료 모델 풀이 혼잡합니다(429). 몇 초 후 다시 시도하세요.") from e
+        except APIStatusError as e:
+            raise LLMError(f"LLM 서버 오류 {e.status_code} (model={model}): {getattr(e, 'message', str(e))[:300]}") from e
+        text = "".join(parts)
+        if not text.strip():
+            raise TransientError(f"스트리밍 응답이 비었습니다 (model={model})")
+        return LLMResult(text=text, model=used_model)

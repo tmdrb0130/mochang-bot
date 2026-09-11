@@ -107,13 +107,18 @@ class OfflineEmbedding(BaseEmbedding):
         return self._vector(query)
 
 
-def ollama_embedding(model_name: str = "bge-m3", base_url: str = "http://localhost:11434", **kw):
+def ollama_embedding(model_name: str = "bge-m3", base_url: str = "http://localhost:11434",
+                     keep_alive: str | None = "1h", **kw):
     """운영용 임베딩 (RAG_PLAN 5절 결정: 로컬 Ollama bge-m3). 세션3이 파이프라인에서 이걸 만들어 넘긴다.
 
     import 를 함수 안에 둔 것은 의도 — Ollama 패키지가 없거나 서버가 없어도 이 모듈은 import 된다."""
     from llama_index.embeddings.ollama import OllamaEmbedding
 
-    return OllamaEmbedding(model_name=model_name, base_url=base_url, **kw)
+    # keep_alive (2026-09-11): Ollama 기본값은 **유휴 5분 뒤 모델 해제**다. 학생 사용이 띄엄띄엄해
+    # 거의 매 조사마다 콜드 로드를 물었다 — 실측 콜드 3.67초 vs 웜 0.13초(28배).
+    # 요청마다 붙는 값이라 **공유 Ollama(11434, bustartup.kr 과 같이 씀)를 재시작하지 않는다.**
+    # bge-m3 는 VRAM 0.66GB 뿐이라 상주시켜도 부담이 없다 (3080 10GB 중 1.4GB 사용 중).
+    return OllamaEmbedding(model_name=model_name, base_url=base_url, keep_alive=keep_alive, **kw)
 
 
 def ollama_alive(base_url: str, timeout: float = HEALTH_TIMEOUT_S) -> bool:

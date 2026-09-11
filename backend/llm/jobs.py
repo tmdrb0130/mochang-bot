@@ -24,6 +24,29 @@ Factory = Callable[[], Awaitable[Any]]
 # 같은 큐에 중첩 제출되어 워커가 모두 자기 자식을 기다리는 교착이 생긴다 → 그 경우 큐를 거치지 않고 바로 실행한다.
 _in_worker: contextvars.ContextVar[bool] = contextvars.ContextVar("llm_in_worker", default=False)
 
+# 지금 이 워커가 돌리고 있는 작업 (2026-09-11). 실행 중인 코드가 자기 단계를 알릴 수 있게 하려는 것 —
+# 인테이크는 2분 넘게 걸리는데 학생 화면에는 "앞에 N명" 밖에 없어 아무 단계 정보가 없었다.
+_current_job: contextvars.ContextVar["Job | None"] = contextvars.ContextVar("llm_current_job", default=None)
+
+
+def set_phase(name: str | None) -> None:
+    """실행 중인 작업의 세부 단계를 적는다. 큐 밖에서 부르면 아무 일도 하지 않는다.
+    폴링(`GET /jobs/{id}`) 응답의 `phase` 로 나가므로 **요청이 늘지 않는다**."""
+    job = _current_job.get()
+    if job is not None:
+        job.phase = name
+
+
+def set_partial(value: Any) -> None:
+    """완성 전에 보여줄 중간 결과를 적는다 (2026-09-11).
+
+    인테이크 카드 생성은 단일 LLM 호출이 40초 걸리는데, 학생은 **첫 카드 한 장이면** 답을 시작할 수 있다.
+    모델이 뱉는 대로 카드를 꺼내 여기에 넣으면 폴링 응답의 `partial` 로 나간다 — 추가 요청 없이.
+    최종 결과가 언제나 우선이다(여기 실린 것은 미리보기일 뿐)."""
+    job = _current_job.get()
+    if job is not None:
+        job.partial = value
+
 
 class QueueError(RuntimeError):
     pass
@@ -62,6 +85,8 @@ class Job:
     result: Any = None
     error: str | None = None
     attempts: int = 0
+    phase: str | None = None        # 실행 중 어느 단계인지 (set_phase). 학생 화면에 "자료 찾는 중" 같은 안내로 쓴다
+    partial: Any = None             # 완성 전에 먼저 보여줄 수 있는 중간 결과 (set_partial). 인테이크 카드가 이걸 쓴다
     created: float = field(default_factory=time.time)
     started: float | None = None
     finished: float | None = None
@@ -72,6 +97,8 @@ class Job:
             "job_id": self.id,
             "kind": self.kind,
             "status": self.status,
+            "phase": self.phase,             # running 일 때 세부 단계 (없으면 None)
+            "partial": self.partial if self.status == "running" else None,   # 도착한 만큼 먼저 (2026-09-11)
             "position": position,            # 대기 순번 (0 = 다음 차례). running/done 이면 None
             "attempts": self.attempts,
             "queued_seconds": round((self.started or time.time()) - self.created, 1),
@@ -243,6 +270,7 @@ class JobQueue:
             self._running += 1
             self.peak_running = max(self.peak_running, self._running)
             job.status, job.started = "running", time.time()
+            _current_job.set(job)             # 실행 중인 작업이 set_phase 로 자기 단계를 알릴 수 있게
             try:
                 while True:
                     job.attempts += 1

@@ -81,6 +81,8 @@ class ResearchConfig:
     vectorstore_chroma_dir: str = "backend/.vectorstore-chroma"
     vectorstore_embed_model: str = "bge-m3"      # Ollama 모델명. 빈 값이면 오프라인 임베딩(품질 없음 — 테스트용)
     vectorstore_ollama_url: str = "http://localhost:11434"
+    # Ollama 가 임베딩 모델을 메모리에 두는 시간. 기본 5분이라 조사마다 콜드 로드(3.67초)를 물었다 (2026-09-11)
+    vectorstore_keep_alive: str = "1h"
     vectorstore_min_score: float = 0.6      # 실측 근거: bge-m3 는 같은 주제 문장끼리도 0.668 (0.8 은 과하다)
     # chroma 는 같은 쌍에서 점수가 약 +0.07 높다 (2026-09-11 실측) — 같은 생략 판정을 유지하는 값
     vectorstore_chroma_min_score: float = 0.67
@@ -116,6 +118,7 @@ class ResearchConfig:
             vectorstore_chroma_dir=str(vs.get("chroma_dir", "backend/.vectorstore-chroma")),
             vectorstore_embed_model=str(vs.get("embed_model", "bge-m3")),
             vectorstore_ollama_url=str(vs.get("ollama_url", "http://localhost:11434")),
+            vectorstore_keep_alive=str(vs.get("keep_alive", "1h")),
             vectorstore_min_score=float(vs.get("min_score", 0.6)),
             vectorstore_chroma_min_score=float(vs.get("chroma_min_score", 0.67)),
             vectorstore_use_for_search=bool(vs.get("use_for_search", True)),
@@ -433,7 +436,8 @@ def get_vector_store(cfg: ResearchConfig):
         if _vector_store is None:
             from .vectorstore import VectorStore, ollama_embedding
             if cfg.vectorstore_embed_model:
-                embed = ollama_embedding(cfg.vectorstore_embed_model, cfg.vectorstore_ollama_url)
+                embed = ollama_embedding(cfg.vectorstore_embed_model, cfg.vectorstore_ollama_url,
+                                         keep_alive=cfg.vectorstore_keep_alive)
                 health_url = cfg.vectorstore_ollama_url
             elif os.environ.get("MOCHANG_ALLOW_OFFLINE_EMBEDDING") == "1":
                 embed, health_url = None, None          # 테스트 전용 — 품질 없는 오프라인 임베딩
@@ -607,12 +611,16 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
     skip_urls: 이미 다른 조사에서 본문을 받아온 URL — 다시 받지 않는다 (요청 절약).
     max_pages: 이번 호출에서 쓸 페이지 수 상한 (기본 cfg.max_pages_to_extract)."""
     want = cfg.max_pages_to_extract if max_pages is None else max_pages
-    store = await open_vector_store(cfg)          # 스레드에서 — 첫 호출 32초가 이벤트 루프를 막지 않게
+    t = time.monotonic()
+    store = await open_vector_store(cfg)          # 스레드에서 — 첫 호출이 이벤트 루프를 막지 않게
+    timing.count("store_open_ms", int((time.monotonic() - t) * 1000))   # 예열 전이면 여기서 기다린다
 
     # ① 이미 쌓아 둔 자료부터 본다. 충분하면 웹 검색·fetch 를 아예 하지 않는다 (RAG_PLAN 5절).
     reuse: list[dict] = []
     if store is not None and cfg.vectorstore_use_for_search and queries:
+        t = time.monotonic()
         reuse = await query_vector_store(store, queries, cfg)
+        timing.count("store_query_ms", int((time.monotonic() - t) * 1000))
         if reuse and store.is_sufficient(reuse):
             # 벡터DB 만으로 해결 — 소스 카운터에 남겨 "조사 N건 중 웹 검색을 대체한 M건" 을 timing_report 로 볼 수 있게 (2026-09-03)
             timing.count("vectorstore_only")
@@ -1007,9 +1015,18 @@ async def run_idea_research(client: LLMClient, researcher: Researcher, form: dic
         return {**hit[0], "cached": True}
 
     meta = _idea_meta(form)
+    # 단계별 ms 를 sources 이벤트에 남긴다 — 조사 88.8초 중 25~35초가 어디로 가는지 못 쫓던 구간이다 (2026-09-11).
+    t = time.monotonic()
     queries = await generate_queries(client, form, meta, cfg)
+    timing.count("queries_ms", int((time.monotonic() - t) * 1000))
+
+    t = time.monotonic()
     results, pages = await collect_pages(researcher, queries, cfg, fetch=fetch)
+    timing.count("collect_ms", int((time.monotonic() - t) * 1000))
+
+    t = time.monotonic()
     facts = await extract_facts(client, form, meta, pages, cfg)
+    timing.count("extract_facts_ms", int((time.monotonic() - t) * 1000))
     out = {
         "question_id": IDEA_RESEARCH_KEY,
         "queries": queries,

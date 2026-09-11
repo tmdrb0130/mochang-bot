@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from .llm.client import (RESEARCH_USAGE_PATH, LLMClient, LLMError, RateLimited,
                          load_config, research_client_config)
+from .llm import jobs
 from .llm.jobs import TooManyJobs
 from . import finisher as finisher_mod
 from . import storage as storage_mod
@@ -277,13 +278,21 @@ async def _intake_full(form: dict, owner: str | None, test: bool = False) -> dic
 
     카드 생성은 research_client(조사 클라이언트)로 돌린다 — 본문 생성이 채운 본문 큐 뒤에서 기다리지 않게(40명 실측: 최대 3분 47초),
     그리고 vLLM 우선순위(extra.priority)가 조사와 같은 '높음'이 되게. 지금은 조사·본문 모델이 같은 Qwen 이라 품질 차이는 없다."""
+    t0 = time.monotonic()
+    jobs.set_phase("research")          # 학생 화면: "자료 찾는 중"
     found = await _with_idea_research(form)
+    research_s = round(time.monotonic() - t0, 1)
+    t0 = time.monotonic()
+    jobs.set_phase("cards")             # 학생 화면: "질문 만드는 중"
     # 쓰기 순서 주의 (2026-09-04 스모크 테스트에서 잡은 버그): **클라이언트가 받는 쓰기(intake)를 먼저** 한다.
     # 예전 순서(idea_research 먼저)에서는 그 INSERT 가 열쇠(owner_token)를 발급하는데 응답으로 나가지 않아,
     # 바로 뒤 intake 쓰기가 "열쇠 없음"으로 거부되고 브라우저는 열쇠를 영영 못 받았다 → 그 초안의 이후 저장이 전부 막혔다.
     # 지금 순서면 (1) 첫 응답에 draft_key 가 실리고 (2) run_intake 가 실패하면 초안 행 자체가 안 생겨,
     # 프론트가 생성으로 넘어갈 때 그 요청이 INSERT 하며 열쇠를 받는다.
     out = await _persisted("intake", form, intake.run_intake(research_client, form), owner, test)
+    # 인테이크가 조사와 카드 중 어디에 시간을 쓰는지 (2026-09-11 실측: 조사 88.8초 + 카드 48.0초)
+    timing.log("intake_phase", research_s=research_s, cards_s=round(time.monotonic() - t0, 1),
+               cached=bool(found.get("cached")))
     if isinstance(out, dict) and out.get("draft_key"):
         form["draft_key"] = out["draft_key"]        # 방금 발급된 열쇠로 아래 조사 저장이 통과하게
     await storage.record("idea_research", form, found, owner, test=test)     # research 테이블 (question_id = "idea")
@@ -486,6 +495,16 @@ def _check_intake_rate(ip: str, now: float | None = None) -> None:
     dq.append(now)
 
 
+def _undo_intake_rate(ip: str) -> None:
+    """제출이 거절되면 방금 올린 칸을 되돌린다 (2026-09-11).
+
+    카운터를 q.submit **앞에서** 올리기 때문에, 제출이 다른 상한에 걸려 429 가 나면
+    실행되지도 않은 인테이크가 시간당 한도를 먹었다. 프론트는 429 를 12회까지 재시도한다."""
+    dq = _intake_times.get(ip)
+    if dq:
+        dq.pop()
+
+
 @app.post("/jobs/{kind}")
 async def submit_job(kind: str, body: dict, request: Request):
     """kind ∈ generate|extend|intake|intake_regenerate|research|verify|translate. 본문은 해당 동기 엔드포인트와 같다. → {job_id, position}
@@ -510,6 +529,10 @@ async def submit_job(kind: str, body: dict, request: Request):
                        kind=kind, owner=owner, ip=ip, max_per_owner=per_owner, max_per_ip=MAX_JOBS_PER_IP, max_per_kind=per_kind,
                        test=test)
     except TooManyJobs as e:
+        # 제출이 거절됐으면 방금 올린 시간당 칸을 되돌린다 — 실행도 안 한 인테이크가 한도를 먹지 않게 (2026-09-11).
+        # 시간당 상한 자체에 걸린 경우(scope="ip")는 애초에 올리지 않았으므로 건드리지 않는다.
+        if kind == "intake" and e.scope != "ip":
+            _undo_intake_rate(ip)
         # 어느 상한에 걸렸는지 남긴다 (2026-09-04): 부하 테스트에서 owner(초안)·ip(천장)·kind(번역 전역) 를 나눠 봐야
         # 값을 어디서 올릴지 정할 수 있다. scripts/timing_report.py "[동시 상한 429]" 절.
         timing.log("limit", kind=kind, scope=e.scope, active=e.active, limit=e.limit,

@@ -139,7 +139,7 @@ async def test_llm_client_routes_complete_through_queue(monkeypatch):
     llm = C.LLMClient(cfg)
     probe = Probe(delay=0.02)
 
-    async def fake_complete(system, user, model):
+    async def fake_complete(system, user, model, on_delta=None):
         return await probe.make(C.LLMResult(text=f"{user}", model=model))()
 
     monkeypatch.setattr(llm, "_complete", fake_complete)
@@ -249,7 +249,7 @@ async def test_submit_endpoint_returns_429_over_limit(monkeypatch):
 
     gate = asyncio.Event()
 
-    async def fake_complete(system, user, model):
+    async def fake_complete(system, user, model, on_delta=None):
         await gate.wait()
         return LLMResult(text="가짜 응답", model=model)
 
@@ -284,3 +284,43 @@ async def test_submit_endpoint_returns_429_over_limit(monkeypatch):
                 assert snap["status"] == "done"
 
             assert (await c.post("/jobs/generate", json=body, headers=mine)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_running_job_can_report_its_phase():
+    """인테이크는 2분 넘게 걸리는데 화면에 '앞에 N명' 밖에 없었다 (2026-09-11).
+
+    실행 중인 코드가 jobs.set_phase() 로 단계를 적으면 폴링 응답의 phase 로 나간다 —
+    **추가 요청 없이** 학생 화면에 "자료 찾는 중 → 질문 만드는 중" 을 보여줄 수 있다."""
+    from backend.llm import jobs as J
+
+    gate, seen = asyncio.Event(), []
+
+    async def work():
+        J.set_phase("research")
+        seen.append(J._current_job.get().phase)
+        await gate.wait()
+        J.set_phase("cards")
+        return "ok"
+
+    q = J.JobQueue(max_workers=1)
+    await q.start()
+    try:
+        job = q.submit(work, kind="intake")
+        for _ in range(100):
+            if job.phase == "research":
+                break
+            await asyncio.sleep(0.01)
+        assert job.phase == "research"
+        assert job.snapshot(None)["phase"] == "research"      # 폴링 응답에 실린다
+        gate.set()
+        assert await job.future == "ok"
+        assert job.phase == "cards" and seen == ["research"]
+    finally:
+        await q.stop()
+
+
+def test_set_phase_outside_a_worker_does_nothing():
+    """큐 밖(동기 엔드포인트·테스트)에서 불러도 조용히 넘어간다."""
+    from backend.llm import jobs as J
+    J.set_phase("research")        # 예외가 나면 안 된다

@@ -150,7 +150,7 @@ max_jobs_per_ip: 500
 #   2026-09-07: 80 은 "강의실 40명 × 1회" 전제였다. 아이디어를 크게 고치면 프론트가 새 draft_id 를 발급하므로
 #   (frontend/src/App.jsx 유사도 0.5 미만) 인테이크가 다시 카운트된다 — 40명이 평균 2회면 정확히 80 이다.
 #   영어로 쓴 아이디어를 다듬는 외국인이 한국인보다 먼저 닿는다 → 160.
-max_intakes_per_ip_hour: 160
+max_intakes_per_ip_hour: 300
 # trusted_proxies: 이 주소에서 온 요청만 X-Forwarded-For 를 믿는다. nginx(50001)는 `$proxy_add_x_forwarded_for` 로
 #   실제 접속 IP 를 XFF **맨 뒤**에 덧붙이므로 백엔드는 마지막 항목을 쓴다 — 클라이언트가 앞에 붙인 가짜 값은 무시된다.
 #   nginx 를 거치지 않은 요청(개발 서버·직접 접속)은 접속 IP 를 그대로 쓴다.
@@ -241,6 +241,10 @@ research:
     enabled: true                # 2026-09-02 세션1 결정 — 지금부터 조사 페이지를 쌓는다 (색인만, 조회는 다음 단계)
     dir: "backend/.vectorstore"
     embed_model: "bge-m3"
+    # Ollama 가 임베딩 모델을 메모리에 두는 시간 (2026-09-11). 기본값 5분이라 학생 사용이 뜸하면
+    # 조사마다 콜드 로드를 문다 — 실측 콜드 3.67초 vs 웜 0.13초. VRAM 0.66GB 라 상주 부담이 없다.
+    # 요청마다 붙는 값이라 공유 Ollama(11434)를 재시작하지 않는다.
+    keep_alive: "1h"
     ollama_url: "http://localhost:11434"
     min_score: 0.6               # 조회 단계 유사도 하한. 0.8 은 너무 빡빡했다 —
                                  # bge-m3 로 같은 주제 문장끼리 재어 보니 0.668 이었다 (세션1 결정: 0.6)

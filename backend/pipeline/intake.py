@@ -11,6 +11,7 @@ import re
 
 _FOREIGN_CJK = re.compile(r"[一-鿿぀-ヿ]")  # 한자(CJK 통합) · 히라가나 · 가타카나
 
+from ..llm import jobs
 from ..llm.client import LLMClient
 from . import assemble
 
@@ -218,11 +219,105 @@ def _normalize(parsed: dict, capability: str = "") -> dict:
     }
 
 
+def _summary_so_far(text: str) -> str:
+    """부분 JSON 에서 summary 문자열만 꺼낸다. 정규식 대신 JSON 디코더를 쓴다 —
+    따옴표 이스케이프를 정규식으로 다루면 틀리기 쉽다."""
+    i = text.find('"summary"')
+    if i < 0:
+        return ""
+    c = text.find(":", i)
+    j = text.find('"', c + 1) if c >= 0 else -1
+    if j < 0:
+        return ""
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text[j:])
+    except (ValueError, json.JSONDecodeError):
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+def _complete_objects(text: str, key: str) -> list[dict]:
+    """부분 JSON 에서 `"key": [ … ]` 안의 **완성된** 객체만 꺼낸다 (2026-09-11).
+
+    스트리밍 도중에는 뒤가 잘려 있어 json.loads 가 통째로는 실패한다. 중괄호 깊이를 세면서
+    닫힌 객체만 따로 파싱한다. 문자열 안의 중괄호·이스케이프를 건너뛰는 것이 핵심이다."""
+    i = text.find(f'"{key}"')
+    if i < 0:
+        return []
+    j = text.find("[", i)
+    if j < 0:
+        return []
+    out: list[dict] = []
+    depth, start, in_str, esc = 0, None, False, False
+    for k in range(j + 1, len(text)):
+        ch = text[k]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = k
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    out.append(json.loads(text[start:k + 1]))
+                except (ValueError, json.JSONDecodeError):
+                    pass
+                start = None
+        elif ch == "]" and depth == 0:
+            break
+    return out
+
+
+def partial_view(text: str, capability: str = "") -> dict | None:
+    """스트리밍 도중 지금까지 도착한 카드만으로 만든 **미리보기** (2026-09-11).
+
+    학생은 카드 한 장이면 답을 시작할 수 있는데, 지금까지는 40초짜리 출력이 다 끝나야 첫 장을 봤다.
+    최종 결과가 언제나 우선이다 — 여기서는 채워 넣기(_fallback_card)·장수 제한을 하지 않는다.
+    그건 출력이 다 온 뒤에 판단할 일이고, 미리 하면 곧 바뀔 카드를 보여주게 된다."""
+    raw = _complete_objects(text, "cards")
+    if not raw:
+        return None
+    status_of = {s.get("id"): s.get("status") for s in _complete_objects(text, "slots") if isinstance(s, dict)}
+    cards: list[dict] = []
+    for c in raw:
+        card = _normalize_card(c)
+        if card is None or status_of.get(card["slot"]) == "known":
+            continue
+        if any(k["slot"] == card["slot"] for k in cards):
+            continue
+        _enforce_card_rules(card, capability)
+        if len(card["options"]) >= 2:
+            cards.append(card)
+    if not cards:
+        return None
+    return {"summary": _summary_so_far(text), "cards": cards, "preview": True}
+
+
 async def run_intake(client: LLMClient, form: dict) -> dict:
     system = assemble.process_block() + "\n\n" + assemble.read_prompt("intake.md")
 
     user = assemble.build_context(form)
-    res = await client.complete(system, user, model=form.get("model"))
+    # 스트리밍으로 받아 카드가 닫히는 대로 먼저 보여준다 (2026-09-11). 출력은 한 글자도 달라지지 않는다.
+    capability = str(form.get("capability") or "")
+    shown = {"n": 0}
+
+    def on_delta(text: str) -> None:
+        view = partial_view(text, capability)
+        if view and len(view["cards"]) > shown["n"]:      # 카드가 늘었을 때만 갱신
+            shown["n"] = len(view["cards"])
+            jobs.set_partial(view)
+
+    res = await client.complete(system, user, model=form.get("model"), on_delta=on_delta)
     try:
         parsed = _parse_json_object(res.text)
     except (ValueError, json.JSONDecodeError):

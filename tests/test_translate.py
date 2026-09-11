@@ -12,7 +12,7 @@ class FakeClient:
         self.replies = list(replies)
         self.calls = []
 
-    async def complete(self, system, user, model=None):
+    async def complete(self, system, user, model=None, on_delta=None):
         self.calls.append({"system": system, "user": user, "model": model})
         reply = self.replies.pop(0) if self.replies else ""
         return LLMResult(text=reply, model="fake")
@@ -129,7 +129,7 @@ async def test_jobs_translate_bypasses_per_ip_limit_and_returns_translations():
     import httpx
     from backend import main as M
 
-    async def fake_complete(system, user, model, extra=None):
+    async def fake_complete(system, user, model, extra=None, on_delta=None):
         await asyncio.sleep(0.02)
         assert extra == M.TRANSLATE_EXTRA          # 번역은 config translate.priority 를 extra_body 로 싣는다 (2026-09-04)
         return LLMResult(text="Hello from fake", model=model)
@@ -198,7 +198,7 @@ async def test_list_mode_runs_chunks_concurrently(monkeypatch):
     state = {"running": 0, "peak": 0}
 
     class SlowClient(FakeClient):
-        async def complete(self, system, user, model=None):
+        async def complete(self, system, user, model=None, on_delta=None):
             state["running"] += 1
             state["peak"] = max(state["peak"], state["running"])
             await asyncio.sleep(0.02)

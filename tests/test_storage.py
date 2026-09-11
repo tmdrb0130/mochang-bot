@@ -96,7 +96,7 @@ async def test_job_generate_is_saved_and_readable(monkeypatch):
     from backend import main as M
     from backend.llm.client import LLMResult
 
-    async def fake_complete(system, user, model):
+    async def fake_complete(system, user, model, on_delta=None):
         return LLMResult(text="저장 확인용 한 줄 소개입니다.", model=model)
 
     monkeypatch.setattr(M.client, "_complete", fake_complete)
@@ -199,7 +199,7 @@ async def test_jobs_with_test_header_skip_service_db(tmp_path):
     from backend import main as M
     from backend.llm.client import LLMResult
 
-    async def fake_complete(system, user, model):
+    async def fake_complete(system, user, model, on_delta=None):
         return LLMResult(text="가짜 본문입니다. " * 5, model=model)
 
     saved = M.client._complete

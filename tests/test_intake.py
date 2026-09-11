@@ -12,7 +12,7 @@ class FakeClient:
         self.replies = list(replies)
         self.calls = []
 
-    async def complete(self, system, user, model=None):
+    async def complete(self, system, user, model=None, on_delta=None):
         self.calls.append({"system": system, "user": user, "model": model})
         reply = self.replies.pop(0) if self.replies else ""
         return LLMResult(text=reply, model="fake")
@@ -231,3 +231,78 @@ def test_english_words_inside_options_are_dropped_except_common_acronyms():
     labels = [o["label"] for o in next(c for c in out["cards"] if c["slot"] == "first_step")["options"]]
     assert "prototype 개발" not in labels and "MVP 를 먼저 만든다" in labels
     assert I.strength_axes("딸기 농사 8년, 영농조합 총무") == {"ops"}
+
+
+# ── 스트리밍 미리보기 (2026-09-11) ──
+# 카드 생성은 단일 LLM 호출이 40초 걸리는데 학생은 첫 카드 한 장이면 답을 시작할 수 있다.
+# 도착한 만큼 꺼내 보여주되, **최종 결과가 언제나 우선**이다.
+
+def test_complete_objects_reads_only_closed_objects_from_truncated_json():
+    """스트리밍 도중에는 뒤가 잘려 있다 — 닫힌 객체만 꺼낸다."""
+    text = '{"summary": "요약", "cards": [{"slot": "problem", "question": "a"}, {"slot": "customer", "quest'
+    got = I._complete_objects(text, "cards")
+    assert [g["slot"] for g in got] == ["problem"]          # 두 번째는 아직 안 닫혔다
+
+
+def test_complete_objects_ignores_braces_inside_strings():
+    """문자열 안의 중괄호에 속으면 안 된다."""
+    text = '{"cards": [{"slot": "problem", "question": "가격이 {싸다}", "why": "w"}]'
+    got = I._complete_objects(text, "cards")
+    assert len(got) == 1 and got[0]["question"] == "가격이 {싸다}"
+
+
+def test_partial_view_skips_known_slots_and_thin_cards():
+    payload = {
+        "summary": "동네 반찬 남는 것을 파는 앱",
+        "slots": [slot("problem", "known", "이미 확인됨"), slot("customer"), slot("revenue")],
+        "cards": [card("problem", ["보기1", "보기2", "보기3"]),      # known 슬롯 → 안 보여준다
+                  card("customer", ["자취생", "1인 가구", "맞벌이"]),
+                  card("revenue", ["보기 하나"])],                    # 보기 2개 미만 → 버린다
+    }
+    view = I.partial_view(json.dumps(payload, ensure_ascii=False))
+    assert view["preview"] is True
+    assert [c["slot"] for c in view["cards"]] == ["customer"]
+    assert view["summary"] == "동네 반찬 남는 것을 파는 앱"
+
+
+def test_partial_view_returns_none_before_any_card_is_complete():
+    assert I.partial_view('{"summary": "x", "slots": [], "cards": [') is None
+    assert I.partial_view("") is None
+
+
+@pytest.mark.asyncio
+async def test_run_intake_publishes_cards_as_they_arrive():
+    """모델이 뱉는 대로 jobs.set_partial 로 나간다 — 카드가 늘 때만."""
+    from backend.llm import jobs as J
+
+    payload = json.dumps({
+        "summary": "요약",
+        "slots": [slot("customer"), slot("revenue")],
+        "cards": [card("customer", ["자취생", "1인 가구", "맞벌이"]),
+                  card("revenue", ["건당 수수료", "월 구독", "광고"])],
+    }, ensure_ascii=False)
+
+    published = []
+
+    class StreamingClient(FakeClient):
+        async def complete(self, system, user, model=None, on_delta=None):
+            for i in range(1, len(payload) + 1):          # 한 글자씩 도착하는 상황
+                if payload[i - 1] == "}" and on_delta:
+                    on_delta(payload[:i])
+            return LLMResult(text=payload, model="fake")
+
+    J._current_job.set(J.Job(id="j1", factory=lambda: None))
+    try:
+        import backend.llm.jobs as JJ
+        orig = JJ.set_partial
+        JJ.set_partial = lambda v: published.append(v)
+        try:
+            out = await I.run_intake(StreamingClient([]), FORM)
+        finally:
+            JJ.set_partial = orig
+    finally:
+        J._current_job.set(None)
+
+    assert [c["slot"] for c in out["cards"]][:2] == ["customer", "revenue"]   # 최종 결과는 그대로
+    assert [len(p["cards"]) for p in published] == [1, 2]                     # 1장 → 2장 순서로 알렸다
+    assert published[0]["cards"][0]["slot"] == "customer"

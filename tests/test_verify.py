@@ -12,7 +12,7 @@ class FakeClient:
         self.reply = reply
         self.calls = []
 
-    async def complete(self, system, user, model=None):
+    async def complete(self, system, user, model=None, on_delta=None):
         self.calls.append({"system": system, "user": user})
         return LLMResult(text=self.reply, model="fake")
 

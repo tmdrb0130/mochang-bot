@@ -417,6 +417,7 @@ export default function ModooWriter() {
   // ── 인테이크(정보 보충) ──
   const [intake, setIntake] = useState(saved?.intake ?? null);      // /intake 결과 { summary, slots, cards, ready }
   const [intakeBusy, setIntakeBusy] = useState(false);
+  const [intakePhase, setIntakePhase] = useState(null);   // "research" | "cards" | null (2026-09-11)
   const [intakePos, setIntakePos] = useState(null);      // 인테이크 작업의 큐 대기 순번 (0 = 다음 차례, null = 실행 중/모름)
   const [answers, setAnswers] = useState(saved?.answers ?? {});      // answers[slot] = { answer: string|string[]|null, unknown: bool }
   const [cardIdx, setCardIdx] = useState(saved?.cardIdx ?? 0);
@@ -698,6 +699,10 @@ export default function ModooWriter() {
   async function startIntake() {
     setIntakeBusy(true);
     setIntakePos(null);
+    setIntake(null);            // 미리보기가 앞 초안 카드 위에 겹치지 않게
+    setAnswers({});             // 비우기를 **시작할 때** 한다 (미리보기 단계에서 이미 답을 받기 시작한다)
+    setCardIdx(0);
+    setRegen({});
     // 열쇠(draftKey)가 없다 = 이 draft_id 로 서버 저장에 성공한 적이 한 번도 없다 (2026-09-07).
     // 그 상태에서 같은 id 를 다시 쓰면 위험하다: 새로고침으로 끊긴 인테이크나 다른 탭이 먼저 끝나면서 그 id 를
     // 선점하고 열쇠를 받아 가면, 열쇠 없는 이 흐름의 조사·생성문이 서버에서 **전부 조용히 거부된다**
@@ -722,12 +727,21 @@ export default function ModooWriter() {
     // 지금 제출하는 아이디어가 이 초안의 기준이 된다 — 이후 편집은 이 글과 비교해 같은 초안인지 가른다
     setForm((f) => ({ ...f, draftId, draftKey, draftIdea: f.idea, ...(fresh ? { shareToken: "" } : {}) }));
     try {
-      const r = await api.intake(sent, { onTick: (snap) => setIntakePos(snap.status === "queued" ? snap.position : null) });
+      const r = await api.intake(sent, { onTick: (snap) => {
+        setIntakePos(snap.status === "queued" ? snap.position : null);
+        // 실행 중 세부 단계 (백엔드 jobs.set_phase). 인테이크는 2분 넘게 걸리는데 그동안 아무 정보가 없었다.
+        setIntakePhase(snap.status === "running" ? (snap.phase || null) : null);
+        // 카드가 도착하는 대로 먼저 보여준다 (2026-09-11). 학생은 한 장이면 답을 시작할 수 있다.
+        // 최종 결과가 오면 그걸로 덮어쓴다 — 여기 있는 건 미리보기(preview)다.
+        if (snap.partial?.cards?.length) {
+          setIntake((cur) => (cur && !cur.preview ? cur : {
+            ...snap.partial, slots: [], missing: [], weak: [], ready: false,
+          }));
+          setStep((s) => (s === 0 ? 1 : s));      // 학생이 이미 다른 단계면 건드리지 않는다
+        }
+      } });
       adoptDraftKey(r, draftId);
-      setIntake(r);
-      setAnswers({});
-      setCardIdx(0);
-      setRegen({});
+      setIntake(r);               // 최종 결과가 미리보기를 덮는다. 답(answers)은 슬롯 id 로 들고 있어 그대로 남는다
       if (!r.cards?.length) await generateAll();
       else {
         setStep(1);                   // ready 여도 카드(멘토링 등)가 있으면 보여준다 — 건너뛰기 버튼이 있다
@@ -738,6 +752,7 @@ export default function ModooWriter() {
       await generateAll();           // 인테이크가 실패해도 생성은 막지 않는다
     } finally {
       setIntakeBusy(false);
+      setIntakePhase(null);
       refreshHealth();
     }
   }
@@ -1252,7 +1267,12 @@ export default function ModooWriter() {
 
               <button onClick={startIntake} disabled={!canStart || intakeBusy}
                 className="w-full py-3 rounded-lg bg-indigo-600 text-white font-medium disabled:bg-slate-300 disabled:cursor-not-allowed">
-                {intakeBusy ? (intakePos != null && intakePos > 0 ? t("in.start.wait", { n: intakePos }) : t("in.start.reading")) : t("in.start")}
+                {intakeBusy
+                  ? (intakePos != null && intakePos > 0 ? t("in.start.wait", { n: intakePos })
+                    : intakePhase === "research" ? t("in.start.research")
+                    : intakePhase === "cards" ? t("in.start.cards")
+                    : t("in.start.reading"))
+                  : t("in.start")}
               </button>
               {intakeBusy && <p className="text-xs text-slate-500 text-center">{t("in.start.hint")}</p>}
               {!canStart && (
@@ -1267,7 +1287,7 @@ export default function ModooWriter() {
         {step === 1 && intake && (() => {
           const cards = intake.cards || [];
           const card = cards[cardIdx];
-          const known = intake.slots.filter((s) => s.status === "known");
+          const known = (intake.slots || []).filter((s) => s.status === "known");   // 미리보기에는 slots 가 없다
           return (
             <div className="max-w-2xl mx-auto space-y-6">
               <div>
