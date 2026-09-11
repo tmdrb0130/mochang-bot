@@ -12,11 +12,13 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import threading
 import time
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from .. import timing
@@ -24,6 +26,8 @@ from ..llm.client import LLMClient
 from ..pipeline import assemble
 from . import extract_proc
 from .research import DiskCache, Researcher, domain
+
+log = logging.getLogger("mochang.research")
 
 MAX_PAGE_CHARS = 6000
 MIN_BODY_CHARS = 40      # 이보다 짧은 본문/스니펫은 사실 추출에 못 쓴다
@@ -72,10 +76,14 @@ class ResearchConfig:
     # 지금은 **색인만** 한다 — 조사해온 페이지를 쌓아 두는 단계. 조회(웹 검색 대체)는 다음 단계에서 붙인다.
     # 기본 False: 켜면 임베딩 호출이 늘고 디스크에 쌓이므로 사용자 결정 뒤에 켠다.
     vectorstore_enabled: bool = False
+    vectorstore_backend: str = "chroma"          # chroma(기본) | simple(예전 JSON 저장소로 되돌릴 때)
     vectorstore_dir: str = "backend/.vectorstore"
+    vectorstore_chroma_dir: str = "backend/.vectorstore-chroma"
     vectorstore_embed_model: str = "bge-m3"      # Ollama 모델명. 빈 값이면 오프라인 임베딩(품질 없음 — 테스트용)
     vectorstore_ollama_url: str = "http://localhost:11434"
     vectorstore_min_score: float = 0.6      # 실측 근거: bge-m3 는 같은 주제 문장끼리도 0.668 (0.8 은 과하다)
+    # chroma 는 같은 쌍에서 점수가 약 +0.07 높다 (2026-09-11 실측) — 같은 생략 판정을 유지하는 값
+    vectorstore_chroma_min_score: float = 0.67
     # 쌓인 자료로 웹 검색을 대신할지 (RAG_PLAN 5절). 적중이 충분하면 그 조사에서는 외부 요청이 0건이 된다.
     vectorstore_use_for_search: bool = True
     vectorstore_min_hits: int = 5
@@ -103,10 +111,13 @@ class ResearchConfig:
             max_followup_pages=int(rc.get("max_followup_pages", 3)),
             max_pages_per_domain=int(rc.get("max_pages_per_domain", 2)),
             vectorstore_enabled=bool(vs.get("enabled", False)),
+            vectorstore_backend=str(vs.get("backend", "chroma")),
             vectorstore_dir=str(vs.get("dir", "backend/.vectorstore")),
+            vectorstore_chroma_dir=str(vs.get("chroma_dir", "backend/.vectorstore-chroma")),
             vectorstore_embed_model=str(vs.get("embed_model", "bge-m3")),
             vectorstore_ollama_url=str(vs.get("ollama_url", "http://localhost:11434")),
             vectorstore_min_score=float(vs.get("min_score", 0.6)),
+            vectorstore_chroma_min_score=float(vs.get("chroma_min_score", 0.67)),
             vectorstore_use_for_search=bool(vs.get("use_for_search", True)),
             vectorstore_min_hits=int(vs.get("min_hits", 5)),
             vectorstore_max_age_days=int(vs.get("max_age_days", 730)),
@@ -433,11 +444,15 @@ def get_vector_store(cfg: ResearchConfig):
                     "research.vectorstore.embed_model 이 비어 있어 벡터DB 를 끕니다 (오프라인 임베딩은 테스트 전용)")
                 return None
             t0 = time.monotonic()
-            _vector_store = VectorStore(cfg.vectorstore_dir, embed_model=embed,
-                                        min_score=cfg.vectorstore_min_score, min_hits=cfg.vectorstore_min_hits,
+            backend = (cfg.vectorstore_backend or "chroma").lower()
+            store_dir = cfg.vectorstore_chroma_dir if backend == "chroma" else cfg.vectorstore_dir
+            # 점수 척도가 저장소마다 달라 하한도 따로 둔다 (2026-09-11)
+            min_score = cfg.vectorstore_chroma_min_score if backend == "chroma" else cfg.vectorstore_min_score
+            _vector_store = VectorStore(store_dir, embed_model=embed, backend=backend,
+                                        min_score=min_score, min_hits=cfg.vectorstore_min_hits,
                                         max_age_days=cfg.vectorstore_max_age_days,
                                         freshness_days=cfg.vectorstore_freshness_days, health_url=health_url)
-            timing.log("vectorstore_open", dir=cfg.vectorstore_dir, took_s=round(time.monotonic() - t0, 1))
+            timing.log("vectorstore_open", dir=store_dir, backend=backend, took_s=round(time.monotonic() - t0, 1))
     return _vector_store
 
 
@@ -447,17 +462,81 @@ async def open_vector_store(cfg: ResearchConfig):
     return await asyncio.to_thread(get_vector_store, cfg)
 
 
+# 색인 **전용** 스레드 1개 (2026-09-11). upsert_pages 는 VectorStore._write_lock 으로 어차피 한 번에 하나만 돈다.
+# 공용 to_thread 풀(min(32, CPU+4))에서 돌리면 동시 접속 때 **락을 기다리는 스레드가 풀을 점유해**
+# storage·open_vector_store 같은 본체 작업과 경합한다. 직렬 작업이니 1개로 충분하고, 풀을 나눠 쓰지 않는다.
+_index_executor: ThreadPoolExecutor | None = None
+_index_executor_lock = threading.Lock()
+
+# 백그라운드 색인 태스크의 **강한 참조**. 안 잡아두면 GC 가 실행 도중에 수거해 조용히 사라진다.
+_index_tasks: set[asyncio.Task] = set()
+
+
+def _index_executor_get() -> ThreadPoolExecutor:
+    global _index_executor
+    if _index_executor is None:
+        with _index_executor_lock:
+            if _index_executor is None:
+                _index_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mochang-index")
+    return _index_executor
+
+
 async def index_pages(pages: list[dict], cfg: ResearchConfig) -> int:
     """조사해온 페이지를 벡터DB 에 쌓는다 (색인만 — 조회는 다음 단계).
 
-    LlamaIndex 는 동기라 to_thread 로 감싼다. **색인 실패는 조사를 막지 않는다** — 부가 기능이다."""
+    LlamaIndex 는 동기라 **전용 스레드**에서 돌린다(이벤트 루프를 막지 않는다).
+    **색인 실패는 조사를 막지 않는다** — 부가 기능이다."""
     store = await open_vector_store(cfg)
     if store is None or not pages:
         return 0
+    t0 = time.monotonic()
+    loop = asyncio.get_running_loop()
     try:
-        return await asyncio.to_thread(store.upsert_pages, pages)
-    except Exception:
+        n = await loop.run_in_executor(_index_executor_get(), store.upsert_pages, pages)
+    except Exception as e:
+        timing.log("index_failed", n=len(pages), error=f"{type(e).__name__}: {str(e)[:120]}")
         return 0
+    # 계측이 없어 "조사 88초 중 25~35초가 어디로 가는지" 를 못 쫓던 구간이다 (2026-09-11 분석)
+    timing.log("index_pages", n=n, of=len(pages), took_s=round(time.monotonic() - t0, 1))
+    return n
+
+
+async def wait_for_index_tasks(timeout: float | None = 10) -> None:
+    """뒤에서 도는 색인이 끝날 때까지 기다린다. 평소엔 쓰지 않는다 — 테스트와 종료 정리용."""
+    pending = set(_index_tasks)
+    if pending:
+        await asyncio.wait(pending, timeout=timeout)
+
+
+def _index_task_done(task: asyncio.Task) -> None:
+    """아무도 await 하지 않는 태스크라, 여기서 참조를 풀고 실패를 **반드시 남긴다**."""
+    _index_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:                      # 안 남기면 색인이 계속 실패해도 아무도 모른다
+        log.warning("백그라운드 색인 실패: %s: %s", type(exc).__name__, exc)
+        timing.log("index_failed", error=f"{type(exc).__name__}: {str(exc)[:120]}")
+
+
+def schedule_index_pages(pages: list[dict], cfg: ResearchConfig) -> asyncio.Task | None:
+    """색인을 **기다리지 않고** 뒤에서 돌린다 (2026-09-11).
+
+    색인은 이번 학생의 답에 쓰이지 않는다 — 다음 사람이 검색할 수 있게 쌓아 두는 축적이고,
+    반환값도 호출부가 버린다. 그런데 `await` 라서 학생이 약 10초(콜드 임베딩 로드 2.7초 포함)를
+    기다리고 있었다. 실측: 인테이크 p50 138.7초 = 조사 88.8 + 카드 48.0 (docs/SYSTEM_ARCHITECTURE §28).
+
+    루프가 없으면(동기 테스트 등) 아무것도 하지 않고 None 을 준다."""
+    if not pages:
+        return None
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+    task = loop.create_task(index_pages(pages, cfg))
+    _index_tasks.add(task)
+    task.add_done_callback(_index_task_done)
+    return task
 
 
 def reuse_page(hit: dict) -> dict:
@@ -590,7 +669,8 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
         timing.log("fetch_failed", n=len(failed), of=len(ranked),
                    reasons=sorted({f["reason"] for f in failed}), urls=[f["url"][:80] for f in failed[:3]])
     # 새로 받아온 것만 색인한다. KCI 계열은 영구 축적 금지(RESEARCH_PLAN 준수 사항 2항)라 여기서 뺀다.
-    await index_pages([p for p in pages if indexable(p)], cfg)
+    # **기다리지 않는다** — 이번 답에 안 쓰이는 축적이라 학생을 붙잡을 이유가 없다 (2026-09-11).
+    schedule_index_pages([p for p in pages if indexable(p)], cfg)
     return unique, pages
 
 

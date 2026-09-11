@@ -1,6 +1,7 @@
 """조사 파이프라인 — 모델·검색·HTTP 전부 가짜. 특히 '지어낸 quote 는 버려진다'를 검증."""
 import asyncio
 import json
+import threading
 
 import pytest
 
@@ -609,8 +610,10 @@ class FakeStore:
     def __init__(self, fail=False):
         self.calls = []
         self.fail = fail
+        self.threads = []          # 어느 스레드에서 돌았는지 (이벤트 루프 밖인지 확인용)
 
     def upsert_pages(self, pages):
+        self.threads.append(threading.current_thread().name)
         if self.fail:
             raise RuntimeError("색인 실패")
         self.calls.append([p["url"] for p in pages])
@@ -641,8 +644,9 @@ async def test_collect_pages_indexes_pages_when_enabled(tmp_path, monkeypatch):
                               cache=R.DiskCache(tmp_path))
 
     _, pages = await P.collect_pages(researcher, ["q"], cfg, fetch=make_fetch({"https://a.co.kr/1": PAGE_TEXT}))
+    assert pages[0]["text"] == PAGE_TEXT                    # 조사 결과는 색인을 기다리지 않고 먼저 나온다
+    await P.wait_for_index_tasks()                          # 색인은 백그라운드다 (2026-09-11)
     assert store.calls == [["https://a.co.kr/1"]]          # 본문까지 있는 page dict 를 그대로 넘긴다
-    assert pages[0]["text"] == PAGE_TEXT                    # 조사 결과는 그대로
 
 
 @pytest.mark.asyncio
@@ -658,21 +662,80 @@ async def test_indexing_failure_does_not_break_research(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_index_pages_runs_off_the_event_loop(monkeypatch):
-    """LlamaIndex 는 동기다 — 이벤트 루프를 막지 않도록 to_thread 로 감싼다."""
-    import asyncio
+    """LlamaIndex 는 동기다 — 이벤트 루프를 막지 않도록 **색인 전용 스레드**에서 돌린다 (2026-09-11).
+
+    수단(to_thread)이 아니라 보장(루프 밖 · 전용 풀)을 검사한다. 공용 to_thread 풀을 쓰면
+    동시 접속 때 락 대기 스레드가 풀을 점유해 본체 작업과 경합한다."""
     store = FakeStore()
     monkeypatch.setattr(P, "get_vector_store", lambda cfg: store)
-    called = {}
-    real_to_thread = asyncio.to_thread
-
-    async def watched(fn, *a, **kw):
-        called["used"] = True
-        return await real_to_thread(fn, *a, **kw)
-
-    monkeypatch.setattr(P.asyncio, "to_thread", watched)
     n = await P.index_pages([{"url": "https://a.co.kr/1", "text": PAGE_TEXT}],
                             P.ResearchConfig(vectorstore_enabled=True))
-    assert n == 1 and called.get("used") is True
+    assert n == 1
+    assert store.threads, "upsert_pages 가 불리지 않았다"
+    assert store.threads[0] != threading.current_thread().name      # 이벤트 루프 스레드가 아니다
+    assert store.threads[0].startswith("mochang-index")             # 공용 풀이 아니라 전용 실행기
+
+
+@pytest.mark.asyncio
+async def test_schedule_index_pages_does_not_make_the_caller_wait(monkeypatch):
+    """색인은 이번 답에 안 쓰이는 축적이다 — 호출부가 기다리지 않는다 (2026-09-11).
+
+    태스크는 **전역 set 에 강한 참조**로 잡아 둔다. 안 그러면 GC 가 실행 도중에 수거한다."""
+    started, release = asyncio.Event(), threading.Event()
+
+    class SlowStore(FakeStore):
+        def upsert_pages(self, pages):
+            release.wait(5)                 # 색인이 느린 상황을 흉내
+            return super().upsert_pages(pages)
+
+    store = SlowStore()
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: store)
+    cfg = P.ResearchConfig(vectorstore_enabled=True)
+
+    task = P.schedule_index_pages([{"url": "https://a.co.kr/1", "text": PAGE_TEXT}], cfg)
+    assert task is not None and not task.done()          # 호출부는 즉시 돌아왔다
+    assert task in P._index_tasks                        # 강한 참조를 잡고 있다
+    release.set()
+    assert await asyncio.wait_for(task, 5) == 1
+    await asyncio.sleep(0)                               # done 콜백이 돌 틈
+    assert task not in P._index_tasks                    # 끝나면 참조를 푼다
+    assert store.calls == [["https://a.co.kr/1"]]
+    started  # noqa: B018  (미사용 경고 방지)
+
+
+@pytest.mark.asyncio
+async def test_schedule_index_pages_logs_failure_instead_of_dying_silently(monkeypatch, caplog):
+    """아무도 await 하지 않는 태스크라, 실패하면 로그로 남겨야 아무도 모르는 일이 안 생긴다."""
+    def boom(cfg):
+        raise RuntimeError("저장소 열기 실패")
+
+    monkeypatch.setattr(P, "get_vector_store", boom)
+    cfg = P.ResearchConfig(vectorstore_enabled=True)
+
+    with caplog.at_level("WARNING", logger="mochang.research"):
+        task = P.schedule_index_pages([{"url": "https://a.co.kr/1", "text": PAGE_TEXT}], cfg)
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.sleep(0)
+
+    assert task not in P._index_tasks
+    assert any("색인 실패" in r.getMessage() for r in caplog.records), caplog.text
+
+
+@pytest.mark.asyncio
+async def test_collect_pages_does_not_wait_for_indexing(monkeypatch, tmp_path):
+    """조사 결과는 색인이 끝나기 전에 돌아온다 — 학생을 붙잡지 않는다."""
+    scheduled = {}
+    monkeypatch.setattr(P, "schedule_index_pages", lambda pages, cfg: scheduled.setdefault("pages", pages))
+    # 진짜 저장소를 열면 backend/.vectorstore(수백 MB)를 파싱해 테스트가 수십 초 걸린다 — 반드시 가짜로
+    monkeypatch.setattr(P, "get_vector_store", lambda cfg: FakeStore())
+    researcher = R.Researcher(backends=[("fake", lambda q, n: _aret(fake_results("https://a.co.kr/1")))],
+                              cache=R.DiskCache(tmp_path))
+    cfg = P.ResearchConfig(max_pages_to_extract=2, vectorstore_enabled=True,
+                           vectorstore_use_for_search=False)
+    _, pages = await P.collect_pages(researcher, ["q"], cfg,
+                                     fetch=make_fetch({"https://a.co.kr/1": PAGE_TEXT}))
+    assert [p["url"] for p in pages] == ["https://a.co.kr/1"]
+    assert "pages" in scheduled          # 색인은 예약만 됐다 (await 되지 않았다)
 
 
 def test_vectorstore_config_is_read_from_yaml():
@@ -742,6 +805,7 @@ async def test_enough_stored_pages_skip_web_search_entirely(tmp_path, monkeypatc
     assert [p["url"] for p in pages] == ["https://a.co.kr/1", "https://b.co.kr/2"]
     assert all(p["from_vectorstore"] for p in pages) and pages[0]["text"] == PAGE_TEXT
     assert store.queries == ["1인 가구 통계", "식품 폐기"]           # 검색어마다 한 번씩 조회
+    await P.wait_for_index_tasks()                                 # 색인은 백그라운드다 (2026-09-11)
     assert store.indexed == []                                     # 다시 색인하지 않는다
 
 
@@ -765,6 +829,7 @@ async def test_partial_hits_are_reused_and_web_fills_the_rest(tmp_path, monkeypa
     assert fetched == ["https://new.co.kr/2"]                       # 이미 가진 문서는 다시 안 받는다
     urls = [p["url"] for p in pages]
     assert urls[0] == "https://a.co.kr/1" and "https://new.co.kr/2" in urls
+    await P.wait_for_index_tasks()                                  # 색인은 백그라운드다 (2026-09-11)
     assert store.indexed == [["https://new.co.kr/2"]]               # 새로 받은 것만 색인
 
 
@@ -805,6 +870,7 @@ async def test_use_for_search_off_keeps_indexing_only(tmp_path, monkeypatch):
 
     assert store.queries == [] and calls == ["질의"]
     assert [p["url"] for p in pages] == ["https://web.co.kr/1"]
+    await P.wait_for_index_tasks()                                  # 색인은 백그라운드다 (2026-09-11)
     assert store.indexed == [["https://web.co.kr/1"]]
 
 
