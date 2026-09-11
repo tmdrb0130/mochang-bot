@@ -31,5 +31,6 @@ Windows 는 `.venv\Scripts\python`, Linux/mac 은 `.venv/bin/python`. **작업 P
 - 테스트는 실제 모델을 호출하지 않는다 (`FakeClient` 패턴, `tests/test_intake.py` 참고). 실호출 검증은 사람이 하고 결과를 PROGRESS.md 에 적는다.
 - 실호출은 최소로. (~~무료 OpenRouter 한도 50회/일~~ → **2026-09-02 자체 GPU 서버 Qwen 으로 전환해 한도 없음.** 다만 GPU 는 공유 자원이고 학생과 나눠 쓰므로 부하 큰 실호출은 큐가 빈 때. 호출 수를 늘리는 설계는 PROGRESS "결정 필요"에 적고 진행.)
 - `.env`(API 키)는 커밋 금지. `backend/.usage.json`, `backend/.cache/` 도 로컬 전용.
-- RAG 는 LlamaIndex + 로컬 Ollama `bge-m3` 임베딩. 검색은 **ddgs 가 주 경로** — ~~Vane(구 Perplexica)~~ 은 `enabled: false` 로 껐고(한국어 품질), 네이버 검색 API 도 같은 이유로 껐다. 공공데이터 소스는 배선만 돼 있고 **키 미발급**이라 실제로는 안 돈다.
+- RAG 는 LlamaIndex + **Chroma**(2026-09-11 전환) + 로컬 Ollama `bge-m3` 임베딩. 벡터 저장소는 `backend/.vectorstore-chroma/`.
+- 조사 소스는 **ddgs + 네이버 검색 API + 공공데이터(KOSIS·ECOS·K-Startup·상권·KCI)가 전부 실제로 돈다** (`.env` 에 키가 들어와 있다. 빈 것은 KIPRIS 하나). `enabled: false` 인 것은 **Vane** 뿐이다(SearXNG 가 봇 차단을 맞고 한국어 품질이 ddgs 보다 나빴다).
 - 운영 모델은 **`Qwen/Qwen3.8-27B-FP8`** (GPU 서버 vLLM, 복제본 2개, SSH 터널 `localhost:30801`). 터널은 NSSM 서비스 `mochang-tunnel` 이라 재부팅에도 자동으로 뜬다. `/health` 의 `llm_reachable` 이 False 면 그 둘 중 하나가 죽은 것 — 그동안 생성·번역이 전부 실패한다.

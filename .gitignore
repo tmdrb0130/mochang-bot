@@ -26,6 +26,8 @@ backend/.usage.json
 # 조사 결과 캐시
 backend/.cache/
 backend/.vectorstore/
+# Chroma 저장소 (299MB) — 이관은 scripts/vectorstore_migrate.py
+backend/.vectorstore-chroma/
 .pytest_cache/
 backend/.timing.jsonl
 # 아이디어·초안 DB (로컬 전용)

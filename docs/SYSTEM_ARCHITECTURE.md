@@ -79,7 +79,7 @@ Q6(사업 분야)는 AI 가 고르지 않고 사람이 UI 의 선택지(modoo �
 | LLM 호출 | `openai` SDK (OpenAI 호환 API) | OpenRouter · Ollama · vLLM · LiteLLM 어디든 `base_url` 만 바꿔 연결 |
 | 운영 모델 | **Qwen3.8-27B-FP8** on vLLM 0.25 (GPU 서버 k8s, 복제본 2개) | SSH 터널 `localhost:30801` → NodePort 30801 |
 | 웹 조사 | ddgs(DuckDuckGo) · 네이버 검색 API · KOSIS · ECOS · K-Startup · 상권정보 · KCI · (Vane 꺼짐) | `trafilatura` 본문 추출은 별도 프로세스 풀 |
-| 벡터DB | LlamaIndex + Ollama `bge-m3` 임베딩 | `backend/.vectorstore/` (색인만, 조회는 "충분하면 웹 검색 생략" 단계까지) |
+| 벡터DB | LlamaIndex + **Chroma**(SQLite+HNSW) + Ollama `bge-m3` 임베딩 | `backend/.vectorstore-chroma/` — 2026-09-11 전환(§28). 조회 적중이 충분하면 웹 검색 생략 |
 | DB | SQLAlchemy Core + SQLite(WAL) ×2 (서비스/백업) | URL 만 바꾸면 PostgreSQL |
 | 배포 | nginx(50001) → NSSM 서비스 `mochang-api`(8000) | 같은 PC 의 bustartup.kr nginx 에 얹혀 있음 |
 | 테스트 | pytest + pytest-asyncio, 모델·네트워크 호출 0 | **483 passed** (2026-09-10) |
@@ -358,7 +358,7 @@ finisher = Finisher(storage, finisher_client, settings, generate_fn=generate.gen
 ### 5-2. `lifespan` (앱 시작/종료)
 
 시작: `client.queue.start()` → `research_client.queue.start()` → `storage.init()` (스레드; 실패하면 `storage.enabled=False` 로 저장만 끔) → `finisher.start()` (storage 가 켜져 있을 때만)
-→ **벡터DB 예열**: `asyncio.create_task(open_vector_store(research_cfg))`. 125MB 스토어를 여는 데 실측 32~65초가 걸리는데 스레드에서 미리 열어 첫 사용자가 그 비용을 안 치르게 한다(§24-4-1 ②). 테스트는 `MOCHANG_SKIP_VECTORSTORE_WARMUP` 으로 건너뛴다.
+→ **벡터DB 예열**: `asyncio.create_task(open_vector_store(research_cfg))`. 예전 JSON 저장소는 여는 데 32→65→**143초**까지 늘어나 스레드에서 미리 열어야 했다(§24-4-1 ②). **Chroma 전환(2026-09-11) 뒤에는 3.0초**라 예열의 의미가 작아졌지만, 그대로 둔다(비용이 없다). 테스트는 `MOCHANG_SKIP_VECTORSTORE_WARMUP` 으로 건너뛴다.
 종료: 예열 태스크 cancel → `finisher.stop()` → 큐 3개 stop → `storage.close()` → `extract_proc.shutdown()`.
 
 ### 5-3. 미들웨어·예외 처리
@@ -822,9 +822,14 @@ flowchart TD
 | `angle_of(fact)` | 추출 단계의 `angle` → 없으면 `ANGLE_HINTS` 키워드 점수 → 모르면 `trend` |
 | `assign(facts, hints)` | ① 각도 일치 문항에 (3건까지) ② 남은 것은 문항 힌트(골자 몫 텍스트) 토큰 겹침 ③ 그래도 남으면 RECEIVERS 를 돌며 빈 자리에 |
 
-### 8-6. `vectorstore.py` — LlamaIndex 축적층
+### 8-6. `vectorstore.py` — 축적층 (LlamaIndex + Chroma)
 
-`VectorStore(persist_dir, embed_model=None→OfflineEmbedding, min_score=0.8, min_hits=5, max_age_days=730, freshness_days=0, health_url=None, health_check=None)`.
+`VectorStore(persist_dir, embed_model=None→OfflineEmbedding, min_score=0.8, min_hits=5, max_age_days=730, freshness_days=0, health_url=None, health_check=None, backend="simple")`.
+
+**`backend`(2026-09-11)**: `"chroma"`(운영 기본) | `"simple"`(예전 LlamaIndex 기본 JSON 저장소 — 되돌릴 때만).
+chroma 는 `_open_chroma()` 가 `chromadb.PersistentClient` + `ChromaVectorStore` 를 만들어 `VectorStoreIndex.from_vector_store` 로 얹는다.
+`_persist()` 는 chroma 에서 **아무 일도 하지 않는다**(쓰는 즉시 디스크 반영). 전환 근거와 실측은 §28.
+`_known_urls` — 색인된 URL 을 **열 때 한 번** 읽어 들고 다닌다. 예전엔 `upsert_pages` 마다 저장소 전체를 훑었는데, Chroma 에서 그러면 청크 2만 개 메타를 매번 읽는다. 단일 프로세스 + `_write_lock` 직렬이라 어긋나지 않는다.
 
 2026-09-04 보강: ① `healthy()` — `health_url`(Ollama)이 있으면 60초마다 `GET /api/tags`(2초) 로 살아 있는지 보고, 죽어 있으면 `degraded=True` 로 `upsert_pages`·`query` 를 건너뛴다(웹 검색만 씀, `timing.log("vectorstore_degraded")`). 예전엔 Ollama 가 죽어도 품질 없는 벡터로 색인이 오염됐다. ② 오프라인 임베딩은 **테스트 전용** — `pipeline.get_vector_store` 는 `embed_model` 이 비어 있고 환경변수 `MOCHANG_ALLOW_OFFLINE_EMBEDDING=1` 이 없으면 벡터DB 를 끈다. ③ 문서 메타에 `embed_model` 이름을 남긴다(오염 문서 식별용). ④ `upsert_pages` 는 `threading.Lock` 으로 직렬화(LlamaIndex 파일 persist 는 동시 쓰기에 안전하지 않다).
 
@@ -1381,6 +1386,7 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | `test_q1_structure.py` | 짜임 회전·정의형 재생성 |
 | `test_shorten.py` / `test_auto_extend.py` | 짧은 문항 압축 / 긴 문항 자동 이어쓰기 |
 | `test_polish.py` / `test_postprocess.py` / `test_refine_hook.py` | 후처리 세 층 |
+| `test_q1_structure.py` | Q1·Q10 짜임 파일(`q1_structures.md`·`q10_structures.md`) 선택과 `{structure}` 치환 |
 | `test_verify.py` | evidence 원문 대조로 present 뒤집기 |
 | `test_translate.py` | 평문/목록/청크/깨진 JSON/언어 코드/`/translate`·`/jobs/translate` 같은 IP 6건 동시 수락 · **빈 번역 계측**(`translate_empty` 는 빈 항목이 있을 때만) |
 | `test_research.py` / `test_pipeline.py` / `test_opendata.py` / `test_vectorstore.py` / `test_extract_proc.py` | 검색 추상화·폴백·캐시 / 조사 파이프라인(지어낸 quote 탈락) / 정형 API 파싱 / 벡터DB / 프로세스 격리 |
@@ -1414,6 +1420,9 @@ python -m backend.test_generate q2 --call             # 실제 생성
 | `scripts/switch_model.py [qwen|llama]` | config.yaml 갈아끼우기 | 없음 |
 | `scripts/load_test.py [--n 50 --jobs --same-ip]` | 인메모리 ASGI 부하, 가짜 모델 | 없음 |
 | `scripts/live_load_test.py --users 40 --json …` | 실서비스에 프론트와 같은 전체 흐름 N명 동시 (헤더 X-Mochang-Test) | **실호출 대량** — 승인 후 |
+| `scripts/mixed_load_test.py --kr 40 --fr 20 [--think 45 --salt … --json …]` | **혼합 부하** — 한국인 N + 외국인 M 이 동시에 전체 흐름(재생성 30%·이어쓰기 20% 포함). 측정 결과는 LOAD_TEST §6 | **실호출 대량** — 승인 후 |
+| `scripts/load_ideas.py` | 부하 테스트용 아이디어 풀(한국인 140 · 외국인 20). 실사용 82건의 **주제 분포만 보고 새로 썼다** — 학생이 쓴 문장을 고정물에 박지 않기 위해 | 없음 |
+| `scripts/foreign_e2e.py [--base …]` | 외국인(영어 입력) 1명 전체 흐름 — 인테이크 → 카드 번역 → 조사 → 생성 → 영·중·일 번역. 약 5분, 호출 ≈45회. 헤더 X-Mochang-Test 자동 | **실호출** |
 | `scripts/foreign_e2e.py [--base …]` | 영어 입력 E2E (인테이크→카드 번역→조사→생성→영·중·일 번역) | 실호출 ≈45회 |
 | `scripts/translate_load_test.py --users 15` | 번역 전용 부하 (1명당 카드 1 + 본문 8(동시 3) + 다른 언어 미리 2 = 11회). ⚠️ `CARD_STRINGS` 가 **25문구(1청크)** 인데 실제 카드는 약 80문구(2청크) — 다음 회차에 고쳐야 실제 부하가 된다 | 실호출 대량 |
 | `scripts/gpu_probe.py --levels …` | vLLM 직접 동시성 단계 측정 (`/metrics`) | 실호출 |
@@ -1831,4 +1840,79 @@ Qwen 은 원격 GPU 서버에 있고 이 PC 는 `ssh -L 30801` 로 붙는다. �
 
 - 프롬프트를 크게 고치기 전에는 **폴더 사본이 아니라 태그**: `git tag prompts-<날짜>-<이유>`
 - `.gitignore` 의 `backend/prompts.*/` 가 배포 폴더 옆 사본을 막는다
+
+---
+
+## 28. 2026-09-11 — 초안이 늦게 나오던 이유와 두 번의 수술
+
+"아이디어 넣고 초안 받는 데 너무 오래 걸린다"는 지적에서 시작해 로그를 분해했다.
+
+### 28-1. 어디에 시간이 가고 있었나 (실사용 로그, 부하 테스트 제외)
+
+| 단계 | 건수 | p50 | p90 |
+|---|---|---|---|
+| **인테이크 (아이디어 → 카드)** | 197 | **138.7초** | 241.8초 |
+| ├ 아이디어 조사 | 213 | 88.8초 | 172.5초 |
+| └ 카드 생성 | 213 | 48.0초 | 57.0초 |
+| 문항 조사 | 1,379 | 0.7초 | 1.4초 |
+| 문항 생성 | 1,255 | 21.1초 | 33.0초 |
+
+**큐 대기는 전 구간 0.0초다** — 서버가 밀려서가 아니라 일이 실제로 그만큼 걸렸다. 병목은 인테이크 하나뿐이고 문항 생성은 이미 빠르다.
+
+**세운 가설이 틀렸던 기록**: 검색 백엔드를 순차로 도는 코드(`research.py:393,407`, `pipeline.py:550`)를 보고 "검색이 병목" 이라 봤는데, 실측하니 **검색어 1개당 1.3초**(opendata 0.92 + naver 0.42)로 전체의 5초뿐이었다. 코드 모양만 보고 병목을 지목하면 안 된다.
+
+### 28-2. 수술 ① — 색인을 학생 대기에서 뺐다
+
+`collect_pages` 가 `await index_pages(...)` 로 색인을 기다리고 있었다. 색인은 **이번 학생의 답에 쓰이지 않는다** — 다음 사람을 위한 축적이고 반환값도 버려진다.
+
+`schedule_index_pages()` 로 바꿔 기다리지 않는다. 아무도 await 하지 않는 태스크라 세 가지를 함께 넣었다:
+
+| | 왜 |
+|---|---|
+| 전역 `_index_tasks` 강한 참조 | 안 잡아두면 GC 가 실행 도중에 수거한다 |
+| `add_done_callback` 예외 로깅 | 안 남기면 색인이 계속 실패해도 아무도 모른다 |
+| **색인 전용 스레드 1개** | `upsert_pages` 는 락으로 어차피 직렬이다. 공용 `to_thread` 풀(min(32, CPU+4))을 쓰면 락 대기 스레드가 풀을 점유해 `storage`·`open_vector_store` 와 경합한다 |
+
+덤으로 `timing.log("index_pages", n, of, took_s)` 계측을 넣었고 — **그게 곧바로 진짜 문제를 드러냈다.**
+
+### 28-3. 색인이 10초가 아니라 **70초**였다
+
+계측 첫 줄이 `{"n": 3, "of": 3, "took_s": 69.7}` 였다. 페이지 3장 넣는 데 69.7초. 추정(10초)의 7배다.
+
+원인은 저장 방식이었다. LlamaIndex 기본 `SimpleVectorStore` 는 **벡터를 JSON 텍스트로** 들고 있다(청크당 14.6KB):
+
+| | 값 | 이유 |
+|---|---|---|
+| 열기 | 72.8 → 122.3 → **143.1초** (증가 중) | 362MB 를 파싱해 객체로 올린다 |
+| 쓰기 | **69.7초** | 페이지 3장 때문에 **362MB 를 통째로 다시 쓴다** |
+| 조회 | 전수 비교 | 색인 구조(HNSW) 없음 |
+
+검증 중에 원본 벡터 파일이 **62MB 로 잘려 보이는** 순간을 목격했다 — 손상이 아니라 그때 라이브가 파일을 다시 쓰는 중이었다. 즉 **69초 동안 벡터DB 가 디스크에 불완전한 상태로 존재한다**. 그 사이 서버가 죽으면 깨진다.
+
+### 28-4. 수술 ② — Chroma 로 옮겼다
+
+| | simple (전) | chroma (후) | |
+|---|---|---|---|
+| 열기 | 143.1초 | **3.0초** | 48배 |
+| 쓰기(3장) | 64~70초 | **3.34초** | 20배 |
+| 중복 URL 재시도 | 저장소 전체 훑기 | **0.00초** (URL 캐시) | |
+| 디스크 | 362MB | 299MB | |
+
+- **이관**: `scripts/vectorstore_migrate.py` — 19,681 청크 **32.6초**, **재임베딩 0회**(기존 JSON 에 벡터가 그대로 있다). 직접 Chroma 에 쓰지 않고 **`ChromaVectorStore.add()` 어댑터를 거친다** — 어댑터가 `_node_content` 메타를 함께 써야 조회 때 노드가 복원된다.
+- **URL 중복 제거는 할 게 없었다**: 고유 URL 2,605 = `ref_doc_info` 2,605 로 이미 1:1 이다(청크가 페이지당 평균 7.6개일 뿐).
+
+### 28-5. 점수 척도가 달라 하마터면 조사 품질이 무너질 뻔했다
+
+`is_sufficient` 는 `score >= min_score` 인 적중이 `min_hits` 건 이상인지로 **웹 검색 생략**을 정한다. 그런데 같은 (질의, 문서) 쌍에서 **Chroma 점수가 simple 보다 일관되게 약 +0.07 높다.**
+
+`min_score 0.6` 을 그대로 뒀다면 웹 검색 생략이 **10건 중 1건 → 9건**으로 폭증했을 것이다. 낡고 덜 관련된 축적 자료만으로 조사를 끝내는 상태가 **조용히** 만들어진다.
+
+→ `research.vectorstore.chroma_min_score: 0.67` 로 분리했다. 이 값이 기존 판정을 정확히 재현한다(10건 중 1건, 같은 질의). 재측정은 `scripts/vectorstore_compare.py`.
+
+**저장소를 바꿀 때는 검색 결과뿐 아니라 점수 분포를 반드시 같이 본다.** URL 결과는 9/10 일치로 멀쩡해 보였고, 점수를 안 찍었으면 그냥 통과시켰을 것이다.
+
+### 28-6. 되돌리는 법
+
+`backend/config.yaml` 에서 `research.vectorstore.backend: "simple"` 한 줄 + `nssm restart mochang-api`.
+원본 `backend/.vectorstore/`(362MB)를 그대로 두었기 때문에 데이터 손실 없이 즉시 복귀한다. 며칠 검증 뒤 지운다.
 

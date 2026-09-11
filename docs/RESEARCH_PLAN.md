@@ -25,8 +25,8 @@
 |---|---|
 | 1단계 즉시 수정 | ✅ 적용 — `max_pages_to_fetch: 6`(`* 2` 제거), 뉴스 호출 분리 |
 | 2단계 아이디어당 1회 조사 | ✅ 적용 — `research.share_idea_research: true`, 문항별 보완 검색은 `max_followup_queries: 2` 상한 |
-| 3단계 근거 유형별 API 라우팅 | 🔶 **배선만 완료.** `opendata.sources: [kosis, ecos, kstartup, sangkwon, kci]` 가 config 에 켜져 있지만 **`.env` 의 키가 전부 비어 있어 실제로는 전부 빠지고 ddgs 만 돈다.** 키 없는 소스는 자동 제외되므로 동작에는 문제 없다 — **이 프로젝트에 남은 가장 큰 미결 항목** |
-| | 네이버 검색 API 는 배선 후 **끔**(`naver.enabled: false`) — 한국어 자료 품질이 ddgs 보다 확연히 나빴다 |
+| 3단계 근거 유형별 API 라우팅 | ✅ **가동 중** (2026-09-11 확인). `.env` 에 NAVER·DATA_GO_KR·KOSIS·ECOS·KCI 키가 들어와 있고, 실사용 로그의 `event=sources` 에 `naver`·`kosis`·`kci` 카운트가 실제로 찍힌다. 빈 키는 **KIPRIS 하나**(특허, 승인 대기) |
+| | 네이버는 `enabled` 플래그가 없다 — **키 유무로만** 켜진다(`NaverConfig.configured`, `research.py:373`). 꺼져 있는 것은 **Vane** 이다 |
 | 4단계 캐시 개편 | 🔶 부분 — 디스크 캐시 TTL 7일(`cache_ttl_seconds`). 캐시 키는 여전히 아이디어 문자열 완전 일치 |
 | 5단계 동시성·장애 대응 | ✅ 적용 — 조사 경로 전역 세마포어(모델 60 / 추출 8 / fetch 64·호스트당 8), 소스별 차단 감지 |
 

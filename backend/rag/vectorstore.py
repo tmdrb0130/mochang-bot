@@ -38,6 +38,11 @@ log = logging.getLogger("mochang.vectorstore")
 MIN_TEXT_CHARS = 40
 CHUNK_SIZE = 512          # RAG_PLAN 3절: 약 512토큰 청크
 CHUNK_OVERLAP = 50
+
+# Chroma (2026-09-11). HNSW 는 **근사** 최근접이라 전수 비교(예전 SimpleVectorStore)와 상위 순서가
+# 한두 개 다를 수 있다. search_ef 를 올리면 정확도가 오르고 비용이 는다 — 2,605 문서 규모에선 미미하다.
+CHROMA_COLLECTION = "research"
+HNSW_SEARCH_EF = 200
 # 색인 본문에 함께 넣지 않을 메타데이터 — 제목·URL 이 임베딩에 섞이면 유사도가 주제가 아니라 형식에 끌린다.
 _META_KEYS = ("url", "title", "publisher", "date", "fetched_at", "source_kind", "query", "embed_model")
 # Ollama 헬스체크 간격 — 죽어 있으면 이 간격으로 다시 본다 (살아나면 색인·조회가 자동으로 재개된다)
@@ -129,11 +134,13 @@ class VectorStore:
 
     def __init__(self, persist_dir: str, embed_model=None, min_score: float = 0.8,
                  min_hits: int = 5, max_age_days: int = 730, freshness_days: int = 0,
-                 health_url: str | None = None, health_check=None):
+                 health_url: str | None = None, health_check=None, backend: str = "simple"):
         """freshness_days: 웹 검색을 생략하려면 점수 좋은 적중 중 이 일수 안의 문서가 1건 이상 있어야 한다 (0 이면 끔, 2026-09-04).
         health_url: Ollama 주소. 주면 HEALTH_INTERVAL_S 마다 살아 있는지 보고, 죽어 있으면 색인·조회를 건너뛴다(degraded).
-        health_check: 테스트용 — health_url 대신 부를 함수 () -> bool."""
+        health_check: 테스트용 — health_url 대신 부를 함수 () -> bool.
+        backend: "chroma"(기본 운영) | "simple"(예전 JSON 저장소, 되돌릴 때만). 2026-09-11 추가."""
         self.persist_dir = str(persist_dir)
+        self.backend = str(backend or "simple").lower()
         self.embed_model = embed_model or OfflineEmbedding()
         name = getattr(self.embed_model, "model_name", None)         # OllamaEmbedding 은 "bge-m3", 기본값은 "unknown"
         self.embed_name = name if name and name != "unknown" else type(self.embed_model).__name__
@@ -148,6 +155,10 @@ class VectorStore:
         self._write_lock = threading.Lock()       # LlamaIndex 파일 persist 는 동시 쓰기에 안전하지 않다
         self._splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
         self._index = self._open()
+        # 색인된 URL 을 **열 때 한 번** 읽어 들고 다닌다 (2026-09-11).
+        # 예전엔 upsert_pages 마다 저장소 전체를 훑었는데, Chroma 에서 그러면 청크 2만 개 메타를 매번 읽는다.
+        # 단일 프로세스 + _write_lock 직렬이라 이 캐시가 실제와 어긋날 일이 없다.
+        self._known_urls: set[str] = self._read_indexed_urls()
 
     # ── 건강 ──
 
@@ -178,18 +189,49 @@ class VectorStore:
 
     def _open(self) -> VectorStoreIndex:
         common = {"embed_model": self.embed_model, "transformations": [self._splitter]}
+        if self.backend == "chroma":
+            return self._open_chroma(common)
+        # 예전 저장소(JSON) — 되돌릴 때만. 열 때 파일 전체를 파싱하고(실측 143초) 쓸 때 통째로 다시 쓴다(69.7초).
         if os.path.exists(os.path.join(self.persist_dir, "docstore.json")):
             storage = StorageContext.from_defaults(persist_dir=self.persist_dir)
             return load_index_from_storage(storage, **common)
         return VectorStoreIndex([], storage_context=StorageContext.from_defaults(), **common)
 
+    def _open_chroma(self, common: dict) -> VectorStoreIndex:
+        """Chroma(SQLite+HNSW) — 열기는 즉시, 쓰기는 증분, 조회는 근사 최근접 (2026-09-11)."""
+        import chromadb
+        from chromadb.config import Settings
+        from llama_index.vector_stores.chroma import ChromaVectorStore
+
+        os.makedirs(self.persist_dir, exist_ok=True)
+        # 학생 아이디어가 도는 서버다 — 외부 전송(텔레메트리)은 끈다.
+        client = chromadb.PersistentClient(path=self.persist_dir, settings=Settings(anonymized_telemetry=False))
+        self._collection = client.get_or_create_collection(
+            CHROMA_COLLECTION, metadata={"hnsw:space": "cosine", "hnsw:search_ef": HNSW_SEARCH_EF})
+        self._chroma_store = ChromaVectorStore(chroma_collection=self._collection)
+        return VectorStoreIndex.from_vector_store(self._chroma_store, **common)
+
     def _persist(self) -> None:
+        """Chroma 는 쓰는 즉시 디스크에 반영되므로 할 일이 없다. simple 일 때만 파일을 다시 쓴다."""
+        if self.backend == "chroma":
+            return
         os.makedirs(self.persist_dir, exist_ok=True)
         self._index.storage_context.persist(persist_dir=self.persist_dir)
 
+    def _read_indexed_urls(self) -> set[str]:
+        """저장소에서 색인된 URL 을 한 번 읽는다. 이후에는 _known_urls 캐시를 쓴다."""
+        try:
+            if self.backend == "chroma":
+                got = self._collection.get(include=["metadatas"])
+                return {(m or {}).get("url", "") for m in (got.get("metadatas") or [])} - {""}
+            return {info.metadata.get("url", "") for info in self._index.ref_doc_info.values() if info.metadata} - {""}
+        except Exception:
+            log.warning("색인된 URL 목록을 읽지 못했습니다 — 중복 색인이 생길 수 있습니다", exc_info=True)
+            return set()
+
     def indexed_urls(self) -> set[str]:
         """이미 색인된 URL 키. 중복 색인 방지와 파이프라인의 skip_urls 계산에 쓸 수 있다."""
-        return {info.metadata.get("url", "") for info in self._index.ref_doc_info.values() if info.metadata}
+        return set(self._known_urls)
 
     # ── 쓰기 ──
 
@@ -199,7 +241,8 @@ class VectorStore:
         if not pages or not self.healthy():
             return 0
         with self._write_lock:                 # 조사 워커 여럿이 동시에 색인해도 persist 는 한 번에 하나
-            known = {_doc_id(u) for u in self.indexed_urls() if u}
+            known = {_doc_id(u) for u in self._known_urls if u}    # 저장소 전체 조회 대신 캐시 (2026-09-11)
+            new_urls: list[str] = []
             added = 0
             for page in pages or []:
                 key = _url_key(str(page.get("url", "")))
@@ -211,8 +254,10 @@ class VectorStore:
                     continue
                 known.add(doc_id)
                 self._index.insert(self._document(doc_id, key, text, page))
+                new_urls.append(key)
                 added += 1
             if added:
+                self._known_urls.update(new_urls)      # 캐시 갱신은 **성공한 것만**
                 self._persist()
         return added
 

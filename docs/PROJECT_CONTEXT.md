@@ -29,7 +29,7 @@
 | 프롬프트 관리 | 코드에 하드코딩하지 않고 **md 파일**로 분리 (아래 4절) |
 | RAG | 로컬 문서(PDF/PPTX/DOCX) 먼저, 웹 검색(뉴스·근거자료)은 2차 → 실제로는 웹 조사(`/research`)가 먼저 구현됨(2026-08-31) |
 | RAG 프레임워크 | **LlamaIndex 확정**(2026-09-01). 로컬 문서 `/ingest` 는 미착수 |
-| 웹 검색 | **Vane(구 Perplexica)** 확정(2026-09-01). 자체 모델 없음 → 채팅 LLM 은 **로컬 Ollama** 에 연결, 임베딩은 Vane 내장. ddgs 는 폴백 → **역전됨: Vane `enabled: false`, ddgs 가 주 경로.** 네이버 검색 API 도 배선했으나 한국어 품질이 ddgs 보다 나빠 `enabled: false`. 공공데이터(KOSIS·ECOS·K-Startup·상권·KCI)는 배선 완료·**키 미발급** |
+| 웹 검색 | **Vane(구 Perplexica)** 확정(2026-09-01). 자체 모델 없음 → 채팅 LLM 은 **로컬 Ollama** 에 연결, 임베딩은 Vane 내장. ddgs 는 폴백 → **역전됨: Vane `enabled: false`, ddgs 가 주 경로.** 네이버 검색 API 와 공공데이터(KOSIS·ECOS·K-Startup·상권·KCI)는 **키가 들어와 실제로 함께 돈다**(2026-09-11 확인, 빈 키는 KIPRIS 하나). 네이버는 `enabled` 플래그가 없고 키 유무로만 켜진다 |
 | 백엔드 | Python + FastAPI |
 | 프론트엔드 | 기존 React 아티팩트를 `frontend/src/App.jsx`로 이관(Vite + React 19 + Tailwind v4). API 호출은 `frontend/src/api.js` → 백엔드 |
 
@@ -388,7 +388,7 @@ frontend/
 ## 11. 미결 사항
 
 > 2026-09-10 대조: 아래 대부분이 해소됐다. 지금 남은 진짜 미결은 **외부 감시 부재**(§26)와
-> **자료조사 API 키 미발급**(RESEARCH_PLAN 3단계) 둘이다.
+> ~~자료조사 API 키 미발급~~ → **발급 완료, 실제 가동 중**(2026-09-11 확인). 남은 미결은 외부 감시 하나다.
 
 - ~~로컬 70B 서빙 하드웨어 확정~~ → 2026-09-01 머신 확보 → **09-02 Qwen3.8-27B-FP8 로 교체, k8s 복제본 2개로 운영 중**
 - ~~웹 검색 API 선택~~ → Vane 확정 (2절)
