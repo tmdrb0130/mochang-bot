@@ -221,7 +221,8 @@ async def generate_followup_queries(client: LLMClient, form: dict, meta: dict, s
                                     cfg: ResearchConfig) -> list[str]:
     """공통 조사(shared)로 못 채우는 각도만 검색어로. 충분하면 빈 리스트 — 그러면 이 문항은 외부 요청 0건.
 
-    배정된 출처가 2곳 미만인데 모델이 검색어를 내지 않으면, 기존 검색어에 문항 관점을 더한 검색 1건으로 보완한다."""
+    generate_queries 와 달리 **실패 시 폴백 검색어를 만들지 않는다**. 이미 공통 조사 사실이 있으므로
+    억지로 검색하는 것보다 안 하는 쪽이 낫다 (요청 수를 늘리지 않는 것이 2단계의 목적)."""
     if cfg.max_followup_queries <= 0:
         return []
     from .allocate import ANGLE_LABEL, QUESTION_ANGLES, for_question
@@ -243,7 +244,7 @@ async def generate_followup_queries(client: LLMClient, form: dict, meta: dict, s
         res = await client.complete(system, user, model=form.get("model"))
         queries = [str(q).strip() for q in _parse_json_array(res.text) if str(q).strip()]
     except Exception:
-        queries = []
+        return []
     used = {_norm(q) for q in shared_queries}
     out = []
     for q in queries:
@@ -251,19 +252,6 @@ async def generate_followup_queries(client: LLMClient, form: dict, meta: dict, s
             continue
         used.add(_norm(q))
         out.append(q)
-    if not out and angles and len({_url_key(str(f.get("url") or "")) for f in allocated
-                                    if f.get("url")}) < 2:
-        # 실호출에서 모델이 빈 근거에도 []를 반환했다. 기존 상한 안에서 검색 1건은 보장한다.
-        terms, suffix = {
-            "q2": (("문제", "실태", "부담", "통계"), "고객 실태 연구"),
-            "q3_1": (("서비스", "경쟁", "앱", "대안"), "경쟁 서비스 사례"),
-            "q3_2": (("수수료", "수익", "요금", "과금", "가격"), "공식 이용 요금 수수료"),
-        }[qid]
-        candidates = shared_queries or fallback_queries(form, meta, 1)
-        seed = max(candidates, key=lambda q: sum(t in q for t in terms))
-        candidate = f"{seed} {suffix}"
-        if _norm(candidate) not in used:
-            out.append(candidate)
     return out[: cfg.max_followup_queries]
 
 

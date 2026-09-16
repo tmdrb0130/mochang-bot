@@ -487,8 +487,8 @@ async def test_one_person_scenario_external_requests_before_and_after(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_one_person_scenario_empty_reply_still_fills_missing_sources(tmp_path, form):
-    """모델이 []를 내도 출처가 부족한 근거 문항 3개는 각 1회 검색한다. 개인·계획 문항에는 추가하지 않는다."""
+async def test_one_person_scenario_when_shared_research_covers_everything(tmp_path, form):
+    """보완 검색이 필요 없다고 모델이 판단하면(0단계 실측 기준 문항의 36~58%) 요청은 공통 조사 10건뿐."""
     counters = {"search": 0, "fetch": 0}
     researcher = counting_researcher(tmp_path, counters)
     cfg = P.ResearchConfig(max_queries=4, max_pages_to_extract=6, max_pages_to_fetch=6)
@@ -499,8 +499,9 @@ async def test_one_person_scenario_empty_reply_still_fills_missing_sources(tmp_p
     await P.run_idea_research(client, researcher, form, cfg, cache=cache, fetch=fetch)
     for qid in QUESTION_IDS:
         await P.run_research(client, researcher, form, qid, cfg, cache=cache, fetch=fetch)
-    assert counters == {"search": 4 + 3, "fetch": 6 + 3 * 3}
-    assert client.calls.count("facts") == 6 + 3 * 3
+    assert counters["search"] + counters["fetch"] == 10
+    # 사실 추출은 공통 조사 때만 — 페이지 6장이라 호출 6회(작업 39), 문항 9개는 한 번도 부르지 않는다
+    assert client.calls.count("facts") == 6
 
 
 # ── 도메인별 상한 + 정형 API 결과(no_fetch) 처리 ──
