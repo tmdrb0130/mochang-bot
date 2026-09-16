@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import re
 
+from .diversity import source_key
+
 ANGLES = ("problem", "competitor", "pricing", "trend")
 ANGLE_LABEL = {
     "problem": "문제의 크기·고객 행동·현황 통계",
@@ -58,13 +60,42 @@ def assign(facts: list[dict], question_hints: dict[str, str] | None = None) -> d
     question_hints: {문항: 그 문항이 다루는 내용(골자 몫 텍스트)} — 키워드 매칭에 쓴다. 없으면 각도만으로."""
     out: dict[str, list[dict]] = {q: [] for q in RECEIVERS}
     leftovers: list[dict] = []
+    owners: dict[str, str] = {}
+    seen: set[str] = set()
+    # 같은 기사의 여러 사실보다 서로 다른 기사를 먼저 배분한다.
+    groups: dict[str, list[dict]] = {}
     for fact in facts or []:
         if not isinstance(fact, dict):
             continue
+        text = re.sub(r"\s+", "", str(fact.get("fact") or ""))
+        quote = re.sub(r"\s+", "", str(fact.get("quote") or ""))
+        if not text or text in seen or (quote and quote in seen):
+            continue
+        seen.update((text, quote))
+        key = source_key(str(fact.get("url") or "")) or text
+        groups.setdefault(key, []).append(fact)
+    ordered = [group[i] for i in range(max((len(g) for g in groups.values()), default=0))
+               for group in groups.values() if i < len(group)]
+
+    def allowed(fact, q):
+        if "assigned_question" in fact and fact["assigned_question"] != q:
+            return False
+        key = source_key(str(fact.get("url") or ""))
+        return not key or key not in owners or owners[key] == q
+
+    def put(fact, q):
+        out[q].append(fact)
+        key = source_key(str(fact.get("url") or ""))
+        if key:
+            owners[key] = q
+
+    for fact in ordered:
+        if not isinstance(fact, dict):
+            continue
         angle = angle_of(fact)
-        target = next((q for q, angles in QUESTION_ANGLES.items() if angle in angles and q in out), None)
-        if target and len(out[target]) < MAX_PER_QUESTION:
-            out[target].append(fact)
+        target = fact.get("assigned_question") or next((q for q, angles in QUESTION_ANGLES.items() if angle in angles and q in out), None)
+        if target in out and allowed(fact, target) and len(out[target]) < MAX_PER_QUESTION:
+            put(fact, target)
         else:
             leftovers.append(fact)
 
@@ -73,9 +104,9 @@ def assign(facts: list[dict], question_hints: dict[str, str] | None = None) -> d
         if not hints:
             break
         words = _tokens(f"{fact.get('fact', '')} {fact.get('use_for', '')}")
-        scored = sorted(((len(words & hints[q]), q) for q in hints if len(out[q]) < MAX_PER_QUESTION), reverse=True)
+        scored = sorted(((len(words & hints[q]), q) for q in hints if allowed(fact, q) and len(out[q]) < MAX_PER_QUESTION), reverse=True)
         if scored and scored[0][0] > 0:
-            out[scored[0][1]].append(fact)
+            put(fact, scored[0][1])
             leftovers.remove(fact)
 
     i = 0
@@ -83,8 +114,8 @@ def assign(facts: list[dict], question_hints: dict[str, str] | None = None) -> d
         for _ in range(len(RECEIVERS)):
             q = RECEIVERS[i % len(RECEIVERS)]
             i += 1
-            if len(out[q]) < MAX_PER_QUESTION:
-                out[q].append(fact)
+            if allowed(fact, q) and len(out[q]) < MAX_PER_QUESTION:
+                put(fact, q)
                 break
     return out
 
