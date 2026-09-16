@@ -172,3 +172,35 @@ async def test_shared_assignment_survives_different_followup_results(monkeypatch
 
 def test_new_fact_cache_does_not_reuse_old_biased_results():
     assert P._cache_key({"track": "tech", "idea": "sample"}, "q2").startswith("research-facts-v2-diverse|")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", ["[]", "invalid JSON"])
+async def test_empty_or_invalid_model_reply_still_searches_missing_pricing(reply):
+    class Client:
+        async def complete(self, *args, **kwargs):
+            return SimpleNamespace(text=reply)
+    shared = {"queries": ["식품 할인 앱 수수료 수익 모델"], "facts": []}
+    queries = await P.generate_followup_queries(Client(), {"track": "tech", "idea": "식품 할인"},
+                                               {"id": "q3_2"}, shared, P.ResearchConfig())
+    assert len(queries) == 1 and "공식 이용 요금 수수료" in queries[0]
+    assert queries[0] not in shared["queries"]
+
+
+@pytest.mark.asyncio
+async def test_missing_evidence_respects_disabled_followup_search():
+    queries = await P.generate_followup_queries(None, {}, {"id": "q3_2"}, {"facts": []},
+                                               P.ResearchConfig(max_followup_queries=0))
+    assert queries == []
+
+
+@pytest.mark.asyncio
+async def test_two_relevant_sources_can_skip_followup():
+    class Client:
+        async def complete(self, *args, **kwargs):
+            return SimpleNamespace(text="[]")
+    shared = {"queries": ["pricing"], "facts": [fact("https://a.kr", "pricing", "fee A"),
+                                               fact("https://b.kr", "pricing", "fee B")]}
+    queries = await P.generate_followup_queries(Client(), {"track": "tech", "idea": "sample"},
+                                               {"id": "q3_2"}, shared, P.ResearchConfig())
+    assert queries == []
