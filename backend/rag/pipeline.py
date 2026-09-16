@@ -26,7 +26,6 @@ from ..llm.client import LLMClient
 from ..pipeline import assemble
 from . import extract_proc
 from .research import DiskCache, Researcher, domain
-from .diversity import source_key, diverse_results
 
 log = logging.getLogger("mochang.research")
 
@@ -186,7 +185,7 @@ def fallback_queries(form: dict, meta: dict, n: int) -> list[str]:
     idea = re.sub(r"[^\w\s가-힣]", " ", form.get("idea", ""))
     words = [w for w in idea.split() if len(w) >= 2][:6]
     base = " ".join(words[:3]) if words else form.get("idea", "")[:20]
-    cands = [f"{base} 실태 연구", f"{base} 경쟁 서비스", f"{base} 시장 통계", f"{base} 이용 요금", f"{base} 고객 문제"]
+    cands = [f"{base} 현황", f"{base} 통계", f"{base} 시장", f"{base} 문제점", f"{base} 서비스"]
     return cands[:n]
 
 
@@ -225,19 +224,18 @@ async def generate_followup_queries(client: LLMClient, form: dict, meta: dict, s
     억지로 검색하는 것보다 안 하는 쪽이 낫다 (요청 수를 늘리지 않는 것이 2단계의 목적)."""
     if cfg.max_followup_queries <= 0:
         return []
-    from .allocate import ANGLE_LABEL, QUESTION_ANGLES, for_question
+    from .allocate import ANGLE_LABEL, QUESTION_ANGLES
     qid = str(meta.get("id") or "")
     angles = QUESTION_ANGLES.get(qid)
     angle_text = ("\n".join(f"- {a}: {ANGLE_LABEL[a]}" for a in angles) if angles
                   else "- 이 문항은 외부 근거를 쓰지 않습니다. 빈 배열을 출력합니다.")
     system = assemble.render("research/followup_queries.md", n=cfg.max_followup_queries, angles=angle_text)
     shared_queries = list(shared.get("queries") or [])
-    allocated = for_question(shared.get("facts") or [], qid)
     user = "\n\n".join([
         assemble.build_context({k: v for k, v in form.items() if k != "references"}),
         f"[문항] {meta.get('label', '')}. {meta.get('title', '')}",
         f"[문항 의도·필수 요소]\n{meta.get('body', '')[:1200]}",
-        f"[이미 확보한 사실]\n{_fact_digest(allocated)}",
+        f"[이미 확보한 사실]\n{_fact_digest(shared.get('facts') or [])}",
         f"[이미 사용한 검색어] {' | '.join(shared_queries) or '(없음)'}",
     ])
     try:
@@ -416,7 +414,7 @@ async def fetch_page(url: str, timeout: int = 15) -> str:
 
 
 def _url_key(url: str) -> str:
-    return source_key(url)
+    return (url or "").split("#")[0].rstrip("/")
 
 
 _vector_store = None          # 프로세스당 하나 (색인 저장소를 열어 두는 비용이 크다)
@@ -613,9 +611,6 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
     skip_urls: 이미 다른 조사에서 본문을 받아온 URL — 다시 받지 않는다 (요청 절약).
     max_pages: 이번 호출에서 쓸 페이지 수 상한 (기본 cfg.max_pages_to_extract)."""
     want = cfg.max_pages_to_extract if max_pages is None else max_pages
-    if want <= 0 or not queries:
-        return [], []
-    skip = {_url_key(u) for u in (skip_urls or set())}
     t = time.monotonic()
     store = await open_vector_store(cfg)          # 스레드에서 — 첫 호출이 이벤트 루프를 막지 않게
     timing.count("store_open_ms", int((time.monotonic() - t) * 1000))   # 예열 전이면 여기서 기다린다
@@ -626,15 +621,7 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
         t = time.monotonic()
         reuse = await query_vector_store(store, queries, cfg)
         timing.count("store_query_ms", int((time.monotonic() - t) * 1000))
-        reuse = [h for h in reuse if _url_key(h.get("url", "")) not in skip
-                 and len(h.get("text") or "") >= MIN_BODY_CHARS
-                 and float(h.get("score", 0)) >= cfg.vectorstore_min_score]
-        reuse = diverse_results(reuse, cfg.max_pages_per_domain)
-        # 문서 수만 충분한 한 종류·한 출처의 적중은 웹 검색을 대체하지 않는다.
-        selected = reuse[:want]
-        varied = (len({domain(h.get("url", "")) for h in selected}) >= min(2, want)
-                  and (want < 3 or len({h.get("source_type", "web") for h in selected}) >= 2))
-        if reuse and varied and store.is_sufficient(selected):
+        if reuse and store.is_sufficient(reuse):
             # 벡터DB 만으로 해결 — 소스 카운터에 남겨 "조사 N건 중 웹 검색을 대체한 M건" 을 timing_report 로 볼 수 있게 (2026-09-03)
             timing.count("vectorstore_only")
             timing.count("vectorstore", len(reuse[:want]))
@@ -659,7 +646,7 @@ async def collect_pages(researcher: Researcher, queries: list[str], cfg: Researc
             seen.add(k)
             unique.append(r)
     budget = cfg.max_pages_to_fetch or cfg.max_pages_to_extract      # 받아올 페이지 수 (본문 실패 대비 여유 포함)
-    ranked = diverse_results(rank_results(unique), cfg.max_pages_per_domain, initial=kept)
+    ranked = _cap_by_domain(rank_results(unique), cfg.max_pages_per_domain)
     ranked = ranked[: min(budget, want) if max_pages is not None else budget]
     # 정형 API 결과(no_fetch)는 받아올 페이지가 없다 — snippet 이 이미 사실 문장이라 그대로 본문으로 쓴다.
     # return_exceptions: fetch 는 못 받으면 FetchFailed 를 올린다. 한 장이 실패해도 나머지는 살려야 하고,
@@ -899,26 +886,20 @@ def format_references(facts: list[dict]) -> str:
 
 def _cache_key(form: dict, question_id: str) -> str:
     h = hashlib.sha1(f"{form.get('track')}|{form.get('idea', '')}|{question_id}".encode("utf-8")).hexdigest()
-    return f"research-facts-v2-diverse|{h}"
+    return f"research-facts|{h}"
 
 
 def _merge_facts(primary: list[dict], secondary: list[dict], limit: int = MAX_FACTS) -> list[dict]:
-    """문항 전용 출처부터 번갈아 채워 공통 조사의 다른 출처가 밀려나지 않게 한다."""
-    groups: dict[str, list[dict]] = {}
-    seen = set()
+    """문항 전용 사실을 먼저 넣고 남는 자리를 공통 조사 사실로 채운다. 같은 (URL, 사실) 은 한 번만."""
+    out, seen = [], set()
     for f in list(primary) + list(secondary):
-        text = _norm(str(f.get("fact", "")))
-        quote = _norm(str(f.get("quote", "")))
-        if not text or text in seen or (quote and quote in seen):
+        key = (_url_key(str(f.get("url", ""))), _norm(str(f.get("fact", ""))))
+        if not key[1] or key in seen:
             continue
-        seen.update((text, quote))
-        key = _url_key(str(f.get("url", ""))) or text
-        groups.setdefault(key, []).append(f)
-    out = []
-    for i in range(max((len(g) for g in groups.values()), default=0)):
-        for group in groups.values():
-            if i < len(group) and len(out) < limit:
-                out.append(group[i])
+        seen.add(key)
+        out.append(f)
+        if len(out) >= limit:
+            break
     return out
 
 
@@ -970,14 +951,8 @@ async def run_research(client: LLMClient, researcher: Researcher, form: dict, qu
                 skip_urls={p.get("url", "") for p in shared_pages},   # 공통 조사에서 이미 본 페이지는 다시 안 받는다
                 max_pages=cfg.max_followup_pages)
             new_facts = await extract_facts(client, form, meta, pages, cfg)
-        # 공통 사실의 배정은 공통 목록으로 한 번 결정한다. 보완 결과 때문에 다른 문항 몫이 바뀌면 안 된다.
-        from .allocate import assign
-        assigned = {id(f): q for q, rows in assign(shared_facts).items() for f in rows}
-        tagged_shared = [{**f, "assigned_question": assigned.get(id(f), "")} for f in shared_facts]
-        tagged_shared.sort(key=lambda f: f["assigned_question"] != question_id)
-        tagged_new = [{**f, "assigned_question": question_id} for f in new_facts]
-        facts = _merge_facts(tagged_new, tagged_shared)
-        shared_used = sum(1 for f in facts if f not in tagged_new)
+        facts = _merge_facts(new_facts, shared_facts)
+        shared_used = sum(1 for f in facts if f not in new_facts)
 
     out = {
         "question_id": question_id,

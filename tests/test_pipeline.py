@@ -789,8 +789,7 @@ def searching_researcher(tmp_path, calls, results):
 @pytest.mark.asyncio
 async def test_enough_stored_pages_skip_web_search_entirely(tmp_path, monkeypatch):
     """적중이 충분하면 그 조사에서 외부 요청은 0건이 된다."""
-    store = QueryStore([hit("https://a.co.kr/1", 0.81),
-                        {**hit("https://b.co.kr/2", 0.75), "source_type": "stat"}])
+    store = QueryStore([hit("https://a.co.kr/1", 0.81), hit("https://b.co.kr/2", 0.75)])
     monkeypatch.setattr(P, "get_vector_store", lambda cfg: store)
     calls, fetched = [], []
 
