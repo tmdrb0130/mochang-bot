@@ -1,0 +1,7 @@
+시작하는 명령어
+Start-Service mochang-api
+Disable-NetFirewallRule -DisplayName "Mochang-Site-Pause"
+
+종료하는 명령어
+Enable-NetFirewallRule -DisplayName "Mochang-Site-Pause"
+Stop-Service mochang-api
