@@ -1,0 +1,550 @@
+================================================================================
+  모창봇 (모두의 창업 신청서 자동 작성기) — 인수인계 문서
+  작성일 2026-10-28 (수) 17:50 KST   /   작성 기준 PC: DESKTOP-BMG5FOD (bon505)
+================================================================================
+
+이 문서 하나로 "지금 어떤 상태인지 → 어떻게 켜고 끄는지 → 밖에서 어떻게 쓰는지 →
+전체가 어떻게 생겼고 어떻게 통신하는지 → 고장 나면 어디를 보는지 → 뭘 넘겨받아야 하는지"
+를 알 수 있게 썼다. 더 깊은 내용은 맨 끝 §14 문서 지도의 파일을 연다.
+
+본문의 수치·상태는 전부 2026-10-28 17:00~17:50 에 이 PC 와 GPU 서버에서 직접 조회한 값이다.
+"확인 못 함" 이라고 적은 것은 정말 확인하지 않은 것이니 믿지 말고 직접 본다.
+
+--------------------------------------------------------------------------------
+  0. 30초 요약
+--------------------------------------------------------------------------------
+
+  * 무엇:  창업 아이디어 한 문단을 넣으면 중기부 「모두의 창업 프로젝트」(modoo.or.kr) 도전신청서
+          서술형 문항 8~9개를 한국어로 써 주는 웹 서비스. 제출은 사람이 복사·붙여넣기로 한다.
+  * 어디:  https://bustartup.kr:50001/   (이 Windows PC 의 nginx 가 서빙)
+  * 두뇌:  Qwen/Qwen3.8-27B-FP8 (vLLM) — 별도 GPU 서버(k3s) 에 2개 복제본. 이 PC 와는 SSH 터널(30801)로만 통신.
+  * 지금:  ★ 사이트가 "일시중지" 상태다. 방화벽 규칙 Mochang-Site-Pause(켜짐)가 50001 을 막고 있다.
+          서버 프로세스·GPU 모델은 전부 살아 있다. 문만 닫혀 있다. 여는 법은 §2-1.
+  * 켜기:  관리자 PowerShell →  Disable-NetFirewallRule -DisplayName "Mochang-Site-Pause"
+  * 끄기:  관리자 PowerShell →  Enable-NetFirewallRule  -DisplayName "Mochang-Site-Pause"
+  * 사람이 손으로 켜야 하는 프로세스는 없다. 전부 Windows 서비스(NSSM)·예약 작업이라 재부팅해도 스스로 뜬다.
+  * 가장 먼저 할 일(§13):  ① 외부 감시(UptimeRobot 등) 등록  ② 모창 공용 계정으로 API 키 재발급 후 .env 채우기
+                           ③ GPU 서버의 Evicted 파드 45개 정리
+
+--------------------------------------------------------------------------------
+  1. 지금 상태 (2026-10-28 17:50 기준, 직접 조회)
+--------------------------------------------------------------------------------
+
+  [운영 PC — Windows 11 Pro, DESKTOP-BMG5FOD, 계정 bon505, 마지막 부팅 2026-10-16 03:21]
+
+    서비스 (Get-Service)            상태      비고
+    ----------------------------    -------   ----------------------------------------------
+    mochang-api      (8000)         Running   FastAPI 백엔드. 10-16 부팅 이후 계속 떠 있음
+    mochang-dashboard(8001)         Running   관리자 대시보드(읽기 전용, 이 PC 에서만)
+    mochang-tunnel   (30801)        Running   GPU 서버로 가는 SSH 터널. 오늘 08:40 에 NSSM 이 재기동함
+    vsp-nginx (80/443/8080/50001)   Running   nginx. 모창봇 50001 과 다른 프로젝트(VSP) 443 을 한 프로세스가 서빙
+    vsp-faiss / vsp-llama /         Running   다른 프로젝트(bustartup.kr VSP) 것. 모창봇과 무관하지만 같은 PC
+      vsp-spring / vsp-front
+
+    예약 작업 (schtasks)            마지막 실행                  결과   다음
+    mochang-db-snapshot             2026-10-28 04:30             0      2026-10-29 04:30   (매일, DB 오프사이트 백업)
+    mochang-watchdog                2026-10-28 17:41             0      5분마다            (상태 감시, 이상 시 화면 팝업)
+
+    방화벽 (TCP 50001 인바운드)
+    mochang-bot 50001               Allow   Enabled      항상 켜 둔다
+    Mochang-Site-Pause              Block   Enabled ★    = 외부 접속 차단 중. Block 이 Allow 보다 우선한다
+
+    /health (http://127.0.0.1:8000/health)
+      ok=true, model=Qwen/Qwen3.8-27B-FP8, llm_reachable=true, storage.enabled=true, storage.archive=true,
+      error_count=0, queue running 0 / queued 0, finisher enabled (ticks 18,136)
+
+    .env   ★ 오늘 17:25 에 API 키가 전부 비워졌다 (OPENROUTER / NAVER / DATA_GO_KR / KOSIS / ECOS / KCI / KIPRIS 모두 빈 값).
+           그런데 mochang-api 프로세스는 10-16 에 떠서 아직 옛 키를 메모리에 들고 있다.
+           → 다음에 mochang-api 를 재시작하는 순간부터 네이버 검색·공공데이터(KOSIS·ECOS·K-Startup·상권·KCI) 조사가
+             자동으로 빠지고 DuckDuckGo(ddgs, 키 불필요)만으로 조사한다. 서비스는 죽지 않는다. 품질만 내려간다.
+           → 공용 계정으로 키를 재발급해 .env 에 넣고 재시작하면 되돌아온다 (§11). 본문 생성(Qwen)은 키와 무관.
+
+    데이터 (backend\.data\)
+      mochang.sqlite          서비스 DB (실사용만)            스키마 v6
+      mochang-archive.sqlite  전체기록 DB (테스트 포함 전부)  ※ 백업이 아니다 (같은 폴더)
+      snapshots\              로컬 스냅샷 7일분 (10-22 ~ 10-28), 각 5,654,430 바이트
+      ★ 7일치 스냅샷 크기가 전부 똑같다 = 서비스 DB 가 일주일간 1바이트도 안 바뀜 = 실사용이 없었다는 뜻.
+        사이트가 닫혀 있는 상태와 맞아떨어진다. (장애가 아니다.)
+
+    코드
+      저장소   C:\Users\bon505\Desktop\mochang-bot   (GitHub tmdrb0130/mochang-bot)
+      브랜치   llama-switch-and-diagnostics — 이것이 운영 브랜치다. main 보다 201 커밋 앞서 있고 main 은 안 쓴다.
+      테스트   .venv\Scripts\python -m pytest -q  →  494 passed (오늘 실행, 모델·네트워크 호출 0)
+      프론트   frontend\dist 번들 index-BKe7A6C5.js (2026-09-11 빌드가 그대로 서빙 중)
+      미커밋   오늘 만든 인계 문서들(docs\OPERATIONS_HANDOVER.md 등). 이 문서와 함께 커밋한다.
+
+  [GPU 서버 — Precision-7960-T2, Ubuntu, 가동 107일]
+
+    GPU 3장 (NVIDIA RTX PRO 6000 Blackwell Max-Q, 각 96 GB)
+      GPU0  31.5 GB 사용  — 다른 사람 작업 (Hunyuan3D 도커 14.6 GB + Jupyter 커널 2개 16.8 GB). 모창봇이 쓰지 않는다.
+      GPU1  88.5 GB 사용  — vllm-qwen-b  (모창봇 Qwen 복제본 B)
+      GPU2  88.4 GB 사용  — vllm-qwen    (모창봇 Qwen 복제본 A)
+    k3s 배포 (kubectl get deploy):  vllm-qwen 1/1, vllm-qwen-b 1/1, open-webui 1/1, vane 1/1  — 전부 Ready
+    ★ Evicted(쫓겨난) 파드가 45개 남아 있다 — 어제(10-27) 디스크 압력으로 vLLM 이 반복 축출된 흔적.
+      오늘 16:26 DiskPressure 해제됨. 지금 Running 파드 2개는 24시간 전에 뜬 것. 정리는 §13.
+    디스크   시스템 SSD 937G 중 710G 사용 / 180G 가용 (80%). 추가 SSD 에 /app(158G) 이전 완료. HDD 2×1.8T 비어 있음.
+    백업     /home/user/mochang-backup/  — 모창 DB 스냅샷 31개 (최신 mochang-2026-10-28.sqlite.gz, 권한 600)
+    노출     서버 공인 IP(값은 이 PC 의 ssh config 'Host gpu' 에만 둔다) 에서 22(SSH)만 모창봇이 쓴다. 30801(vLLM)·30080·30500 은 밖에서 안 열린다(확인).
+             8080 은 밖에서 404 응답 = 다른 사람의 Hunyuan3D API 가 인터넷에 열려 있다 (모창봇 것 아님. 알고만 있을 것).
+
+--------------------------------------------------------------------------------
+  2. 매일 쓰는 명령 (전부 "관리자 PowerShell" — 시작 메뉴 > PowerShell 우클릭 > 관리자 권한으로 실행)
+--------------------------------------------------------------------------------
+
+  PowerShell 5.1 이다. 한 줄씩 입력한다. (&&, source, export 같은 bash 문법은 안 된다.)
+
+  2-1. 사이트 열기 (일시중지 해제)
+       Get-Service mochang-api, mochang-tunnel, mochang-dashboard, vsp-nginx      # 넷 다 Running 인지
+       Start-Service mochang-api                                                   # Stopped 일 때만
+       Invoke-RestMethod http://127.0.0.1:8000/health | Select-Object ok, llm_reachable   # 둘 다 True
+       Disable-NetFirewallRule -DisplayName "Mochang-Site-Pause"                   # ← 문 열기
+       그 다음 휴대폰 LTE(와이파이 끄고) 로 https://bustartup.kr:50001/ 접속 확인.
+       ※ 이 PC 에서 curl 이 200 이어도 외부에서 열린 증거가 아니다 (자기 자신 트래픽은 방화벽을 안 탄다).
+
+  2-2. 사이트 닫기 (일시중지)
+       Invoke-RestMethod http://127.0.0.1:8000/jobs          # running/queued 0 이면 학생 작업 없음
+       Enable-NetFirewallRule -DisplayName "Mochang-Site-Pause"                    # ← 문 닫기 (이것으로 충분)
+       (Stop-Service mochang-api 까지 하면 워치독이 5분마다 "API 무응답" 팝업을 띄운다. 자세한 비교는 docs\SITE_PAUSE.md)
+
+  2-3. 상태 한 번에 보기
+       Get-Service mochang-api, mochang-dashboard, mochang-tunnel, vsp-nginx
+       Invoke-RestMethod http://127.0.0.1:8000/health
+       Invoke-RestMethod http://127.0.0.1:8000/jobs
+       Get-NetFirewallRule -DisplayName "Mochang-Site-Pause" | Select-Object Enabled
+       Get-ScheduledTaskInfo -TaskName mochang-db-snapshot      # LastTaskResult 0
+       Get-ScheduledTaskInfo -TaskName mochang-watchdog
+       브라우저  http://127.0.0.1:8001/   (관리자 대시보드 — 접속자·오늘 처리량·누적 초안. 이 PC 에서만 열린다)
+
+  2-4. 재시작 (백엔드 코드·프롬프트·config·.env 를 바꿨을 때)
+       .venv\Scripts\python scripts\deploy_window.py       # 두 큐가 비고 조용해질 때까지 기다려 준다 (학생 작업 날리지 않게)
+       Restart-Service mochang-api                         # 또는 nssm restart mochang-api
+       Invoke-RestMethod http://127.0.0.1:8000/health      # ok / llm_reachable 확인 (llm_reachable 은 30초 캐시)
+       ※ 재시작하면 진행 중이던 작업(메모리에만 있음)은 사라진다. 인테이크 중이던 학생은 처음부터 다시 해야 한다.
+
+  2-5. 프론트 반영 (frontend\src 를 바꿨을 때)
+       cd frontend
+       npx vite build --outDir dist-check      # 문법 검증만 (dist-check 는 gitignore)
+       npx vite build                           # ★ 이 순간 frontend\dist 가 덮여 즉시 공개 배포된다. nginx 재시작 불필요
+       열어 둔 학생 탭은 1분 안에 새 번들을 자동으로 받는다.
+
+  2-6. 로그
+       C:\logs\mochang-api.log / mochang-api.err.log      백엔드 stdout/stderr (NSSM 이 10MB 마다 로테이션)
+       C:\logs\mochang-tunnel.log                         SSH 터널. "connect failed: Connection refused" 반복 = 서버 vLLM 이 죽음
+       C:\logs\mochang-dashboard.log
+       backend\.timing.jsonl                              요청별 계측 (JSON Lines). scripts\timing_report.py 로 요약
+       backend\.data\alerts.log                           워치독 판정 기록 (상태가 바뀔 때만)
+       C:\Users\bon505\Desktop\nginx\logs\access.log, error.log
+
+  2-7. GPU 서버
+       ssh gpu                                            # 비밀번호 없이 키로 붙는다 (~\.ssh\config 의 Host gpu)
+       kubectl get pods -l serving=qwen                   # 둘 다 1/1 Running 이어야
+       kubectl logs deploy/vllm-qwen --tail=30
+       nvidia-smi
+       df -h / /app
+
+--------------------------------------------------------------------------------
+  3. 외부에서 접속해 쓰는 법 (학생·사용자 입장)
+--------------------------------------------------------------------------------
+
+  주소   https://bustartup.kr:50001/   (www.bustartup.kr:50001 도 됨. 포트 50001 을 꼭 붙인다. 인증서는 bustartup.kr 것)
+  조건   방화벽 규칙 Mochang-Site-Pause 가 꺼져(Disabled) 있어야 한다. 로그인·가입 없음. 접근 제한 없음.
+  언어   화면 상단에서 한국어/English/中文/日本語 선택. 신청서 본문은 항상 한국어로 만들고 외국어는 읽기용 번역만 병기한다.
+
+  화면 흐름 (4단계)
+    0. 아이디어 입력  — 트랙(일반·기술 / 로컬) 선택 → 아이디어 한 문단(10자 이상) → 경력·팀원(선택) →
+                        사업 분야(Q6, 사람이 고름) → Q10 공개 여부 → [신청서 초안 만들기]
+    1. 정보 보충      — AI 가 아이디어를 읽고(인테이크, 30~80초) 부족한 정보를 "보기 고르기 카드" 최대 7장으로 묻는다.
+                        보기 클릭 / 기타 한 줄 / 모르겠어요 / 다른 보기 보기. "나머지 건너뛰고 바로 만들기" 도 된다.
+                        멘토에게 받고 싶은 도움(Q4-2) 카드는 항상 나온다.
+    2. 초안 고르기    — 문항별로 웹 조사(출처 있는 사실) → 생성 → 후처리. 문항당 25~40초, 3개씩 병렬.
+                        완성된 문항부터 읽고 직접 고치거나 "내용 더 보태기"·"새로 생성".
+    3. 제출용 정리    — 문항별/전체 복사 → modoo.or.kr 도전하기 화면에 붙여넣기. (자동 입력은 안 한다 — modoo 가 봇 차단)
+
+  생성 문항:  Q1 한줄소개(100자) · Q2 배경(2000) · Q3-1 차별점(2000) · Q3-2 수익(2000) · Q4-1 사업화(2000) ·
+             Q4-2 멘토 도움(2000) · Q8 역량(2000) · Q10 공개 자랑(100, 비공개 선택 시 AI 호출 없음) · (Q7-1 사업자만, UI 숨김)
+
+  알아 둘 것
+    * 초안은 브라우저 localStorage 에도, 서버 DB 에도 저장된다. 같은 브라우저로 다시 오면 이어서 할 수 있다.
+    * 다른 기기(폰→PC)로 옮기려면 화면의 공유 링크(?share=토큰). 초안마다 접근 열쇠(draft_key)가 있어 남의 초안은 못 연다.
+    * 생성 도중 탭을 닫아도 서버의 "마무리 작업자(finisher)" 가 3분 뒤 빈 문항을 낮은 우선순위로 채워 둔다. 재접속하면 받아 본다.
+    * 운영자가 직접 써 볼 때는 주소 뒤에 ?test=1 을 붙여 연다 → 그 탭의 요청은 서비스 DB 에 안 남고 전체기록 DB 에만 is_test=1 로 남는다.
+    * 강의실(같은 공인 IP 40명)에서 쓰는 것을 전제로 상한이 잡혀 있다: 초안당 동시 3건, IP 당 500, 시간당 새 초안 300.
+    * 상단에 "모델 서버 연결 끊김" 류 안내가 뜨면 §9 의 터널/모델 항목.
+
+--------------------------------------------------------------------------------
+  4. 전체 아키텍처 — 한 장 그림
+--------------------------------------------------------------------------------
+
+   [학생 브라우저]  React SPA (App.jsx)  ─ HTTPS :50001 ─┐
+                                                        │
+  ══════════════════ 운영 PC (Windows, DESKTOP-BMG5FOD, 공인 IP 61.34.63.189 = bustartup.kr) ══════════════════
+                                                        ▼
+     nginx (NSSM 서비스 vsp-nginx)  ── /        → C:\...\mochang-bot\frontend\dist  (정적 파일, SPA)
+            listen 50001 ssl        ── /api/    → http://127.0.0.1:8000/   (접두어 /api 를 떼고 프록시, 타임아웃 600초)
+            (같은 프로세스가 443 으로 다른 프로젝트 VSP 도 서빙)
+                                                        │
+     FastAPI (NSSM 서비스 mochang-api, uvicorn :8000, 127.0.0.1 전용)   backend\main.py
+       ├─ 본문 큐   client            워커 80, 초안당 3   vLLM priority 100   문항 생성·이어쓰기·골자·polish
+       ├─ 조사 큐   research_client   워커 80             priority 0 (번역 50) 검색어 생성·사실 추출·인테이크 카드·번역
+       ├─ 마무리 큐 finisher_client   워커 3              priority 200        나간 학생의 빈 문항 채우기 (60초마다 DB 훑음)
+       ├─ 조사 소스: ddgs(DuckDuckGo) · 네이버 검색 API · KOSIS · ECOS · K-Startup · 상권정보 · KCI  (키 없는 소스는 자동 제외)
+       │            trafilatura 본문 추출(프로세스 풀 8) · 7일 디스크 캐시 backend\.cache\research\
+       ├─ 벡터DB:  Chroma backend\.vectorstore-chroma\  ← 임베딩은 로컬 Ollama bge-m3 (127.0.0.1:11434)
+       ├─ 저장소:  SQLite WAL ×2  backend\.data\mochang.sqlite (서비스) + mochang-archive.sqlite (전체기록)
+       └─ 모델 호출: OpenAI 호환 API  base_url = http://localhost:30801/v1
+                                                        │
+     SSH 터널 (NSSM 서비스 mochang-tunnel)   ssh.exe -N -L 30801:localhost:30801 gpu   (계정 .\bon505, 키 ~\.ssh\id_gpu)
+                                                        │  TCP 22 → GPU 서버 공인 IP (ssh config 'Host gpu' 참고)
+  ══════════════════ GPU 서버 (Precision-7960-T2, Ubuntu, 내부 192.168.8.55) ═══════════════════════════════════
+                                                        ▼
+     localhost:30801  = k3s NodePort  →  Service vllm-qwen (selector serving=qwen)  →  두 파드에 연결 단위로 분배
+                                              ├─ 파드 vllm-qwen    GPU2 (UUID GPU-1364…)  vLLM 0.25, Qwen3.8-27B-FP8
+                                              └─ 파드 vllm-qwen-b  GPU1 (UUID GPU-6c06…)  동일 모델 (처리량 2배용 복제본)
+     모델 파일: 호스트 /opt/llm-models/qwen3.8-27b-fp8  (hostPath 로 두 파드가 읽기 공유, HF_HUB_OFFLINE=1)
+     그 밖에(모창봇 미사용): open-webui(NodePort 30080), vane 검색(30500, config 에서 꺼 둠), GPU0 의 타인 작업
+     백업 도착지: /home/user/mochang-backup/  (이 PC 의 예약 작업이 매일 04:30 scp 로 보냄)
+
+   부속 (운영 PC)
+     관리자 대시보드  NSSM mochang-dashboard  scripts\admin_dashboard.py  127.0.0.1:8001  읽기 전용, 별도 프로세스
+     워치독          예약 작업 5분            scripts\watchdog.py --notify   /health·/jobs·timing 로그 → 이상 시 화면 팝업
+     DB 스냅샷        예약 작업 매일 04:30     scripts\db_snapshot.py --remote gpu:mochang-backup
+
+  4-1. 요청 한 바퀴 (학생 한 명)
+     1) POST /jobs/intake  → 조사 큐: 아이디어 공통 조사(검색어 4개 → 검색 → 페이지 6장 → 사실 추출) → 인테이크(슬롯 9개 판정 + 카드)
+        프론트는 GET /jobs/{id} 를 2.5초마다 폴링. 카드는 만들어지는 대로 보인다.
+     2) 학생이 카드에 답하는 동안 프론트가 문항 8개의 조사를 뒤에서 미리 시작 (동시 3).
+     3) [초안 만들기] → 문항마다 POST /jobs/research(공통 조사 상속 + 보완 검색 0~2개) → POST /jobs/generate
+        생성 = 사업계획 골자(아이디어당 1회, 캐시) + 문항 프롬프트(system·track·question·style·사실·참고자료) → Qwen →
+        후처리(refine: 지어낸 수치·상용구 제거) → polish(모델 1회 고쳐쓰기) → 길이 보정(shorten/lengthen/auto-extend)
+     4) 끝날 때마다 storage 가 drafts / generations / research 테이블에 남긴다 (서비스 DB + 전체기록 DB).
+     5) 외국어 화면이면 POST /jobs/translate 로 읽기 번역 (조사 큐, priority 50).
+     학생 1명 ≈ 모델 호출 30~50회. GPU 포화점(동시 40~60 요청/장)에 맞춰 워커·우선순위가 잡혀 있다.
+
+  4-2. 왜 이렇게 생겼나 (핵심 결정)
+     * 모델 연결은 OpenAI 호환 API 하나로 통일 — config.yaml 의 base_url/api_key/model 세 값만 바꾸면 OpenRouter·Ollama·vLLM 어디든 붙는다.
+     * 프롬프트는 코드에 없다. 전부 backend\prompts\*.md (34개). 바꾸면 재시작만 하면 된다.
+     * OpenRouter 무료 모델(하루 50회)로 시작 → 2026-09-01 자체 GPU 서버 라마 70B → 09-02 Qwen3.8-27B-FP8 로 교체
+       (A/B: 문항당 32초/1,609자 vs 라마 61초/1,153자) → 09-03 복제본 2개.
+     * 모든 긴 작업은 큐(/jobs) — 강의실 40명이 동시에 눌러도 429 폭주 대신 "대기 순번" 을 보여준다.
+     * vLLM 우선순위 스케줄링: 조사·카드(0) < 번역(50) < 본문(100) < 마무리(200). GPU 가 붐빌 때 카드가 먼저 나온다.
+     * 저장은 고지 없이 한다(2026-09-02 사용자 결정). 계정 로그인은 도입하지 않았다. 초안 열쇠·공유 토큰·브라우저 익명 id 로 대신한다.
+
+--------------------------------------------------------------------------------
+  5. 운영 PC 구조 (Windows)
+--------------------------------------------------------------------------------
+
+  5-1. 경로 지도
+     C:\Users\bon505\Desktop\mochang-bot\        저장소 루트 (git). 아래 전부 여기 기준
+       backend\main.py                            FastAPI 앱 전체 (라우트, 클라이언트 3개, 큐, 저장 훅, finisher 기동)
+       backend\config.yaml                        ★ 운영 설정 전부 (모델 주소·워커·상한·조사 소스·저장소). 주석이 곧 문서
+       backend\config.yaml.qwen / .llama.bak / .openrouter.bak   모델 교체용 설정본 (scripts\switch_model.py)
+       backend\llm\client.py, jobs.py             OpenAI 호환 클라이언트 / asyncio 큐·워커·백오프
+       backend\pipeline\                          assemble(프롬프트 조립) generate outline polish postprocess intake verify translate
+       backend\rag\                               research(검색) pipeline(조사) opendata(공공 API 5종) vectorstore(Chroma) allocate breaker extract_proc
+       backend\storage.py                         SQLAlchemy, 테이블 drafts/generations/research/schema_meta (스키마 v6)
+       backend\finisher.py                        마무리 작업자
+       backend\prompts\                           ★ LLM 이 읽는 프롬프트 md 34개. 여기엔 사본·백업을 두지 않는다 (git 태그로 보관)
+       backend\.data\                             (gitignore) mochang.sqlite · mochang-archive.sqlite · snapshots\ · alerts.log
+       backend\.cache\research\                   (gitignore) 조사 디스크 캐시 7일, 102 MB
+       backend\.vectorstore-chroma\               (gitignore) 벡터DB 375 MB   (.vectorstore\ 365 MB 는 옛 형식, 지워도 됨)
+       backend\.timing.jsonl, .usage*.json        (gitignore) 계측·호출 수
+       frontend\src\App.jsx (1,574줄) api.js i18n.jsx   React 19 + Vite 6 + Tailwind 4. 화면 전부가 App.jsx 하나
+       frontend\dist\                             ★ nginx 가 서빙하는 빌드 산출물 (gitignore). npx vite build 가 덮는다
+       frontend\.env.production                   VITE_API_BASE=/api
+       scripts\                                   운영 도구 (아래 5-5)
+       scripts\svc\mochang-dashboard.bat, add-dashboard-service.ps1
+       k8s\                                       GPU 서버 매니페스트 (vllm-qwen, vllm-qwen-b, vane, backup\llama)
+       tests\  (27 파일, 494건)                    모델·네트워크 호출 0 (전부 mock). 커밋 전 반드시 통과
+       docs\                                      사람이 읽는 문서 (§14)
+       .env                                       API 키 (gitignore, 커밋 금지). 지금 전부 빈 값
+       .venv\                                     Python 가상환경 (서비스도 이걸 쓴다)
+       PROGRESS.md / README.md / CLAUDE.md        세션 인수인계 일지 / 실행법·API 표 / Claude Code 작업 지침
+     C:\Users\bon505\svc\mochang-api.bat          NSSM 이 부르는 런처 (공백 없는 경로여야 NSSM 인자가 안 깨진다)
+     C:\Users\bon505\svc\spring.bat, front.bat    VSP(다른 프로젝트) 런처
+     C:\Users\bon505\Desktop\nginx\conf\nginx.conf  ★ bustartup.kr 프로젝트 소유. 50001 server 블록이 여기 있다. 함부로 고치지 말 것
+     C:\Users\bon505\Desktop\nginx\conf\ssl\      bustartup.kr-chain.pem / -key.pem (TLS 인증서. 갱신 주체·만료일 확인 못 함 → §11)
+     C:\logs\                                     NSSM 서비스 로그
+     C:\Users\bon505\.ssh\config, id_gpu          GPU 서버 접속 (Host gpu 항목에 주소·계정·키 id_gpu — 이 문서엔 적지 않는다)
+     바탕면 *.ps1                                 서비스 등록 스크립트 (5-4). 일상 재시작용이 아니다
+     바탕면 모창봇 명령어.txt                       시작/종료 두 줄 메모 (docs\SITE_PAUSE.md 가 상세판)
+     바탕면 vsp자동복구.txt                         2026-09-01 25시간 장애 기록과 VSP 서비스화 문서
+
+  5-2. NSSM 서비스 8개 (nssm.exe = C:\Users\bon505\AppData\Local\Microsoft\WinGet\Links\nssm.exe, PATH 에 있음)
+     이름               실행                                                     계정      시작    죽으면
+     mochang-api        cmd /c C:\Users\bon505\svc\mochang-api.bat               .\bon505  자동    5초 뒤 재시작
+                          → .venv\Scripts\python -m uvicorn backend.main:app --port 8000
+     mochang-dashboard  cmd /c ...\scripts\svc\mochang-dashboard.bat             .\bon505  자동    5초 뒤 재시작
+     mochang-tunnel     C:\WINDOWS\System32\OpenSSH\ssh.exe -N -o BatchMode=yes -o ExitOnForwardFailure=yes
+                          -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -L 30801:localhost:30801 gpu
+                                                                                 .\bon505  자동    5초 뒤 재시작
+     vsp-nginx          Desktop\nginx\nginx.exe (인자 없음, conf 에 daemon off;)  .\bon505  자동    5초 뒤 재시작
+     vsp-faiss / vsp-llama / vsp-spring / vsp-front   다른 프로젝트                .\bon505  자동
+     ★ 전부 .\bon505 계정이다. LocalSystem 으로 바꾸면 %USERPROFILE% 가 달라져 .venv 는 되더라도 ~\.ssh\id_gpu 와 gpu 별칭을 못 찾아
+       터널이 안 붙고, VSP 는 Maven/npm 캐시를 다시 받는다. 비밀번호가 바뀌면 서비스 로그온 비밀번호도 갱신해야 한다 (services.msc).
+     ★ 서비스 제어(start/stop)는 관리자 권한이 필요하다. 일반 창에서는 "액세스가 거부되었습니다".
+
+  5-3. 예약 작업 2개 (작업 스케줄러)
+     mochang-db-snapshot   매일 04:30   .venv\Scripts\python.exe scripts\db_snapshot.py --remote gpu:mochang-backup
+                           계정 bon505, LogonType Interactive = ★ 로그인해 있을 때만 돈다. 이 PC 는 RDP 세션을 늘 살려 두는 구성이라
+                           지금까지는 문제없었지만, 재부팅 직후 아무도 로그인 안 하면 그날 백업이 빠진다 (2026-09-10 실제 발생).
+     mochang-watchdog      5분마다      .venv\Scripts\pythonw.exe scripts\watchdog.py --notify
+                           /health·/jobs 두 번 GET + 로그 읽기. 서버를 건드리지 않는다. 이상하면 WScript 팝업(60초) — 로그인한 화면에만 보인다.
+
+  5-4. 바탕화면 서비스 등록 스크립트 (재등록용. 돌아가는 서비스가 있으면 실행할 이유가 없다)
+     add-mochang-service.ps1      mochang-api 등록 + nginx 재시작
+     add-mochang-50001.ps1        nginx 50001 블록 검사·재시작 + 방화벽 허용 규칙 "mochang-bot 50001"
+     scripts\svc\add-dashboard-service.ps1   mochang-dashboard 서비스 + mochang-watchdog 예약 작업
+     setup-services.ps1           ★ VSP 5개(vsp-*) 를 전부 내렸다가 재등록. nginx 가 50001 도 서빙하므로 실행 중 모창봇도 끊긴다.
+                                  2026-10-28 에 실제 등록값과 같게 정리했다 (런처 bat, 인자 배열, 서비스 먼저 정지, 실행 전 yes 확인).
+                                  이전 판: setup-services.ps1.before-handover-20261028.bak, .bak-20261028-1750
+     fix-services.ps1             2026-09-01 사고(인자 빈 채 등록) 수습용. 지금은 setup-services.ps1 이 같은 내용을 담고 있어 쓸 일 없음.
+     mochang-tunnel 은 스크립트가 없다 — docs\PROJECT_CONTEXT.md §12 의 nssm 명령 5줄로 등록했다.
+
+  5-5. scripts\ 운영 도구 (전부 .venv\Scripts\python scripts\<이름>.py)
+     deploy_window.py      재시작해도 안전한 순간(두 큐 빈 + 최근 조용) 을 기다려 알려준다. 서비스는 안 건드린다
+     watchdog.py           감시 (위)                      admin_dashboard.py   대시보드 (위)
+     db_snapshot.py        DB 스냅샷 + scp 오프사이트     drafts_report.py     저장된 초안 집계
+     drafts_delete.py      ★ is_test=1 행만 지운다 (실사용은 어떤 인자로도 안 지워짐)
+     db_copy_to_archive.py 서비스→전체기록 최초 복사      db_views.sql         DB Browser 용 뷰
+     switch_model.py       config.yaml.<이름> 으로 교체 (재시작은 직접)     timing_report.py  .timing.jsonl 요약
+     gpu_probe.py          vLLM 동시성 실측               load_test.py / mixed_load_test.py / live_load_test.py / foreign_e2e.py  부하·E2E (테스트 헤더 자동)
+     vectorstore_migrate.py / vectorstore_compare.py   벡터DB 이관·점수 비교
+     DB 를 눈으로 볼 때: 바탕화면 "DB Browser for SQLite" 바로가기 (무설치본). 열 때 읽기 전용 권장.
+
+  5-6. nginx 포트 지도 (한 프로세스)
+     80 → 443 리다이렉트 / 443 bustartup.kr VSP(프론트 3000, /api 8081) / 8080 → 8081 / 30000·30001 → 18000 / ★ 50001 → 모창봇
+     nginx 는 listen 하나만 실패해도 전체 기동을 포기한다 → 8080 을 누가 선점하면 50001 도 같이 죽는다 (2026-09-10 사고, §9).
+
+  5-7. 그 밖에 이 PC 에서 도는 것
+     Ollama (127.0.0.1:11434)   ★ 서비스가 아니라 로그인 세션의 "ollama app" 프로세스다. bge-m3 임베딩(벡터DB)에 쓴다.
+                                안 떠 있으면 백엔드가 벡터DB 색인·조회를 건너뛰고 웹 검색만 한다 — 죽지는 않는다. 로그아웃하면 사라진다.
+     Python 3.10 / 3.11 둘 다 설치. 모창봇은 .venv 를 쓰므로 무관. VSP 의 FAISS 는 3.10 전용 (3.11 로 부르면 즉사 — 25시간 장애 원인).
+
+--------------------------------------------------------------------------------
+  6. GPU 서버 구조 (Precision-7960-T2)
+--------------------------------------------------------------------------------
+
+  6-1. 접속
+     ssh gpu           ← ~\.ssh\config:  HostName·User 는 거기서만 본다, IdentityFile ~/.ssh/id_gpu, Port 22
+     내부 IP 192.168.8.55. 공유 장비다 — 다른 연구자(Hunyuan3D, Jupyter 연구)가 GPU0 과 디스크를 쓴다. sudo 없이 kubectl 이 된다.
+     ★ 시스템 변경(패키지 설치, /opt 쓰기, 재부팅)은 서버 관리자와 상의. 지금까지 모창봇은 홈 디렉터리와 k3s 네임스페이스 default 만 썼다.
+
+  6-2. 하드웨어·디스크
+     GPU   RTX PRO 6000 Blackwell Max-Q 96 GB × 3.  GPU1·GPU2 = 모창봇 Qwen (각 88 GB 상주),  GPU0 = 다른 사람 (31 GB)
+     디스크 /dev/nvme1n1p2  937G  시스템 (/)        710G 사용 / 180G 가용   ← 80%. 2026-10-27 에 디스크 압력으로 k3s 가 파드를 축출했다
+           /dev/nvme0n1    938G  추가 SSD          /app(158G, Hunyuan 가중치) 를 10-28 에 여기로 옮기고 bind mount
+           /dev/sda, sdb   1.8T × 2  HDD           비어 있음
+     용량 큰 것: /var/lib/containerd 388G(도커, 빌드 캐시 134G 포함), /home/user/m3s 126G(연구), /opt/llm-models 84G(모델), k3s 48G
+     상세·정리 후보·주의: docs\GPU_SERVER_STORAGE_AUDIT_2026-10-28.md
+
+  6-3. k3s (단일 노드, 네임스페이스 default)
+     Deployment      파드             GPU    NodePort   용도
+     vllm-qwen       vllm-qwen-*      GPU2   ┐ 30801    모창봇 본문·조사 모델 (Service vllm-qwen 이 두 파드를 selector serving=qwen 으로 묶음)
+     vllm-qwen-b     vllm-qwen-b-*    GPU1   ┘
+     open-webui                       -      30080      채팅 UI (모창봇 미사용)
+     vane                             -      30500      SearXNG 검색 (config 에서 enabled:false, 미사용)
+     vLLM 인자 (k8s\vllm-qwen-deployment.yaml): 이미지 vllm/vllm-openai@sha256:fc5616… (0.25.0, digest 고정 — latest 로 바꾸면 8.8GB 재다운로드),
+       --model /root/.cache/huggingface/qwen3.8-27b-fp8  --served-model-name Qwen/Qwen3.8-27B-FP8  --max-model-len 32768
+       --gpu-memory-utilization 0.90  --reasoning-parser qwen3  --scheduling-policy priority  --limit-mm-per-prompt '{"image":0,"video":0}'
+       GPU 는 k8s 자원 요청이 아니라 NVIDIA_VISIBLE_DEVICES=<UUID> 로 고정 (자원 요청을 쓰면 남이 쓰는 GPU0 을 받을 수 있어서).
+       HF_HUB_OFFLINE=1 — 서버에서 huggingface.co 가 차단돼 있어 모델은 호스트에 미리 받아 두고 경로로 로드한다.
+     모델 파일   /opt/llm-models/qwen3.8-27b-fp8  (31 GB).  라마 70B 는 내렸고 매니페스트만 k8s\backup\ 에.
+     적용/확인   ssh gpu 'kubectl apply -f -' < k8s\vllm-qwen-deployment.yaml   /  kubectl get pods -l serving=qwen  /  kubectl logs deploy/vllm-qwen
+     파드 재시작 = 모델 로드 3~5분. Recreate 전략이라 그동안 그 복제본은 빠지고 다른 하나가 혼자 받는다 → 한가한 때에.
+
+  6-4. 모창봇이 서버에 남기는 것
+     /home/user/mochang-backup/   매일 04:30 도착하는 서비스 DB 스냅샷 (gz). 디렉터리 700 · 파일 600 (학생 아이디어가 들어 있어서).
+                                  30일 지난 것은 스크립트가 지운다. 지금 31개.
+     그 외 없음. (Vane 데이터 /opt/vane-data 는 미사용 기능.)
+
+  6-5. 서버에서 함께 도는 남의 것 (건드리지 않는다)
+     Docker hunyuan3d_env (8080, 인터넷에 열려 있음), Jupyter Lab(8890, m3s 연구), 두 달째 멈춘 hunyuan_image_env 컨테이너.
+
+--------------------------------------------------------------------------------
+  7. 둘이 어떻게 통신하나 — SSH 터널
+--------------------------------------------------------------------------------
+
+  7-1. 경로
+     backend (127.0.0.1) ──HTTP──▶ 127.0.0.1:30801 (이 PC 에서 ssh.exe 가 열어 둔 포트)
+        ──SSH 암호화, TCP 22──▶ GPU 서버 sshd (공인 IP 는 ssh config) ──▶ 서버 안 localhost:30801 (k3s NodePort)
+        ──kube-proxy──▶ 파드 vllm-qwen:8000 또는 vllm-qwen-b:8000 (연결 단위로 번갈아)
+     즉 vLLM 은 인터넷에 열려 있지 않다 (30801 외부 접속 000 확인). 이 PC 의 SSH 키가 유일한 입구다.
+     백업(scp) 과 운영자 접속(ssh gpu) 도 같은 키·같은 별칭을 쓴다.
+
+  7-2. 설정이 있는 곳
+     backend\config.yaml   llm.base_url = http://localhost:30801/v1, api_key dummy(vLLM 은 검증 안 함), model Qwen/Qwen3.8-27B-FP8,
+                           extra: {chat_template_kwargs: {enable_thinking: false}, priority: 100}   ← thinking 을 끄지 않으면 본문이 0자로 온다
+                           research.llm.* 도 같은 주소 (priority 0)
+     NSSM mochang-tunnel   §5-2 의 ssh.exe 인자.  ExitOnForwardFailure 로 포워딩 실패를 조용히 넘기지 않고, ServerAlive 로 좀비 터널을 스스로 끊어
+                           NSSM 이 5초 뒤 다시 띄우게 한다. -f(백그라운드 분리)는 절대 넣지 말 것 — NSSM 이 프로세스를 놓친다.
+     ~\.ssh\config         Host gpu … IdentityFile ~/.ssh/id_gpu, IdentitiesOnly yes, StrictHostKeyChecking accept-new
+
+  7-3. 고장 판별 (밖에서 보이는 증상은 전부 같다: 화면은 뜨는데 생성만 실패)
+     ① Invoke-RestMethod http://127.0.0.1:8000/health → llm_reachable
+        true  → 터널·모델 정상. 다른 원인.
+        false → ② Get-Service mochang-tunnel
+                  Stopped/Paused → Start-Service mochang-tunnel (또는 Restart-Service)
+                  Running        → ③ Get-Content C:\logs\mochang-tunnel.log -Tail 20
+                                      "connect failed: Connection refused" 반복  → 터널은 살았고 ★ 서버의 vLLM 이 죽은 것
+                                                                                   → ssh gpu / kubectl get pods -l serving=qwen / kubectl describe node | grep -A6 Conditions
+                                                                                     (DiskPressure 면 디스크부터. 어제가 그랬다)
+                                      "Permission denied"/"Host key"             → 키·known_hosts 문제. ssh gpu 를 손으로 쳐 본다
+                                      아무것도 없음                                → netstat -ano | findstr :30801 로 LISTENING 확인
+     llm_reachable 은 30초 캐시 — 살린 직후 30초는 false 가 더 보인다. /health 의 base_url 뒤에 /models 를 직접 쳐 보면 즉시 안다:
+       Invoke-RestMethod http://127.0.0.1:30801/v1/models
+     ★ 2026-09-10 교훈: 재부팅 사고 때 원격은 무죄였고 이 PC 의 터널만 문제였다. 원격부터 의심하지 말 것.
+
+  7-4. 모델을 바꾸고 싶을 때
+     같은 vLLM 다른 모델: k8s 매니페스트 수정·apply → config.yaml 의 model 만 맞춤 → Restart-Service mochang-api
+     라마로 되돌리기:  .venv\Scripts\python scripts\switch_model.py llama  (라마 파드는 내려 있으므로 먼저 k8s\backup\ 매니페스트 apply)
+     OpenRouter 로:    config.yaml.openrouter.bak 참고 (base_url 이 openrouter.ai 면 일일 한도·폴백이 자동으로 켜진다). OPENROUTER_API_KEY 필요.
+
+--------------------------------------------------------------------------------
+  8. 데이터와 백업
+--------------------------------------------------------------------------------
+
+  파일                                   무엇                                   백업인가
+  backend\.data\mochang.sqlite           서비스 DB — 실사용 요청만                 아니다 (원본)
+  backend\.data\mochang-archive.sqlite   전체기록 DB — 테스트(is_test=1) 포함 전부   ★ 아니다. 같은 PC 같은 폴더. 디스크가 죽으면 같이 죽는다
+  backend\.data\snapshots\*.sqlite.gz    서비스 DB 스냅샷, 로컬 7일               반쯤 (같은 PC)
+  gpu:/home/user/mochang-backup/*.gz     같은 스냅샷의 오프사이트 사본, 30일       ★ 이것이 진짜 백업
+  무엇이 백업되나: 서비스 DB 만. 전체기록 DB·.env·벡터DB·캐시·코드는 백업 대상이 아니다 (코드는 GitHub, .env 는 키 재발급으로 복구).
+
+  수동 백업:   .venv\Scripts\python scripts\db_snapshot.py --remote gpu:mochang-backup
+  테이블:      drafts(초안·입력·열쇠·공유토큰·client_id·is_test) / generations(문항별 생성문) / research(조사 결과) / schema_meta(v6)
+  복구 원칙 (docs\OPERATIONS_HANDOVER.md §4 에 단계별): 임시 폴더에 풀어 PRAGMA integrity_check → mochang-api 중지 → 현 DB 와 -wal/-shm 을 보존 →
+               사본을 제자리에 → 시작 → /health 와 기존 초안 조회 확인. 전체기록 DB 는 덮어쓰지 않는다.
+  스키마 변경: 재시작 때 storage.init() 이 ALTER TABLE 로 이행한다. 내릴 때는 스냅샷을 먼저.
+  개인정보:    아이디어·경력이 원문으로 들어 있다. 대시보드는 집계와 id 앞 8자리만 보여주게 돼 있다. 스냅샷을 다른 곳에 복사하지 말 것.
+
+--------------------------------------------------------------------------------
+  9. 장애 대응 — 증상별 (과거 사고 2건에서 배운 순서)
+--------------------------------------------------------------------------------
+
+  증상 (밖에서)                         먼저 볼 것                                             조치
+  연결 시간 초과 / 연결할 수 없음         Mochang-Site-Pause Enabled?  vsp-nginx Running?          Disable 규칙 / Restart-Service vsp-nginx
+                                         netsh interface portproxy show all (8080 선점?)          선점 규칙 삭제 → sc.exe stop vsp-nginx; sc.exe start vsp-nginx
+                                                                                                  (NSSM 이 PAUSED 로 두면 stop→start 로 푼다)
+  502 Bad Gateway                        mochang-api Running?  C:\logs\mochang-api.err.log          Start-Service mochang-api
+  화면 OK, 생성만 전부 실패               /health llm_reachable → §7-3                              터널 재시작 또는 서버 vLLM 복구
+  카드·초안이 유난히 느림                 /jobs 의 queued, GPU 서버 nvidia-smi, kubectl get pods       복제본 하나가 빠졌는지 (한 장이면 처리량 반)
+  저장 오류 (health storage.error_count>0) .timing.jsonl 의 storage_error, 디스크 여유                scripts\timing_report.py
+  워치독 팝업 "심각"                      팝업 본문이 어느 항목인지 적혀 있다                         위 표에서 해당 줄
+  외부 API 조사가 빠짐 (참고자료 적음)     .env 키 비어 있음 (지금 상태)                               §11 키 재발급 → 재시작
+
+  과거 사고 요약
+  2026-09-01  25시간 다운 — bat 으로 띄우던 VSP 프로세스가 터미널 창과 함께 죽음 + FAISS 가 Python 3.11 로 즉사. → 전부 NSSM 서비스화.
+  2026-09-10  6시간 30분 — 재부팅 후 유령 portproxy(8080) 가 nginx 기동을 막아 443·50001 전부 다운 + SSH 터널이 콘솔 프로세스라 소실.
+              → 터널 서비스화(mochang-tunnel). portproxy 규칙 출처는 미해결(지금은 비어 있음 — 재부팅 뒤 한 번 더 확인할 것).
+  2026-10-27  GPU 서버 디스크 압력 → vLLM 파드 반복 축출 → 생성 불가. 10-28 /app 을 추가 SSD 로 옮겨 해소. Evicted 45개 잔존.
+  두 번 모두 발견이 "사람이 우연히" 였다. 이 PC 안의 감시(워치독)는 화면에 사람이 있어야 의미가 있다 → ★ 외부 감시가 1순위 미결.
+
+--------------------------------------------------------------------------------
+  10. 배포·변경 절차 (어디를 고치면 무엇을 해야 하나)
+--------------------------------------------------------------------------------
+
+  고친 것                        해야 할 일
+  backend\*.py                   pytest 통과 확인 → deploy_window.py 로 틈 보기 → Restart-Service mochang-api → /health
+  backend\prompts\*.md           (큰 수정 전 git tag prompts-<날짜>-<이유>) → 재시작. 새 md 는 tests\test_prompts.py 목록에 등록
+  backend\config.yaml / .env     재시작. 상한·워커 값의 근거는 config 주석에 실측 수치로 적혀 있다 — 읽고 바꿀 것
+  frontend\src\*                 npx vite build --outDir dist-check (검증) → npx vite build (즉시 배포) → 탭은 1분 안에 자동 갱신
+  k8s\*.yaml                     ssh gpu 'kubectl apply -f -' < 파일 → 파드 1/1 → config.yaml 의 model 과 served-model-name 일치 확인
+  nginx.conf 50001 블록           ★ bustartup.kr 프로젝트 소유. nginx -p C:\Users\bon505\Desktop\nginx -t 로 검사 후 Restart-Service vsp-nginx (443 도 수 초 끊김)
+  Windows 재부팅                 서비스·터널·nginx 전부 자동. 끝나면 §2-3 한 번 돌리고 netsh interface portproxy show all 이 비어 있는지, 04:30 백업이 돌았는지 확인
+  커밋                           한국어 메시지. 브랜치 llama-switch-and-diagnostics 에 커밋·푸시. 세션 끝에 PROGRESS.md 맨 위에 절 추가 (CLAUDE.md 규칙)
+
+--------------------------------------------------------------------------------
+  11. 넘겨받아야 할 접근권한·비밀 (값은 이 문서에 없다 — 승인된 방식으로 따로 받을 것)
+--------------------------------------------------------------------------------
+
+  항목                           어디에 / 비고
+  Windows 계정 bon505 비밀번호    이 PC 로그인 + NSSM 서비스 8개의 로그온 계정 (바뀌면 services.msc 에서 서비스마다 갱신) + 예약 작업
+  RDP 접속 정보                   이 PC 는 원격 데스크톱으로 관리해 왔다 (주소·포트·방화벽 설정은 확인 못 함)
+  GPU 서버 SSH                    ~\.ssh\id_gpu (이 PC 에 있음), 주소·계정은 ssh config 'Host gpu' 에. 서버 관리자 연락처·sudo 가능 여부 확인 못 함
+  GitHub tmdrb0130/mochang-bot    저장소 권한 (push 가능 계정)
+  도메인 bustartup.kr             DNS(A 레코드 61.34.63.189) 관리 계정, 공유기/방화벽의 50001·443 포트포워딩 (확인 못 함)
+  TLS 인증서                      Desktop\nginx\conf\ssl\bustartup.kr-chain.pem / -key.pem. 발급처·만료일·갱신 방법 확인 못 함 → 꼭 확인
+  API 키 (.env, 지금 전부 빈 값)   모창 공용 계정으로 새로 발급해 변수명 그대로 채우고 Restart-Service mochang-api:
+      OPENROUTER_API_KEY           OpenRouter — Qwen 운영 중엔 불필요. OpenRouter 로 되돌릴 때만
+      NAVER_CLIENT_ID / SECRET     NAVER API HUB(ncloud 콘솔) 검색 API. 뉴스·블로그 조사
+      DATA_GO_KR_API_KEY           공공데이터포털 — K-Startup 창업지원 공고 + 소상공인 상권정보 두 API 활용신청. Decoding 키를 넣는다
+      KOSIS_API_KEY                국가통계포털 OpenAPI
+      ECOS_API_KEY                 한국은행 ECOS
+      KCI_API_KEY                  KCI 논문 서지 (메타데이터만 사용)
+      KIPRIS_API_KEY               특허. 원래부터 미사용(빈 값)
+      키 없는 소스는 자동으로 빠지므로 일부만 채워도 된다. 교체 후 ?test=1 로 초안 하나 만들어 참고자료에 출처가 섞여 나오는지 본다.
+  Ollama                          키 없음. 로그인 세션에서 "Ollama" 앱이 떠 있어야 bge-m3 임베딩이 된다 (§5-7)
+
+--------------------------------------------------------------------------------
+  12. 설계·운영 상의 한계 (알고 쓰면 되는 것)
+--------------------------------------------------------------------------------
+
+  * 진행 중 작업은 메모리에만 있다. mochang-api 재시작 = 진행 중 작업 소실 (DB 에 남은 결과는 /drafts 로 복원됨). 번역 결과는 DB 에 안 남는다.
+  * 인증 없음. 초안 열쇠(draft_key)·공유 토큰으로 남의 초안 접근만 막는다. 관리자 대시보드는 127.0.0.1 전용이라 밖에서 못 본다 (--password 옵션 있음).
+  * 동기 엔드포인트(/generate 등)는 운영에서 404 (sync_endpoints: false). 프론트는 /jobs/{kind} 만 쓴다.
+  * Q7-1(사업자)은 프롬프트는 있으나 UI 에서 숨김. /verify(필수요소 검증)는 API 만 있고 UI 미연결.
+  * 조사 결과는 7일 캐시 — 같은 아이디어를 다시 넣으면 빠르고 같은 참고자료가 나온다 (정상).
+  * 생성문의 수치·사례는 모델이 참고자료 안에서만 쓰도록 강제하지만(refine 이 목록 밖 수치를 지움) 최종 사실 확인은 학생 몫이다. 화면에 그렇게 안내한다.
+
+--------------------------------------------------------------------------------
+  13. 미결 과제 — 우선순위 순 (다음 관리자가 결정·실행할 것)
+--------------------------------------------------------------------------------
+
+  1. ★ 외부 감시 등록 — UptimeRobot 류에 https://bustartup.kr:50001/ 와 /health 를 따로. (PC 안의 감시는 PC 가 죽으면 같이 죽는다.)
+     사이트를 일시중지해 둔 동안은 50001 이 당연히 실패하므로, 열 때 같이 켠다.
+  2. ★ API 키 재발급 (§11). 지금은 다음 재시작부터 ddgs 단독 조사 상태.
+  3. GPU 서버 Evicted 파드 45개 정리 (무해하지만 kubectl 출력을 어지럽히고 메타데이터를 차지):
+       ssh gpu
+       kubectl get pods -n default --field-selector=status.phase=Failed --no-headers | wc -l     # 45
+       kubectl delete pods -n default --field-selector=status.phase=Failed
+       (Completed 상태의 옛 파드 2개도 같은 식으로. Running 2개는 건드리지 않는다.)
+  4. GPU 서버 디스크 — 시스템 SSD 가용 180G (80% 사용). kubelet 축출 기준이 가까우면 또 파드가 쫓겨난다.
+     정리 후보 1순위는 Docker 빌드 캐시 134G (남의 것 — 서버 관리자와 상의). 상세 docs\GPU_SERVER_STORAGE_AUDIT_2026-10-28.md
+  5. 백업 예약 작업을 로그인 없이도 돌게 — 지금은 LogonType Interactive. 서비스 계정·자격증명 저장(/RU /RP 또는 S4U)으로 재등록하고 로그아웃 상태에서 검증.
+  6. 백업 복원 리허설 — 한 번도 실제 복원을 해 보지 않았다 (quick_check 만 함). 임시 경로에 풀어 서비스 DB 를 바꿔 끼우는 연습을 한 번.
+  7. TLS 인증서 만료일·갱신 주체 확인 (§11).
+  8. 브랜치 정리 — 운영 코드가 main 이 아닌 llama-switch-and-diagnostics 에 있다. main 으로 병합하거나 기본 브랜치를 바꿀 것.
+  9. 잔재 정리 — backend\.vectorstore\ (옛 형식 365MB), tests\test_pipeline.py.before-fix, 전체기록 DB 의 is_test=1 스모크 초안.
+ 10. 2026-09-10 portproxy 규칙의 출처 미상 — 다음 재부팅 뒤 netsh interface portproxy show all 이 비어 있는지 확인.
+ 11. Ollama 를 서비스로 (지금은 로그인 세션 앱) — 로그아웃·재부팅 후 임베딩이 조용히 꺼지는 것을 막으려면.
+
+--------------------------------------------------------------------------------
+  14. 문서 지도 (무엇을 알고 싶으면 어디를 여나)
+--------------------------------------------------------------------------------
+
+  이 문서                                  전체 그림·지금 상태·명령·미결 (시작점)
+  docs\SITE_PAUSE.md                       사이트 일시중지·재개 절차와 증상별 대처 (방화벽 규칙)
+  docs\OPERATIONS_HANDOVER.md              점검 루틴·API 키 교체·백업/복구 단계·10-28 점검 결과
+  docs\GPU_SERVER_STORAGE_AUDIT_2026-10-28.md   GPU 서버 디스크 전수 조사, /app 이전 기록, 정리 후보
+  docs\SYSTEM_ARCHITECTURE.md (1,900줄)     코드 단위 전체 해설 — API·큐·파이프라인·조사·DB·프롬프트·프론트·배포·테스트 + 사고 기록(§24~28)
+  docs\PROJECT_CONTEXT.md                  설계 결정과 이유, 문항 분석, 터널 서비스화 메모(§12), 미결(§11)
+  docs\RESEARCH_PLAN.md / RAG_PLAN.md      조사 소스 설계, 벡터DB 계획
+  docs\LOAD_TEST_2026-09-03.md / BOTTLENECKS.md   40명 부하 실측과 병목 분석 (워커·상한 값의 근거)
+  docs\README.md                           docs 폴더 시작점
+  README.md                                개발 환경 실행법, API 표, 자주 겪는 문제 (OpenRouter 절은 초기 기록)
+  PROGRESS.md                              세션별 작업 일지 (맨 위가 최신). 옛 절은 git 이력에
+  CLAUDE.md                                Claude Code 로 작업할 때의 규칙 (프롬프트 위치, 테스트, 배포 주의)
+  backend\config.yaml                      ★ 모든 운영 값과 그 근거가 주석으로 — 사실상 운영 설정 문서
+  바탕화면 vsp자동복구.txt                   같은 PC 의 다른 프로젝트(VSP) 서비스화 기록과 25시간 장애 전말
+
+--------------------------------------------------------------------------------
+  15. 용어
+--------------------------------------------------------------------------------
+
+  모창         모두의 창업 프로젝트(중기부, modoo.or.kr). 모창봇 = 그 신청서 작성 도우미
+  인테이크     아이디어를 읽어 부족한 정보를 카드로 묻는 단계 (prompts\intake.md)
+  카드/슬롯    인테이크가 묻는 항목(고객·문제·대안·수익 등 9슬롯). 카드 1장 = 슬롯 1개의 보기들
+  조사(research) 문항에 넣을 출처 있는 사실을 웹·공공 API 에서 모으는 단계. 공통 조사(아이디어당 1회) + 보완 검색(문항당 0~2개)
+  골자(outline) 아이디어당 1회 만드는 사업계획 뼈대. 문항 9개가 공유해 서로 다른 말을 하지 않게
+  refine / polish  후처리. refine = 코드 규칙(모델 호출 0), polish = 모델 1회 고쳐쓰기
+  finisher     마무리 작업자. 나간 학생의 빈 문항을 낮은 우선순위로 채움
+  draft_id / draft_key / share  초안 묶음 id / 그 초안의 접근 열쇠 / 다른 기기용 공유 토큰
+  서비스 DB / 전체기록 DB / 스냅샷   §8
+  NSSM         Windows 에서 아무 프로그램이나 서비스로 돌려 주는 도구. 죽으면 되살린다
+  NodePort     k8s 가 노드의 포트(30000~32767)로 서비스를 여는 방식. 30801 = vLLM
+  vLLM         LLM 서빙 서버. OpenAI 호환 API 를 낸다. priority 스케줄링 사용
+  Evicted      k8s 가 디스크·메모리 압력으로 쫓아낸 파드. 껍데기만 남아 있음
+
+================================================================================
+  끝. 이 문서에 없는 것을 발견하면 여기에 덧붙이고 커밋해 달라 — 다음 사람이 또 같은 것을 찾지 않게.
+================================================================================
